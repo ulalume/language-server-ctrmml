@@ -1,0 +1,97 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            os_name: macos
+            arch: arm64
+            archive_ext: tar.gz
+            bin_ext: ""
+          - os: macos-14
+            target: x86_64-apple-darwin
+            os_name: macos
+            arch: x64
+            archive_ext: tar.gz
+            bin_ext: ""
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            os_name: linux
+            arch: x64
+            archive_ext: tar.gz
+            bin_ext: ""
+          - os: ubuntu-22.04
+            target: aarch64-unknown-linux-gnu
+            os_name: linux
+            arch: arm64
+            archive_ext: tar.gz
+            bin_ext: ""
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            os_name: windows
+            arch: x64
+            archive_ext: zip
+            bin_ext: ".exe"
+          - os: windows-2022
+            target: aarch64-pc-windows-msvc
+            os_name: windows
+            arch: arm64
+            archive_ext: zip
+            bin_ext: ".exe"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux cross-compiler
+        if: matrix.os == 'ubuntu-22.04' && matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (unix)
+        if: matrix.os != 'windows-2022'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          BIN="ctrmml-lsp${{ matrix.bin_ext }}"
+          SRC="target/${{ matrix.target }}/release/${BIN}"
+          DEST_DIR="dist"
+          mkdir -p "${DEST_DIR}"
+          mkdir -p package
+          cp "${SRC}" "package/${BIN}"
+          tar -czf "${DEST_DIR}/ctrmml-lsp-${VERSION}-${{ matrix.os_name }}-${{ matrix.arch }}.${{ matrix.archive_ext }}" -C package "${BIN}"
+
+      - name: Package (windows)
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v',''
+          $bin = "ctrmml-lsp${{ matrix.bin_ext }}"
+          $src = "target/${{ matrix.target }}/release/${bin}"
+          $dest = "dist"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          Copy-Item $src $bin
+          $zip = "${dest}/ctrmml-lsp-${version}-${{ matrix.os_name }}-${{ matrix.arch }}.${{ matrix.archive_ext }}"
+          Compress-Archive -Path $bin -DestinationPath $zip -Force
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
