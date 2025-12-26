@@ -165,7 +165,7 @@ impl LanguageServer for Backend {
         }
 
         if is_at_meta_context(&line, col) {
-            let items = at_meta_items();
+            let items = at_meta_completion_items(&line, col, position.line);
             return Ok(Some(CompletionResponse::Array(items)));
         }
 
@@ -308,22 +308,29 @@ fn command_item(label: &str) -> CompletionItem {
 }
 
 
-fn at_meta_items() -> Vec<CompletionItem> {
+fn at_meta_completion_items(line: &str, col: usize, line_index: u32) -> Vec<CompletionItem> {
+    let start_col = at_prefix_start_col(line, col);
+    let range = Range {
+        start: Position::new(line_index, start_col),
+        end: Position::new(line_index, col as u32),
+    };
     vec![
-        at_meta_item("@<num>", "Defines an instrument. Parameters are platform-specific."),
-        at_meta_item("@E<num>", "Defines an envelope."),
-        at_meta_item("@M<num>", "Defines a pitch envelope."),
-        at_meta_item("@P<num>", "Defines a pan envelope."),
+        at_meta_item(
+            "@<num>",
+            "Defines an instrument. Parameters are platform-specific.",
+            "${1:num}",
+            range,
+        ),
+        at_meta_item("@E<num>", "Defines an envelope.", "E${1:num}", range),
+        at_meta_item("@M<num>", "Defines a pitch envelope.", "M${1:num}", range),
+        at_meta_item("@P<num>", "Defines a pan envelope.", "P${1:num}", range),
     ]
 }
 
-fn at_meta_item(label: &str, doc: &'static str) -> CompletionItem {
-    let insert_text = match label {
-        "@<num>" => "@${1:num}",
-        "@E<num>" => "@E${1:num}",
-        "@M<num>" => "@M${1:num}",
-        "@P<num>" => "@P${1:num}",
-        _ => "",
+fn at_meta_item(label: &str, doc: &'static str, insert_text: &str, range: Range) -> CompletionItem {
+    let edit = tower_lsp::lsp_types::TextEdit {
+        range,
+        new_text: insert_text.to_string(),
     };
     CompletionItem {
         label: label.to_string(),
@@ -331,8 +338,18 @@ fn at_meta_item(label: &str, doc: &'static str) -> CompletionItem {
         documentation: Some(Documentation::String(doc.to_string())),
         insert_text: Some(insert_text.to_string()),
         insert_text_format: Some(tower_lsp::lsp_types::InsertTextFormat::SNIPPET),
+        text_edit: Some(tower_lsp::lsp_types::CompletionTextEdit::Edit(edit)),
+        filter_text: Some(label.to_string()),
         ..CompletionItem::default()
     }
+}
+
+fn at_prefix_start_col(line: &str, col: usize) -> u32 {
+    let prefix = match line.get(..col) {
+        Some(text) => text,
+        None => return col as u32,
+    };
+    prefix.rfind('@').map(|idx| (idx + 1) as u32).unwrap_or(col as u32)
 }
 
 fn is_at_meta_context(line: &str, col: usize) -> bool {
