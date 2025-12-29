@@ -1,4 +1,4 @@
-use std::{env, fs, io, path::{Path, PathBuf}};
+use std::{env, fs, io, path::{Path, PathBuf}, time::SystemTime};
 
 use dirs::cache_dir;
 use flate2::read::GzDecoder;
@@ -68,6 +68,72 @@ fn which_in_path(cmd: &str) -> Option<String> {
 
 fn cache_base_dir() -> PathBuf {
     cache_dir().unwrap_or_else(env::temp_dir).join("ctrmml-cmd")
+}
+
+fn cached_bin_name() -> String {
+    if env::consts::OS == "windows" {
+        format!("{CTRMML_CMD_NAME}.exe")
+    } else {
+        CTRMML_CMD_NAME.to_string()
+    }
+}
+
+fn find_cached_binary() -> Option<PathBuf> {
+    let base = cache_base_dir();
+    let mut best: Option<(SystemTime, PathBuf)> = None;
+    let bin_name = cached_bin_name();
+
+    let entries = fs::read_dir(base).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let candidate = path.join(&bin_name);
+        if candidate.is_file() {
+            let modified = fs::metadata(&candidate)
+                .and_then(|meta| meta.modified())
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+            let replace = match &best {
+                Some((current, _)) => modified > *current,
+                None => true,
+            };
+            if replace {
+                best = Some((modified, candidate));
+            }
+        } else if env::consts::OS == "windows" {
+            let alt = path.join(CTRMML_CMD_NAME);
+            if alt.is_file() {
+                let modified = fs::metadata(&alt)
+                    .and_then(|meta| meta.modified())
+                    .unwrap_or(SystemTime::UNIX_EPOCH);
+                let replace = match &best {
+                    Some((current, _)) => modified > *current,
+                    None => true,
+                };
+                if replace {
+                    best = Some((modified, alt));
+                }
+            }
+        }
+    }
+
+    best.map(|(_, path)| path)
+}
+
+async fn fetch_latest_release(client: &HttpClient) -> std::result::Result<GithubRelease, String> {
+    let url = format!("https://api.github.com/repos/{CTRMML_CMD_REPO}/releases/latest");
+    let release = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("failed to fetch release: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("failed to fetch release: {e}"))?
+        .json::<GithubRelease>()
+        .await
+        .map_err(|e| format!("failed to parse release: {e}"))?;
+    Ok(release)
 }
 
 fn resolve_existing_command(path: &str) -> Option<String> {
@@ -158,17 +224,16 @@ async fn download_ctrmml_cmd() -> std::result::Result<Option<PathBuf>, String> {
         .user_agent("ctrmml-lsp")
         .build()
         .map_err(|e| format!("failed to build http client: {e}"))?;
-    let url = format!("https://api.github.com/repos/{CTRMML_CMD_REPO}/releases/latest");
-    let release = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("failed to fetch release: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("failed to fetch release: {e}"))?
-        .json::<GithubRelease>()
-        .await
-        .map_err(|e| format!("failed to parse release: {e}"))?;
+
+    let release = match fetch_latest_release(&client).await {
+        Ok(release) => release,
+        Err(err) => {
+            if let Some(path) = find_cached_binary() {
+                return Ok(Some(path));
+            }
+            return Err(err);
+        }
+    };
 
     let version = release.tag_name.trim_start_matches('v');
     let asset_name = format!(
@@ -179,11 +244,19 @@ async fn download_ctrmml_cmd() -> std::result::Result<Option<PathBuf>, String> {
         arch = arch,
         ext = ext,
     );
-    let asset = release
+    let asset = match release
         .assets
         .iter()
         .find(|asset| asset.name == asset_name)
-        .ok_or_else(|| format!("no asset found matching {asset_name}"))?;
+    {
+        Some(asset) => asset,
+        None => {
+            if let Some(path) = find_cached_binary() {
+                return Ok(Some(path));
+            }
+            return Err(format!("no asset found matching {asset_name}"));
+        }
+    };
 
     let base = cache_base_dir();
     let version_dir = base.join(format!("{CTRMML_CMD_NAME}-{}", release.tag_name));
@@ -201,7 +274,7 @@ async fn download_ctrmml_cmd() -> std::result::Result<Option<PathBuf>, String> {
         .map_err(|e| format!("failed to create cache dir: {e}"))?;
 
     let tmp_path = version_dir.join(format!("download.{ext}"));
-    let bytes = client
+    let bytes = match client
         .get(&asset.browser_download_url)
         .send()
         .await
@@ -210,19 +283,41 @@ async fn download_ctrmml_cmd() -> std::result::Result<Option<PathBuf>, String> {
         .map_err(|e| format!("failed to download asset: {e}"))?
         .bytes()
         .await
-        .map_err(|e| format!("failed to read asset: {e}"))?;
+    {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            if let Some(path) = find_cached_binary() {
+                return Ok(Some(path));
+            }
+            return Err(format!("failed to read asset: {e}"));
+        }
+    };
     fs::write(&tmp_path, &bytes).map_err(|e| format!("failed to write asset: {e}"))?;
 
     if ext == "zip" {
-        extract_zip(&tmp_path, &version_dir)?;
+        if let Err(err) = extract_zip(&tmp_path, &version_dir) {
+            if let Some(path) = find_cached_binary() {
+                return Ok(Some(path));
+            }
+            return Err(err);
+        }
     } else {
-        extract_targz(&tmp_path, &version_dir)?;
+        if let Err(err) = extract_targz(&tmp_path, &version_dir) {
+            if let Some(path) = find_cached_binary() {
+                return Ok(Some(path));
+            }
+            return Err(err);
+        }
     }
     let _ = fs::remove_file(&tmp_path);
 
     if !bin_path.is_file() {
+        if let Some(path) = find_cached_binary() {
+            return Ok(Some(path));
+        }
         return Err(format!("ctrmml-cmd binary not found after extracting {asset_name}"));
     }
     make_executable(&bin_path)?;
     Ok(Some(bin_path))
 }
+
