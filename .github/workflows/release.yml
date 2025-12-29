@@ -97,6 +97,22 @@ jobs:
           Compress-Archive -Path $bin -DestinationPath $zip -Force
 
       - name: Upload Release Assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.os_name }}-${{ matrix.arch }}
+          path: dist/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Upload Release Assets
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
