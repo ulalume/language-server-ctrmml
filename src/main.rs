@@ -1,4 +1,5 @@
 mod backend;
+mod check;
 mod completion;
 mod config;
 mod ctrmml_cmd;

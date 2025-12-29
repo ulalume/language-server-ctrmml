@@ -53,3 +53,50 @@ pub(crate) fn diagnostics_for_positions(
 
     out
 }
+
+
+pub(crate) fn diagnostic_for_check(text: &str, output: &str) -> Option<Diagnostic> {
+    let line = output.lines().find(|line| !line.trim().is_empty())?;
+    let (line_idx, col_idx, message) = parse_error_line(line)?;
+    let lines: Vec<&str> = text.lines().collect();
+    let mut col = col_idx;
+    let line_len = lines
+        .get(line_idx as usize)
+        .map(|line| line.len() as u32)
+        .unwrap_or(0);
+    if col > line_len {
+        col = line_len;
+    }
+    let end = if line_len == 0 { col } else { (col + 1).min(line_len) };
+    Some(Diagnostic {
+        range: Range {
+            start: Position::new(line_idx, col),
+            end: Position::new(line_idx, end),
+        },
+        severity: Some(DiagnosticSeverity::ERROR),
+        source: Some("ctrmml-check".to_string()),
+        message,
+        ..Diagnostic::default()
+    })
+}
+
+fn parse_error_line(line: &str) -> Option<(u32, u32, String)> {
+    if let Some(rest) = line.strip_prefix("line ") {
+        let mut parts = rest.splitn(2, ':');
+        let line_str = parts.next()?.trim();
+        let message = parts.next()?.trim_start();
+        let line_num: u32 = line_str.parse().ok()?;
+        return Some((line_num.saturating_sub(1), 0, message.to_string()));
+    }
+
+    let (prefix, message) = line.rsplit_once(':')?;
+    let message = message.trim_start();
+    let prefix = prefix.trim_end();
+    let mut parts = prefix.rsplitn(3, ':');
+    let col_str = parts.next()?.trim();
+    let line_str = parts.next()?.trim();
+    let _path = parts.next()?.trim();
+    let line_num: u32 = line_str.parse().ok()?;
+    let col_num: u32 = col_str.parse().ok()?;
+    Some((line_num.saturating_sub(1), col_num.saturating_sub(1), message.to_string()))
+}

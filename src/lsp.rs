@@ -4,8 +4,9 @@ use tower_lsp::{
     lsp_types::{
         CodeAction, CodeActionOrCommand, CodeActionParams, CodeActionProviderCapability,
         Command, CompletionOptions, CompletionParams, CompletionResponse, ExecuteCommandParams,
-        ExecuteCommandOptions, InitializeParams, InitializeResult,
-        ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
+        ExecuteCommandOptions, InitializeParams, InitializeResult, DidSaveTextDocumentParams,
+        SaveOptions, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
+        TextDocumentSyncOptions, TextDocumentSyncSaveOptions,
     },
     LanguageServer,
 };
@@ -45,8 +46,15 @@ impl LanguageServer for Backend {
 
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
-                text_document_sync: Some(TextDocumentSyncCapability::Kind(
-                    TextDocumentSyncKind::FULL,
+                text_document_sync: Some(TextDocumentSyncCapability::Options(
+                    TextDocumentSyncOptions {
+                        open_close: Some(true),
+                        change: Some(TextDocumentSyncKind::FULL),
+                        save: Some(TextDocumentSyncSaveOptions::SaveOptions(SaveOptions {
+                            include_text: Some(false),
+                        })),
+                        ..TextDocumentSyncOptions::default()
+                    },
                 )),
                 completion_provider: Some(CompletionOptions {
                     resolve_provider: Some(false),
@@ -81,15 +89,22 @@ impl LanguageServer for Backend {
         let uri = params.text_document.uri.to_string();
         let text = params.text_document.text;
         self.docs.write().await.insert(uri.clone(), text);
-        *self.last_doc.write().await = Some(uri);
+        *self.last_doc.write().await = Some(uri.clone());
+        let _ = self.run_check(uri).await;
     }
 
     async fn did_change(&self, params: tower_lsp::lsp_types::DidChangeTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
         if let Some(change) = params.content_changes.into_iter().last() {
             self.docs.write().await.insert(uri.clone(), change.text);
-            *self.last_doc.write().await = Some(uri);
+            *self.last_doc.write().await = Some(uri.clone());
         }
+        let _ = self.run_check(uri).await;
+    }
+
+    async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        let uri = params.text_document.uri.to_string();
+        let _ = self.run_check(uri).await;
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
