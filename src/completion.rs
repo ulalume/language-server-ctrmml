@@ -7,6 +7,7 @@ use tower_lsp::lsp_types::{
 };
 use walkdir::WalkDir;
 
+use crate::docs;
 use crate::utils::{is_wav, uri_to_dir};
 
 const META_KEYWORDS: &[&str] = &[
@@ -50,63 +51,6 @@ const COMMAND_KEYWORDS: &[&str] = &[
 
 const PLATFORM_VALUES: &[&str] = &["megadrive", "mdsdrv"];
 const INSTRUMENT_TYPES: &[&str] = &["pcm", "fm", "psg", "2op"];
-const PLATFORM_COMMANDS: &[(&str, &str, &str)] = &[
-    (
-        "fm3 <mask>",
-        "fm3 0000",
-        "Enables FM3 special mode. Mask selects affected operators (e.g. 0011). Use 1111 to disable. Can be used on PSG I or dummy KLMNOP to temporarily use this track for FM3.",
-    ),
-    (
-        "lfo <0..3> <0..7>",
-        "lfo 0 0",
-        "Set hardware LFO AM sensitivity (first) and PM sensitivity (second).",
-    ),
-    (
-        "lforate <0..9>",
-        "lforate 0",
-        "Set hardware LFO rate. 0 disables; 1..9 increase speed (last two are much faster).",
-    ),
-    (
-        "mode <0..1>",
-        "mode 0",
-        "For PSG noise channel J, enable using tone channel I as noise frequency source. Controlling both channels can conflict.",
-    ),
-    (
-        "pcmmode <2..3>",
-        "pcmmode 2",
-        "(mdsdrv only) 2: 2ch PCM up to 17.5 kHz. 3: 3ch PCM up to 13 kHz.",
-    ),
-    (
-        "pcmrate <1..8>",
-        "pcmrate 1",
-        "Change PCM pitch in ~2.2 kHz steps. Temporary until next instrument change.",
-    ),
-    (
-        "write <register> <data>",
-        "write 00 00",
-        "Write FM registers directly. Aliases: dtml*, ksar*, amdr*, sr*, slrr*, ssg*, fbal (use operator number for *). Temporary until next instrument change.",
-    ),
-    (
-        "tl1 <value>",
-        "tl1 0",
-        "Set base operator total level for OP1. Use +/-. Temporary until next instrument change.",
-    ),
-    (
-        "tl2 <value>",
-        "tl2 0",
-        "Set base operator total level for OP2. Use +/-. Temporary until next instrument change.",
-    ),
-    (
-        "tl3 <value>",
-        "tl3 0",
-        "Set base operator total level for OP3. Use +/-. Temporary until next instrument change.",
-    ),
-    (
-        "tl4 <value>",
-        "tl4 0",
-        "Set base operator total level for OP4. Use +/-. Temporary until next instrument change.",
-    ),
-];
 
 pub(crate) fn meta_completion_items(
     line: &str,
@@ -147,15 +91,10 @@ pub(crate) fn at_meta_completion_items(
         end: Position::new(line_index, col as u32),
     };
     vec![
-        at_meta_item(
-            "@<num>",
-            "Defines an instrument. Parameters are platform-specific.",
-            "${1:num}",
-            range,
-        ),
-        at_meta_item("@E<num>", "Defines an envelope.", "E${1:num}", range),
-        at_meta_item("@M<num>", "Defines a pitch envelope.", "M${1:num}", range),
-        at_meta_item("@P<num>", "Defines a pan envelope.", "P${1:num}", range),
+        at_meta_item("@<num>", docs::at_meta_doc("@<num>").unwrap_or(""), "${1:num}", range),
+        at_meta_item("@E<num>", docs::at_meta_doc("@E<num>").unwrap_or(""), "E${1:num}", range),
+        at_meta_item("@M<num>", docs::at_meta_doc("@M<num>").unwrap_or(""), "M${1:num}", range),
+        at_meta_item("@P<num>", docs::at_meta_doc("@P<num>").unwrap_or(""), "P${1:num}", range),
     ]
 }
 
@@ -192,9 +131,9 @@ pub(crate) fn platform_command_items(
         end: Position::new(line_index, col as u32),
     };
 
-    PLATFORM_COMMANDS
+    docs::PLATFORM_COMMANDS
         .iter()
-        .map(|(label, insert, doc)| platform_command_item(label, insert, doc, range))
+        .map(|entry| platform_command_item(entry.label, entry.insert, entry.doc, range))
         .collect()
 }
 
@@ -477,80 +416,23 @@ fn documented_item(
 }
 
 fn meta_item(label: &str) -> CompletionItem {
-    let doc = match label {
-        "#title" | "#composer" | "#author" | "#date" | "#comment" => Some("Song metadata."),
-        "#platform" => Some("Sets the MML target platform."),
-        "#option" => Some("Sets platform options."),
-        _ => None,
-    };
-    documented_item(label, CompletionItemKind::KEYWORD, doc)
+    documented_item(label, CompletionItemKind::KEYWORD, docs::meta_doc(label))
 }
 
 fn platform_item(label: &str) -> CompletionItem {
-    let doc = match label {
-        "megadrive" => Some(
-            "Use VGM datablocks and DAC stream commands to play back samples.",
-        ),
-        "mdsdrv" => Some(
-            "Simulate MDSDRV's PCM driver (2-3 channel mixing). Sample rate is fixed to ~2 kHz steps.",
-        ),
-        _ => None,
-    };
-    documented_item(label, CompletionItemKind::KEYWORD, doc)
+    documented_item(label, CompletionItemKind::KEYWORD, docs::platform_value_doc(label))
 }
 
 fn instrument_item(label: &str) -> CompletionItem {
-    let doc = match label {
-        "fm" => Some("FM instruments are defined as below."),
-        "2op" => Some(
-            "Instrument type `2op` is used to duplicate FM instruments, modifying the operators' multiply ratios and setting a transpose.",
-        ),
-        "psg" => Some("PSG instruments (envelopes) are defined as a sequence of values."),
-        "pcm" => Some(
-            "PCM samples are defined as instruments. The first parameter is the path to the sample (relative to that of the MML file).",
-        ),
-        _ => None,
-    };
-    documented_item(label, CompletionItemKind::TYPE_PARAMETER, doc)
+    documented_item(label, CompletionItemKind::TYPE_PARAMETER, docs::instrument_doc(label))
 }
 
 fn rate_offset_item(label: &str) -> CompletionItem {
-    let doc = match label {
-        "rate=" => Some("Override the sample rate."),
-        "offset=" => Some("Adjust the start position."),
-        _ => None,
-    };
-    documented_item(label, CompletionItemKind::PROPERTY, doc)
+    documented_item(label, CompletionItemKind::PROPERTY, docs::rate_offset_doc(label))
 }
 
 fn command_item(label: &str) -> CompletionItem {
-    let doc = match label {
-        "o" => Some("Set octave."),
-        "l" => Some("Set default duration, used if not specified by notes, rests, `R` or `~` commands."),
-        "Q" => Some("Quantize. Used to set articulation. Note length is param/8."),
-        "q" => Some("Set early release. Used to set articulation."),
-        "C" => Some("Set the length of a measure (or a whole note) in ticks."),
-        "R" => Some("Reverse rest. This subtracts the value from the previous note or rest."),
-        "L" => Some("Set loop point (segno). If this is present, playback resumes at this point when the end of the track is reached."),
-        "s" => Some("Set shuffle. The specified number of ticks will be added to the the next note, rest or tie, then subtracted from the next."),
-        "t" => Some("Set tempo in BPM."),
-        "T" => Some("Set tempo using the platform's native timer values."),
-        "v" => Some("Set volume."),
-        "V" => Some("Set volume (fine), or modify volume (fine) depending on parameter range."),
-        "p" => Some("Set panning."),
-        "k" => Some("Set transpose. Default behavior is the same as the `_` command."),
-        "K" => Some("Set detune."),
-        "E" => Some("Set envelope. 0 to disable."),
-        "M" => Some("Set pitch envelope. 0 to disable."),
-        "P" => Some("Set pan envelope or macro track. 0 to disable."),
-        "G" => Some("Set portamento. 0 to disable."),
-        "D" => Some("Set drum mode. 0 disables drum mode."),
-        "r" => Some("Rest. Optionally set duration after the rest."),
-        "^" => Some("Tie. Extends duration of previous note."),
-        "&" => Some("Slur. Used to connect two notes (legato)."),
-        _ => None,
-    };
-    documented_item(label, CompletionItemKind::KEYWORD, doc)
+    documented_item(label, CompletionItemKind::KEYWORD, docs::command_doc(label))
 }
 
 fn at_meta_item(label: &str, doc: &'static str, insert_text: &str, range: Range) -> CompletionItem {

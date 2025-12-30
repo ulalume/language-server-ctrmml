@@ -4,9 +4,10 @@ use tower_lsp::{
     lsp_types::{
         CodeAction, CodeActionOrCommand, CodeActionParams, CodeActionProviderCapability,
         Command, CompletionOptions, CompletionParams, CompletionResponse, ExecuteCommandParams,
-        ExecuteCommandOptions, InitializeParams, InitializeResult, DidSaveTextDocumentParams,
-        SaveOptions, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
-        TextDocumentSyncOptions, TextDocumentSyncSaveOptions,
+        ExecuteCommandOptions, Hover, HoverContents, HoverParams, HoverProviderCapability, InitializeParams,
+        InitializeResult, DidSaveTextDocumentParams, MarkupContent, MarkupKind, SaveOptions,
+        ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+        TextDocumentSyncSaveOptions,
     },
     LanguageServer,
 };
@@ -20,6 +21,7 @@ use crate::completion::{
 };
 use crate::config::config_from_value;
 use crate::export::ExportFormat;
+use crate::hover::hover_text;
 use crate::utils::{is_mml_uri, line_at};
 
 #[tower_lsp::async_trait]
@@ -57,6 +59,7 @@ impl LanguageServer for Backend {
                         ..TextDocumentSyncOptions::default()
                     },
                 )),
+                hover_provider: Some(HoverProviderCapability::Simple(true)),
                 completion_provider: Some(CompletionOptions {
                     resolve_provider: Some(false),
                     trigger_characters: Some(vec![
@@ -107,6 +110,33 @@ impl LanguageServer for Backend {
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
         let _ = self.run_check(uri).await;
+    }
+
+    async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .to_string();
+        let position = params.text_document_position_params.position;
+        let text = self.docs.read().await.get(&uri).cloned().unwrap_or_default();
+        let line = line_at(&text, position.line).unwrap_or_default();
+        let col = position.character as usize;
+        if is_in_comment(&line, col) {
+            return Ok(None);
+        }
+
+        if let Some(value) = hover_text(&line, col) {
+            return Ok(Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value,
+                }),
+                range: None,
+            }));
+        }
+
+        Ok(None)
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
