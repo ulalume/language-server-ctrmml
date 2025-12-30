@@ -1,8 +1,145 @@
+
+
+pub(crate) struct CommandCompletion {
+    pub(crate) key: &'static str,
+    pub(crate) label: &'static str,
+    pub(crate) insert: &'static str,
+}
+
+pub(crate) const COMMAND_COMPLETIONS: &[CommandCompletion] = &[
+    CommandCompletion {
+        key: "o",
+        label: "o<0..7>",
+        insert: "o${1:0..7}",
+    },
+    CommandCompletion {
+        key: "l",
+        label: "l<duration>",
+        insert: "l${1:duration}",
+    },
+    CommandCompletion {
+        key: "Q",
+        label: "Q<1..8>",
+        insert: "Q${1:1..8}",
+    },
+    CommandCompletion {
+        key: "q",
+        label: "q<1..8>",
+        insert: "q${1:1..8}",
+    },
+    CommandCompletion {
+        key: "s",
+        label: "s<ticks>",
+        insert: "s${1:ticks}",
+    },
+    CommandCompletion {
+        key: "C",
+        label: "C<ticks>",
+        insert: "C${1:ticks}",
+    },
+    CommandCompletion {
+        key: "R",
+        label: "R<duration>",
+        insert: "R${1:duration}",
+    },
+    CommandCompletion {
+        key: "t",
+        label: "t<bpm>",
+        insert: "t${1:bpm}",
+    },
+    CommandCompletion {
+        key: "T",
+        label: "T<value>",
+        insert: "T${1:value}",
+    },
+    CommandCompletion {
+        key: "v",
+        label: "v<0..15>",
+        insert: "v${1:0..15}",
+    },
+    CommandCompletion {
+        key: "V",
+        label: "V<0..255>",
+        insert: "V${1:0..255}",
+    },
+    CommandCompletion {
+        key: "V",
+        label: "V<-128..127>",
+        insert: "V${1:-128..127}",
+    },
+    CommandCompletion {
+        key: "p",
+        label: "p<-128..127>",
+        insert: "p${1:-128..127}",
+    },
+    CommandCompletion {
+        key: "k",
+        label: "k<-128..127>",
+        insert: "k${1:-128..127}",
+    },
+    CommandCompletion {
+        key: "K",
+        label: "K<-128..127>",
+        insert: "K${1:-128..127}",
+    },
+    CommandCompletion {
+        key: "E",
+        label: "E<0..255>",
+        insert: "E${1:0..255}",
+    },
+    CommandCompletion {
+        key: "M",
+        label: "M<0..255>",
+        insert: "M${1:0..255}",
+    },
+    CommandCompletion {
+        key: "P",
+        label: "P<0..255>",
+        insert: "P${1:0..255}",
+    },
+    CommandCompletion {
+        key: "G",
+        label: "G<0..255>",
+        insert: "G${1:0..255}",
+    },
+    CommandCompletion {
+        key: "D",
+        label: "D<0..255>",
+        insert: "D${1:0..255}",
+    },
+    CommandCompletion {
+        key: "r",
+        label: "r<duration>",
+        insert: "r${1:duration}",
+    },
+    CommandCompletion {
+        key: "L",
+        label: "L",
+        insert: "L",
+    },
+    CommandCompletion {
+        key: "^",
+        label: "^",
+        insert: "^",
+    },
+    CommandCompletion {
+        key: "&",
+        label: "&",
+        insert: "&",
+    },
+];
 pub(crate) struct PlatformCommand {
     pub(crate) key: &'static str,
     pub(crate) label: &'static str,
     pub(crate) insert: &'static str,
     pub(crate) doc: &'static str,
+}
+
+pub(crate) fn command_completion_label(key: &str) -> Option<&'static str> {
+    COMMAND_COMPLETIONS
+        .iter()
+        .find(|entry| entry.key == key)
+        .map(|entry| entry.label)
 }
 
 pub(crate) const PLATFORM_COMMANDS: &[PlatformCommand] = &[

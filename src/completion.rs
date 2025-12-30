@@ -23,32 +23,6 @@ const META_KEYWORDS: &[&str] = &[
     "#programmer",
 ];
 
-const COMMAND_KEYWORDS: &[&str] = &[
-    "o",
-    "l",
-    "Q",
-    "q",
-    "C",
-    "R",
-    "L",
-    "s",
-    "t",
-    "T",
-    "v",
-    "V",
-    "p",
-    "k",
-    "K",
-    "E",
-    "M",
-    "P",
-    "G",
-    "D",
-    "r",
-    "^",
-    "&",
-];
-
 const PLATFORM_VALUES: &[&str] = &["megadrive", "mdsdrv"];
 const INSTRUMENT_TYPES: &[&str] = &["pcm", "fm", "psg", "2op"];
 
@@ -117,7 +91,10 @@ pub(crate) fn rate_offset_items() -> Vec<CompletionItem> {
 }
 
 pub(crate) fn command_items() -> Vec<CompletionItem> {
-    COMMAND_KEYWORDS.iter().map(|kw| command_item(kw)).collect()
+    docs::COMMAND_COMPLETIONS
+        .iter()
+        .map(command_item)
+        .collect()
 }
 
 pub(crate) fn platform_command_items(
@@ -431,8 +408,17 @@ fn rate_offset_item(label: &str) -> CompletionItem {
     documented_item(label, CompletionItemKind::PROPERTY, docs::rate_offset_doc(label))
 }
 
-fn command_item(label: &str) -> CompletionItem {
-    documented_item(label, CompletionItemKind::KEYWORD, docs::command_doc(label))
+fn command_item(entry: &docs::CommandCompletion) -> CompletionItem {
+    CompletionItem {
+        label: entry.label.to_string(),
+        kind: Some(CompletionItemKind::KEYWORD),
+        documentation: docs::command_doc(entry.key)
+            .map(|text| Documentation::String(text.to_string())),
+        insert_text: Some(entry.insert.to_string()),
+        insert_text_format: Some(tower_lsp::lsp_types::InsertTextFormat::SNIPPET),
+        filter_text: Some(entry.key.to_string()),
+        ..CompletionItem::default()
+    }
 }
 
 fn at_meta_item(label: &str, doc: &'static str, insert_text: &str, range: Range) -> CompletionItem {

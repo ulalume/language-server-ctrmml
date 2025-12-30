@@ -143,8 +143,9 @@ fn command_at(token: &str, offset: usize) -> Option<(&'static str, &'static str)
                 }
             }
             if offset >= start && offset < end {
-                let label = command_label(ch)?;
-                return docs::command_doc(label).map(|doc| (label, doc));
+                let key = command_label(ch)?;
+                let label = docs::command_completion_label(key).unwrap_or(key);
+                return docs::command_doc(key).map(|doc| (label, doc));
             }
             idx = end;
             continue;
