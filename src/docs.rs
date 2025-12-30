@@ -396,7 +396,7 @@ pub(crate) const FM_PARAM_DOCS: &[FmParamDoc] = &[
     FmParamDoc {
         key: "SSG",
         label: "SSG-EG",
-        doc: "SSG-EG: 0 disabled, 8 enabled. SSG-EG type: +0..7, AM: 0 disabled, +100 enabled.",
+        doc: "SSG-EG type: 0..7, enabled: +8, AM enabled: +100.",
     },
     FmParamDoc {
         key: "TRS",
