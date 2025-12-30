@@ -21,7 +21,7 @@ use crate::completion::{
 };
 use crate::config::config_from_value;
 use crate::export::ExportFormat;
-use crate::hover::hover_text;
+use crate::hover::{fm_hover_text, hover_text, two_op_hover_text};
 use crate::utils::{is_mml_uri, line_at};
 
 #[tower_lsp::async_trait]
@@ -124,6 +124,26 @@ impl LanguageServer for Backend {
         let col = position.character as usize;
         if is_in_comment(&line, col) {
             return Ok(None);
+        }
+
+        if let Some(value) = two_op_hover_text(&text, position.line, col) {
+            return Ok(Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value,
+                }),
+                range: None,
+            }));
+        }
+
+        if let Some(value) = fm_hover_text(&text, position.line, col) {
+            return Ok(Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value,
+                }),
+                range: None,
+            }));
         }
 
         if let Some(value) = hover_text(&line, col) {

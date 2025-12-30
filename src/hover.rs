@@ -44,6 +44,255 @@ pub(crate) fn hover_text(line: &str, col: usize) -> Option<String> {
 
     None
 }
+pub(crate) fn two_op_hover_text(text: &str, line_index: u32, col: usize) -> Option<String> {
+    let line = text.lines().nth(line_index as usize)?;
+    let trimmed = line.trim_start();
+    if trimmed.is_empty() || trimmed.starts_with(';') {
+        return None;
+    }
+    if !is_two_op_definition_line(trimmed) {
+        return None;
+    }
+
+    let parse_end = line.find(';').unwrap_or(line.len());
+    if col >= parse_end {
+        return None;
+    }
+
+    let mut numbers = parse_numbers(line, parse_end);
+    numbers = strip_two_op_numbers(line, numbers, parse_end);
+    if numbers.len() < 6 {
+        return None;
+    }
+
+    let idx = number_index_at(&numbers, col)?;
+    if idx >= 6 {
+        return None;
+    }
+    let (label, doc) = docs::two_op_param_doc(idx)?;
+    Some(format_hover(label, doc))
+}
+
+fn is_two_op_definition_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with('@') {
+        return false;
+    }
+    let bytes = trimmed.as_bytes();
+    let mut idx = 1;
+    while idx < bytes.len() && (bytes[idx] as char).is_ascii_digit() {
+        idx += 1;
+    }
+    if idx == 1 {
+        return false;
+    }
+    let rest = trimmed[idx..].trim_start();
+    if !rest.starts_with("2op") {
+        return false;
+    }
+    let after = &rest[3..];
+    after.is_empty() || after.starts_with(|c: char| c.is_whitespace()) || after.starts_with(';')
+}
+
+fn strip_at_number(line: &str, numbers: Vec<(usize, usize, i64)>) -> Vec<(usize, usize, i64)> {
+    if let Some((start, _end, _value)) = numbers.first() {
+        if *start > 0 && line.as_bytes()[start - 1] == b'@' {
+            return numbers.into_iter().skip(1).collect();
+        }
+    }
+    numbers
+}
+
+fn strip_two_op_numbers(
+    line: &str,
+    numbers: Vec<(usize, usize, i64)>,
+    parse_end: usize,
+) -> Vec<(usize, usize, i64)> {
+    let mut filtered = numbers;
+    if let Some((start, _end, _value)) = filtered.first() {
+        if *start > 0 && line.as_bytes()[start - 1] == b'@' {
+            filtered = filtered.into_iter().skip(1).collect();
+        }
+    }
+
+    if let Some(pos) = line[..parse_end.min(line.len())].find("2op") {
+        filtered.retain(|(start, _end, _value)| *start < pos || *start >= pos + 3);
+    }
+
+    filtered
+}
+
+
+pub(crate) fn fm_hover_text(text: &str, line_index: u32, col: usize) -> Option<String> {
+    let line = text.lines().nth(line_index as usize)?;
+    let trimmed = line.trim_start();
+    if trimmed.is_empty() || trimmed.starts_with(';') {
+        return None;
+    }
+
+    let is_anchor_line = is_fm_definition_line(trimmed);
+    if trimmed.starts_with('@') && !is_anchor_line {
+        return None;
+    }
+
+    let parse_end = line.find(';').unwrap_or(line.len());
+    if col >= parse_end {
+        return None;
+    }
+
+    if is_anchor_line {
+        let mut numbers = parse_numbers(line, parse_end);
+        numbers = strip_at_number(line, numbers);
+        if numbers.len() < 2 {
+            return None;
+        }
+
+        let idx = number_index_at(&numbers, col)?;
+        if idx >= 2 {
+            return None;
+        }
+        let key = if idx == 0 { "ALG" } else { "FB" };
+        let (label, doc) = docs::fm_param_doc(key)?;
+        return Some(format_hover(label, doc));
+    }
+
+    let anchor = find_fm_anchor(text, line_index)?;
+    if line_index <= anchor {
+        return None;
+    }
+
+    let numbers = parse_numbers(line, parse_end);
+    if numbers.is_empty() {
+        return None;
+    }
+
+    let (param_keys, op_index) = match numbers.len() {
+        2 => (vec!["ALG", "FB"], None),
+        10 => (
+            vec!["AR", "DR", "SR", "RR", "SL", "TL", "KS", "ML", "DT", "SSG"],
+            fm_operator_index(text, anchor, line_index),
+        ),
+        1 => (vec!["TRS"], None),
+        _ => return None,
+    };
+
+    let idx = number_index_at(&numbers, col)?;
+    let key = param_keys.get(idx)?;
+    let (label, doc) = docs::fm_param_doc(key)?;
+    let label = if let Some(op) = op_index {
+        format!("OP{} {}", op, label)
+    } else {
+        label.to_string()
+    };
+    Some(format_hover(&label, doc))
+}
+
+fn find_fm_anchor(text: &str, line_index: u32) -> Option<u32> {
+    for idx in (0..=line_index).rev() {
+        let line = text.lines().nth(idx as usize)?;
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('@') {
+            if is_fm_definition_line(trimmed) {
+                return Some(idx);
+            }
+            return None;
+        }
+    }
+    None
+}
+
+fn is_fm_definition_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with('@') {
+        return false;
+    }
+    let bytes = trimmed.as_bytes();
+    let mut idx = 1;
+    while idx < bytes.len() && (bytes[idx] as char).is_ascii_digit() {
+        idx += 1;
+    }
+    if idx == 1 {
+        return false;
+    }
+    let rest = trimmed[idx..].trim_start();
+    if !rest.starts_with("fm") {
+        return false;
+    }
+    let after = &rest[2..];
+    after.is_empty() || after.starts_with(|c: char| c.is_whitespace()) || after.starts_with(';')
+}
+
+fn fm_operator_index(text: &str, anchor: u32, line_index: u32) -> Option<usize> {
+    let mut count = 0;
+    for idx in (anchor + 1)..=line_index {
+        let line = text.lines().nth(idx as usize)?;
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('@') {
+            break;
+        }
+        if trimmed.is_empty() || trimmed.starts_with(';') {
+            continue;
+        }
+        let parse_end = line.find(';').unwrap_or(line.len());
+        let numbers = parse_numbers(line, parse_end);
+        if numbers.len() == 10 {
+            count += 1;
+        }
+    }
+    if count == 0 { None } else { Some(count) }
+}
+
+fn parse_numbers(line: &str, parse_end: usize) -> Vec<(usize, usize, i64)> {
+    let mut out = Vec::new();
+    let bytes = line.as_bytes();
+    let mut idx = 0;
+    let end = parse_end.min(line.len());
+
+    while idx < end {
+        while idx < end && bytes[idx].is_ascii_whitespace() {
+            idx += 1;
+        }
+        if idx >= end {
+            break;
+        }
+
+        let start = idx;
+        let mut sign = 1i64;
+        if bytes[idx] == b'+' || bytes[idx] == b'-' {
+            if bytes[idx] == b'-' {
+                sign = -1;
+            }
+            idx += 1;
+        }
+        if idx >= end || !bytes[idx].is_ascii_digit() {
+            idx += 1;
+            continue;
+        }
+        let num_start = idx;
+        while idx < end && bytes[idx].is_ascii_digit() {
+            idx += 1;
+        }
+        let num_str = &line[num_start..idx];
+        let value = num_str.parse::<i64>().unwrap_or(0) * sign;
+        out.push((start, idx, value));
+    }
+
+    out
+}
+
+fn number_index_at(numbers: &[(usize, usize, i64)], col: usize) -> Option<usize> {
+    numbers.iter().enumerate().find_map(|(idx, (start, end, _value))| {
+        if col >= *start && col < *end {
+            return Some(idx);
+        }
+        if col == *end && col > *start {
+            return Some(idx);
+        }
+        None
+    })
+}
+
+
 
 fn at_meta_at(line: &str, col: usize) -> Option<(&'static str, &'static str)> {
     let (token, _start, _end) = token_at(line, col)?;
@@ -293,5 +542,9 @@ fn is_token_char(ch: char) -> bool {
 }
 
 fn format_hover(label: &str, doc: &str) -> String {
-    format!("**{}**\n\n{}", label, doc)
+    if doc.is_empty() {
+        format!("**{}**", label)
+    } else {
+        format!("**{}**\n\n{}", label, doc)
+    }
 }

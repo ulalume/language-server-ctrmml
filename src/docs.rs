@@ -331,6 +331,125 @@ pub(crate) fn platform_command_doc(key: &str) -> Option<&'static str> {
         .map(|cmd| cmd.doc)
 }
 
+pub(crate) struct FmParamDoc {
+    pub(crate) key: &'static str,
+    pub(crate) label: &'static str,
+    pub(crate) doc: &'static str,
+}
+
+pub(crate) const FM_PARAM_DOCS: &[FmParamDoc] = &[
+    FmParamDoc {
+        key: "ALG",
+        label: "Algorithm (0..7)",
+        doc: "",
+    },
+    FmParamDoc {
+        key: "FB",
+        label: "Feedback (0..7)",
+        doc: "",
+    },
+    FmParamDoc {
+        key: "AR",
+        label: "Attack Rate (0..31)",
+        doc: "",
+    },
+    FmParamDoc {
+        key: "DR",
+        label: "Decay Rate (0..31)",
+        doc: "",
+    },
+    FmParamDoc {
+        key: "SR",
+        label: "Sustain Rate (0..31)",
+        doc: "",
+    },
+    FmParamDoc {
+        key: "RR",
+        label: "Release Rate (0..15)",
+        doc: "",
+    },
+    FmParamDoc {
+        key: "SL",
+        label: "Sustain Level (0..15)",
+        doc: "",
+    },
+    FmParamDoc {
+        key: "TL",
+        label: "Total Level (0..127)",
+        doc: "",
+    },
+    FmParamDoc {
+        key: "KS",
+        label: "Key Scale (0..3)",
+        doc: "",
+    },
+    FmParamDoc {
+        key: "ML",
+        label: "Multiple (0..15)",
+        doc: "1 is normal, 2 is 2x, 3 is 3x, 0 is 0.5x.",
+    },
+    FmParamDoc {
+        key: "DT",
+        label: "Detune (0..7)",
+        doc: "",
+    },
+    FmParamDoc {
+        key: "SSG",
+        label: "SSG-EG",
+        doc: "SSG-EG: 0 disabled, 8 enabled. SSG-EG type: +0..7, AM: 0 disabled, +100 enabled.",
+    },
+    FmParamDoc {
+        key: "TRS",
+        label: "Transpose (-24..24)",
+        doc: "",
+    },
+];
+
+pub(crate) fn fm_param_doc(key: &str) -> Option<(&'static str, &'static str)> {
+    FM_PARAM_DOCS
+        .iter()
+        .find(|entry| entry.key == key)
+        .map(|entry| (entry.label, entry.doc))
+}
+
+pub(crate) struct TwoOpParamDoc {
+    pub(crate) label: &'static str,
+    pub(crate) doc: &'static str,
+}
+
+pub(crate) const TWO_OP_PARAM_DOCS: &[TwoOpParamDoc] = &[
+    TwoOpParamDoc {
+        label: "FM Instrument Number",
+        doc: "FM instrument number to duplicate.",
+    },
+    TwoOpParamDoc {
+        label: "OP1 Multiple (0..15)",
+        doc: "Operator 1 multiple (0..15). 1 is normal, 2 is 2x, 3 is 3x, 0 is 0.5x.",
+    },
+    TwoOpParamDoc {
+        label: "OP2 Multiple (0..15)",
+        doc: "Operator 2 multiple (0..15). 1 is normal, 2 is 2x, 3 is 3x, 0 is 0.5x.",
+    },
+    TwoOpParamDoc {
+        label: "OP3 Multiple (0..15)",
+        doc: "Operator 3 multiple (0..15). 1 is normal, 2 is 2x, 3 is 3x, 0 is 0.5x.",
+    },
+    TwoOpParamDoc {
+        label: "OP4 Multiple (0..15)",
+        doc: "Operator 4 multiple (0..15). 1 is normal, 2 is 2x, 3 is 3x, 0 is 0.5x.",
+    },
+    TwoOpParamDoc {
+        label: "Transpose (-24..24)",
+        doc: "Transpose in semitones (-24..24).",
+    },
+];
+
+pub(crate) fn two_op_param_doc(index: usize) -> Option<(&'static str, &'static str)> {
+    TWO_OP_PARAM_DOCS
+        .get(index)
+        .map(|entry| (entry.label, entry.doc))
+}
+
 pub(crate) fn track_doc(label: &str) -> Option<&'static str> {
     if label.starts_with('*') && label[1..].chars().all(|c| c.is_ascii_digit()) {
         return Some("Select track by number.");
