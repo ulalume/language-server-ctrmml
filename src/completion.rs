@@ -50,6 +50,63 @@ const COMMAND_KEYWORDS: &[&str] = &[
 
 const PLATFORM_VALUES: &[&str] = &["megadrive", "mdsdrv"];
 const INSTRUMENT_TYPES: &[&str] = &["pcm", "fm", "psg", "2op"];
+const PLATFORM_COMMANDS: &[(&str, &str, &str)] = &[
+    (
+        "fm3 <mask>",
+        "fm3 0000",
+        "Enables FM3 special mode. Mask selects affected operators (e.g. 0011). Use 1111 to disable. Can be used on PSG I or dummy KLMNOP to temporarily use this track for FM3.",
+    ),
+    (
+        "lfo <0..3> <0..7>",
+        "lfo 0 0",
+        "Set hardware LFO AM sensitivity (first) and PM sensitivity (second).",
+    ),
+    (
+        "lforate <0..9>",
+        "lforate 0",
+        "Set hardware LFO rate. 0 disables; 1..9 increase speed (last two are much faster).",
+    ),
+    (
+        "mode <0..1>",
+        "mode 0",
+        "For PSG noise channel J, enable using tone channel I as noise frequency source. Controlling both channels can conflict.",
+    ),
+    (
+        "pcmmode <2..3>",
+        "pcmmode 2",
+        "(mdsdrv only) 2: 2ch PCM up to 17.5 kHz. 3: 3ch PCM up to 13 kHz.",
+    ),
+    (
+        "pcmrate <1..8>",
+        "pcmrate 1",
+        "Change PCM pitch in ~2.2 kHz steps. Temporary until next instrument change.",
+    ),
+    (
+        "write <register> <data>",
+        "write 00 00",
+        "Write FM registers directly. Aliases: dtml*, ksar*, amdr*, sr*, slrr*, ssg*, fbal (use operator number for *). Temporary until next instrument change.",
+    ),
+    (
+        "tl1 <value>",
+        "tl1 0",
+        "Set base operator total level for OP1. Use +/-. Temporary until next instrument change.",
+    ),
+    (
+        "tl2 <value>",
+        "tl2 0",
+        "Set base operator total level for OP2. Use +/-. Temporary until next instrument change.",
+    ),
+    (
+        "tl3 <value>",
+        "tl3 0",
+        "Set base operator total level for OP3. Use +/-. Temporary until next instrument change.",
+    ),
+    (
+        "tl4 <value>",
+        "tl4 0",
+        "Set base operator total level for OP4. Use +/-. Temporary until next instrument change.",
+    ),
+];
 
 pub(crate) fn meta_completion_items(
     line: &str,
@@ -122,6 +179,23 @@ pub(crate) fn rate_offset_items() -> Vec<CompletionItem> {
 
 pub(crate) fn command_items() -> Vec<CompletionItem> {
     COMMAND_KEYWORDS.iter().map(|kw| command_item(kw)).collect()
+}
+
+pub(crate) fn platform_command_items(
+    line: &str,
+    col: usize,
+    line_index: u32,
+) -> Vec<CompletionItem> {
+    let start_col = platform_command_start_col(line, col);
+    let range = Range {
+        start: Position::new(line_index, start_col),
+        end: Position::new(line_index, col as u32),
+    };
+
+    PLATFORM_COMMANDS
+        .iter()
+        .map(|(label, insert, doc)| platform_command_item(label, insert, doc, range))
+        .collect()
 }
 
 pub(crate) fn complete_pcm_paths(
@@ -269,6 +343,27 @@ pub(crate) fn is_at_meta_context(line: &str, col: usize) -> bool {
     !trimmed.chars().skip(1).any(|ch| ch.is_ascii_digit())
 }
 
+pub(crate) fn is_platform_command_context(line: &str, col: usize) -> bool {
+    let prefix = match line.get(..col) {
+        Some(text) => text,
+        None => return false,
+    };
+
+    let mut in_double = false;
+    let mut in_single = false;
+    for ch in prefix.chars() {
+        if ch == '"' && !in_single {
+            in_double = !in_double;
+            continue;
+        }
+        if ch == '\'' && !in_double {
+            in_single = !in_single;
+        }
+    }
+    in_single
+}
+
+
 fn meta_prefix_start_col(line: &str, col: usize) -> u32 {
     let prefix = match line.get(..col) {
         Some(text) => text,
@@ -290,6 +385,22 @@ fn at_prefix_start_col(line: &str, col: usize) -> u32 {
         .map(|idx| (idx + 1) as u32)
         .unwrap_or(col as u32)
 }
+
+fn platform_command_start_col(line: &str, col: usize) -> u32 {
+    let prefix = match line.get(..col) {
+        Some(text) => text,
+        None => return col as u32,
+    };
+    let last_quote = prefix.rfind('\'').map(|idx| idx + 1).unwrap_or(0);
+    let after_quote = &prefix[last_quote..];
+    let last_ws = after_quote.rfind(|ch: char| ch.is_whitespace());
+    let start = match last_ws {
+        Some(idx) => last_quote + idx + 1,
+        None => last_quote,
+    };
+    start as u32
+}
+
 
 fn string_prefix(line: &str, col: usize) -> Option<(String, usize)> {
     let before = line.get(..col)?;
@@ -458,3 +569,25 @@ fn at_meta_item(label: &str, doc: &'static str, insert_text: &str, range: Range)
         ..CompletionItem::default()
     }
 }
+
+fn platform_command_item(
+    label: &str,
+    insert_text: &str,
+    doc: &'static str,
+    range: Range,
+) -> CompletionItem {
+    let edit = tower_lsp::lsp_types::TextEdit {
+        range,
+        new_text: insert_text.to_string(),
+    };
+    CompletionItem {
+        label: label.to_string(),
+        kind: Some(CompletionItemKind::KEYWORD),
+        documentation: Some(Documentation::String(doc.to_string())),
+        insert_text: Some(insert_text.to_string()),
+        text_edit: Some(tower_lsp::lsp_types::CompletionTextEdit::Edit(edit)),
+        filter_text: Some(label.to_string()),
+        ..CompletionItem::default()
+    }
+}
+

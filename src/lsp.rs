@@ -14,8 +14,9 @@ use tower_lsp::{
 use crate::backend::Backend;
 use crate::completion::{
     at_meta_completion_items, command_items, complete_pcm_paths, instrument_items,
-    is_at_meta_context, is_in_comment, is_instrument_definition_context, is_rate_offset_context,
-    meta_completion_items, platform_items, rate_offset_items,
+    is_at_meta_context, is_in_comment, is_instrument_definition_context, is_platform_command_context,
+    is_rate_offset_context, meta_completion_items, platform_command_items, platform_items,
+    rate_offset_items,
 };
 use crate::config::config_from_value;
 use crate::export::ExportFormat;
@@ -63,6 +64,7 @@ impl LanguageServer for Backend {
                         "@".into(),
                         "\"".into(),
                         " ".into(),
+                        "'".into(),
                         "/".into(),
                         ".".into(),
                     ]),
@@ -120,6 +122,11 @@ impl LanguageServer for Backend {
         let col = position.character as usize;
         if is_in_comment(&line, col) {
             return Ok(None);
+        }
+
+        if is_platform_command_context(&line, col) {
+            let items = platform_command_items(&line, col, position.line);
+            return Ok(Some(CompletionResponse::Array(items)));
         }
 
         let roots = self.roots.read().await.clone();
