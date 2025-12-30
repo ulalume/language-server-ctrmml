@@ -413,6 +413,7 @@ fn command_item(entry: &docs::CommandCompletion) -> CompletionItem {
         label: entry.label.to_string(),
         kind: Some(CompletionItemKind::KEYWORD),
         documentation: docs::command_doc(entry.key)
+            .or_else(|| docs::platform_command_doc(entry.key))
             .map(|text| Documentation::String(text.to_string())),
         insert_text: Some(entry.insert.to_string()),
         insert_text_format: Some(tower_lsp::lsp_types::InsertTextFormat::SNIPPET),

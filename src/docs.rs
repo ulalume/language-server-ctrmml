@@ -127,6 +127,21 @@ pub(crate) const COMMAND_COMPLETIONS: &[CommandCompletion] = &[
         label: "&",
         insert: "&",
     },
+    CommandCompletion {
+        key: "_",
+        label: "_<-128..127>",
+        insert: "_${1:-128..127}",
+    },
+    CommandCompletion {
+        key: "__",
+        label: "__<-128..127>",
+        insert: "__${1:-128..127}",
+    },
+    CommandCompletion {
+        key: "_{",
+        label: "_{<data>}",
+        insert: "_{${1:data}}",
+    },
 ];
 pub(crate) struct PlatformCommand {
     pub(crate) key: &'static str,
@@ -143,6 +158,24 @@ pub(crate) fn command_completion_label(key: &str) -> Option<&'static str> {
 }
 
 pub(crate) const PLATFORM_COMMANDS: &[PlatformCommand] = &[
+    PlatformCommand {
+        key: "_",
+        label: "_<-128..127>",
+        insert: "_0",
+        doc: "Set transpose.",
+    },
+    PlatformCommand {
+        key: "__",
+        label: "__<-128..127>",
+        insert: "__0",
+        doc: "Set relative transpose.",
+    },
+    PlatformCommand {
+        key: "_{",
+        label: "_{<data>}",
+        insert: "_{c}",
+        doc: "Set key signature.",
+    },
     PlatformCommand {
         key: "fm3",
         label: "fm3 <mask>",

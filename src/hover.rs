@@ -131,6 +131,48 @@ fn command_at(token: &str, offset: usize) -> Option<(&'static str, &'static str)
     let mut idx = 0;
     while idx < bytes.len() {
         let ch = bytes[idx] as char;
+        if ch == '_' {
+            let start = idx;
+            let mut end = idx + 1;
+            let mut key = "_";
+
+            if end < bytes.len() && bytes[end] == b'_' {
+                key = "__";
+                end += 1;
+            }
+
+            if end < bytes.len() && bytes[end] == b'{' {
+                key = "_{";
+                end += 1;
+                while end < bytes.len() && bytes[end] != b'}' {
+                    end += 1;
+                }
+                if end < bytes.len() && bytes[end] == b'}' {
+                    end += 1;
+                }
+            } else {
+                if end < bytes.len() && (bytes[end] == b'+' || bytes[end] == b'-') {
+                    end += 1;
+                }
+                while end < bytes.len() {
+                    let next = bytes[end] as char;
+                    if next.is_ascii_digit() {
+                        end += 1;
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            if offset >= start && offset < end {
+                let label = docs::command_completion_label(key).unwrap_or(key);
+                return docs::command_doc(key)
+                    .or_else(|| docs::platform_command_doc(key))
+                    .map(|doc| (label, doc));
+            }
+            idx = end;
+            continue;
+        }
         if is_command_char(ch) {
             let start = idx;
             let mut end = idx + 1;
@@ -145,7 +187,9 @@ fn command_at(token: &str, offset: usize) -> Option<(&'static str, &'static str)
             if offset >= start && offset < end {
                 let key = command_label(ch)?;
                 let label = docs::command_completion_label(key).unwrap_or(key);
-                return docs::command_doc(key).map(|doc| (label, doc));
+                return docs::command_doc(key)
+                    .or_else(|| docs::platform_command_doc(key))
+                    .map(|doc| (label, doc));
             }
             idx = end;
             continue;
@@ -245,7 +289,7 @@ fn token_at(line: &str, col: usize) -> Option<(&str, usize, usize)> {
 }
 
 fn is_token_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || matches!(ch, '#' | '@' | '_' | '=' | '*')
+    ch.is_ascii_alphanumeric() || matches!(ch, '#' | '@' | '_' | '=' | '*' | '-' | '+' | '{' | '}')
 }
 
 fn format_hover(label: &str, doc: &str) -> String {
