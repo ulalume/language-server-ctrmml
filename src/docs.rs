@@ -277,6 +277,14 @@ pub(crate) fn instrument_doc(label: &str) -> Option<&'static str> {
     }
 }
 
+
+pub(crate) fn option_value_doc(label: &str) -> Option<&'static str> {
+    match label {
+        "noextpitch" => Some("Disable extended pitch envelopes for compatibility."),
+        _ => None,
+    }
+}
+
 pub(crate) fn rate_offset_doc(label: &str) -> Option<&'static str> {
     match label {
         "rate=" => Some("Override the sample rate."),

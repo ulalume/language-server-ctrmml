@@ -15,8 +15,9 @@ use tower_lsp::{
 use crate::backend::Backend;
 use crate::completion::{
     at_meta_completion_items, command_items, complete_pcm_paths, instrument_items,
-    is_at_meta_context, is_in_comment, is_instrument_definition_context, is_platform_command_context,
-    is_rate_offset_context, meta_completion_items, platform_command_items, platform_items,
+    is_at_meta_context, is_in_comment, is_instrument_definition_context, is_meta_keyword_context,
+    is_meta_value_context, is_platform_command_context, is_rate_offset_context, meta_completion_items,
+    option_items, platform_command_items, platform_items,
     rate_offset_items,
 };
 use crate::config::config_from_value;
@@ -184,13 +185,21 @@ impl LanguageServer for Backend {
             return Ok(Some(CompletionResponse::Array(items)));
         }
 
-        if line.trim_start().starts_with("#platform") {
+        if is_meta_value_context(&line, col, "#platform") {
             return Ok(Some(CompletionResponse::Array(platform_items())));
         }
 
-        if line.trim_start().starts_with('#') {
+        if is_meta_value_context(&line, col, "#option") {
+            return Ok(Some(CompletionResponse::Array(option_items())));
+        }
+
+        if is_meta_keyword_context(&line, col) {
             let items = meta_completion_items(&line, col, position.line);
             return Ok(Some(CompletionResponse::Array(items)));
+        }
+
+        if line.trim_start().starts_with('#') {
+            return Ok(None);
         }
 
         if is_rate_offset_context(&line, col) {

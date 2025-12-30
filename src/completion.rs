@@ -24,6 +24,7 @@ const META_KEYWORDS: &[&str] = &[
 ];
 
 const PLATFORM_VALUES: &[&str] = &["megadrive", "mdsdrv"];
+const OPTION_VALUES: &[&str] = &["noextpitch"];
 const INSTRUMENT_TYPES: &[&str] = &["pcm", "fm", "psg", "2op"];
 
 pub(crate) fn meta_completion_items(
@@ -74,6 +75,10 @@ pub(crate) fn at_meta_completion_items(
 
 pub(crate) fn platform_items() -> Vec<CompletionItem> {
     PLATFORM_VALUES.iter().map(|value| platform_item(value)).collect()
+}
+
+pub(crate) fn option_items() -> Vec<CompletionItem> {
+    OPTION_VALUES.iter().map(|value| option_item(value)).collect()
 }
 
 pub(crate) fn instrument_items() -> Vec<CompletionItem> {
@@ -244,6 +249,54 @@ pub(crate) fn is_instrument_definition_context(line: &str, col: usize) -> bool {
     after_digits == " "
 }
 
+pub(crate) fn is_meta_keyword_context(line: &str, col: usize) -> bool {
+    let prefix = match line.get(..col) {
+        Some(text) => text,
+        None => return false,
+    };
+    let hash_pos = match prefix.rfind('#') {
+        Some(pos) => pos,
+        None => return false,
+    };
+    if prefix[..hash_pos].chars().any(|ch| !ch.is_whitespace()) {
+        return false;
+    }
+    let after = &prefix[hash_pos + 1..];
+    !after.chars().any(|ch| ch.is_whitespace())
+}
+
+pub(crate) fn is_meta_value_context(line: &str, col: usize, keyword: &str) -> bool {
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with(keyword) {
+        return false;
+    }
+    let leading_ws = line.len() - trimmed.len();
+    let kw_start = leading_ws;
+    let kw_end = kw_start + keyword.len();
+    if col <= kw_end {
+        return false;
+    }
+    let prefix = match line.get(..col) {
+        Some(text) => text,
+        None => return false,
+    };
+    let between = match prefix.get(kw_end..) {
+        Some(text) => text,
+        None => return false,
+    };
+    let mut saw_ws = false;
+    for ch in between.chars() {
+        if !saw_ws {
+            if ch.is_whitespace() {
+                saw_ws = true;
+                continue;
+            }
+            return false;
+        }
+    }
+    saw_ws
+}
+
 pub(crate) fn is_at_meta_context(line: &str, col: usize) -> bool {
     let prefix = match line.get(..col) {
         Some(text) => text,
@@ -398,6 +451,10 @@ fn meta_item(label: &str) -> CompletionItem {
 
 fn platform_item(label: &str) -> CompletionItem {
     documented_item(label, CompletionItemKind::KEYWORD, docs::platform_value_doc(label))
+}
+
+fn option_item(label: &str) -> CompletionItem {
+    documented_item(label, CompletionItemKind::KEYWORD, docs::option_value_doc(label))
 }
 
 fn instrument_item(label: &str) -> CompletionItem {

@@ -20,6 +20,28 @@ pub(crate) fn hover_text(line: &str, col: usize) -> Option<String> {
             }
         }
 
+        if let Some((meta_start, meta_end, meta_keyword)) = meta_keyword_bounds(line) {
+            if col >= meta_end && start >= meta_end {
+                if meta_keyword == "#platform" {
+                    if let Some(doc) = docs::platform_value_doc(token) {
+                        return Some(format_hover(token, doc));
+                    }
+                } else if meta_keyword == "#option" {
+                    if let Some(doc) = docs::option_value_doc(token) {
+                        return Some(format_hover(token, doc));
+                    }
+                }
+                return None;
+            }
+        }
+
+        if token.starts_with('#') {
+            if let Some(doc) = docs::meta_doc(token) {
+                return Some(format_hover(token, doc));
+            }
+            return None;
+        }
+
         let offset = col.saturating_sub(start).min(token.len().saturating_sub(1));
         if let Some((label, doc)) = at_meta_in_token(token, offset) {
             return Some(format_hover(label, doc));
@@ -547,4 +569,20 @@ fn format_hover(label: &str, doc: &str) -> String {
     } else {
         format!("**{}**\n\n{}", label, doc)
     }
+}
+
+fn meta_keyword_bounds(line: &str) -> Option<(usize, usize, &str)> {
+    let bytes = line.as_bytes();
+    let mut start = 0;
+    while start < bytes.len() && bytes[start].is_ascii_whitespace() {
+        start += 1;
+    }
+    if start >= bytes.len() || bytes[start] != b'#' {
+        return None;
+    }
+    let mut end = start + 1;
+    while end < bytes.len() && !bytes[end].is_ascii_whitespace() {
+        end += 1;
+    }
+    Some((start, end, &line[start..end]))
 }
