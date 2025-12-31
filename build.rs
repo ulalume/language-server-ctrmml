@@ -78,24 +78,23 @@ fn main() {
         configure.arg("-DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++");
 
         let zlib_candidates = [
+            "/usr/aarch64-linux-gnu/lib/libz.a",
+            "/usr/lib/aarch64-linux-gnu/libz.a",
             "/usr/aarch64-linux-gnu/lib/libz.so",
             "/usr/lib/aarch64-linux-gnu/libz.so",
             "/usr/aarch64-linux-gnu/lib/libz.so.1",
             "/usr/lib/aarch64-linux-gnu/libz.so.1",
             "/usr/lib/aarch64-linux-gnu/libz.so.1.2.11",
         ];
-        let zlib_lib = zlib_candidates
-            .iter()
-            .copied()
-            .find(|p| Path::new(p).exists())
-            .unwrap_or("/usr/lib/aarch64-linux-gnu/libz.so");
-        let zlib_include = if Path::new("/usr/aarch64-linux-gnu/include").exists() {
-            "/usr/aarch64-linux-gnu/include"
-        } else {
-            "/usr/include"
-        };
-        configure.arg(format!("-DZLIB_LIBRARY={}", zlib_lib));
-        configure.arg(format!("-DZLIB_INCLUDE_DIR={}", zlib_include));
+        if let Some(zlib_lib) = zlib_candidates.iter().copied().find(|p| Path::new(p).exists()) {
+            let zlib_include = if Path::new("/usr/aarch64-linux-gnu/include").exists() {
+                "/usr/aarch64-linux-gnu/include"
+            } else {
+                "/usr/include"
+            };
+            configure.arg(format!("-DZLIB_LIBRARY={}", zlib_lib));
+            configure.arg(format!("-DZLIB_INCLUDE_DIR={}", zlib_include));
+        }
     }
     run_cmd(&mut configure, "cmake configure");
 
@@ -110,17 +109,27 @@ fn main() {
     }
     run_cmd(&mut build, "cmake build");
 
-    let search_paths = vec![
+    let mut search_paths = vec![
         build_dir.clone(),
         build_dir.join("Release"),
         build_dir.join("_deps/ctrmml-build"),
         build_dir.join("_deps/ctrmml-build/Release"),
+        build_dir.join("_deps/ctrmml-build/src"),
+        build_dir.join("_deps/ctrmml-build/src/Release"),
         build_dir.join("_deps/libvgm-build/bin"),
         build_dir.join("_deps/libvgm-build/bin/Release"),
+        build_dir.join("_deps/zlib-build"),
+        build_dir.join("_deps/zlib-build/Release"),
     ];
 
+
+    search_paths.extend(collect_lib_dirs(&build_dir));
+
+    let mut seen_paths = HashSet::new();
     for path in &search_paths {
-        println!("cargo:rustc-link-search=native={}", path.display());
+        if seen_paths.insert(path.clone()) {
+            println!("cargo:rustc-link-search=native={}", path.display());
+        }
     }
 
     let mut libs = Vec::new();
@@ -129,11 +138,24 @@ fn main() {
     }
     if let Some(name) = find_lib(&search_paths, "ctrmml") {
         libs.push(name);
+    } else if let Some(name) = find_lib(&search_paths, "ctrmml-static") {
+        libs.push(name);
+    } else if let Some(name) = find_lib_prefix(&search_paths, "ctrmml") {
+        libs.push(name);
     }
 
     for base in ["vgm-player", "vgm-emu", "vgm-audio", "vgm-utils"] {
         if let Some(name) = find_lib(&search_paths, base) {
             libs.push(name);
+        }
+    }
+
+    if cfg!(windows) {
+        for base in ["zs", "zlibstatic", "zlib"] {
+            if let Some(name) = find_lib(&search_paths, base) {
+                libs.push(name);
+                break;
+            }
         }
     }
 
@@ -155,6 +177,35 @@ fn main() {
     }
 }
 
+
+fn collect_lib_dirs(root: &Path) -> Vec<PathBuf> {
+    let mut dirs = HashSet::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let ext = path.extension().and_then(|s| s.to_str());
+            if ext != Some("a") && ext != Some("lib") {
+                continue;
+            }
+            if let Some(parent) = path.parent() {
+                dirs.insert(parent.to_path_buf());
+            }
+        }
+    }
+    let mut list: Vec<_> = dirs.into_iter().collect();
+    list.sort();
+    list
+}
+
 fn run_cmd(cmd: &mut Command, label: &str) {
     let status = cmd
         .status()
@@ -168,6 +219,29 @@ fn find_lib(search_paths: &[PathBuf], base: &str) -> Option<String> {
     for dir in search_paths {
         if let Some(name) = find_lib_in_dir(dir, base) {
             return Some(name);
+        }
+    }
+    None
+}
+
+fn find_lib_prefix(search_paths: &[PathBuf], prefix: &str) -> Option<String> {
+    for dir in search_paths {
+        if !dir.exists() {
+            continue;
+        }
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let ext = path.extension().and_then(|s| s.to_str());
+                if ext != Some("a") && ext != Some("lib") {
+                    continue;
+                }
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                let stem = stem.strip_prefix("lib").unwrap_or(stem);
+                if stem.starts_with(prefix) {
+                    return Some(stem.to_string());
+                }
+            }
         }
     }
     None
@@ -196,7 +270,8 @@ fn find_lib_in_dir(dir: &Path, base: &str) -> Option<String> {
                     continue;
                 }
                 let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                if stem.starts_with(base) {
+                let underscore_prefix = format!("{}_", base);
+                if stem == base || stem.starts_with(&underscore_prefix) {
                     return Some(stem.to_string());
                 }
             }
