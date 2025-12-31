@@ -1,0 +1,63 @@
+name: build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "**"
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+            os_name: macos
+            arch: arm64
+          - os: macos-14
+            target: x86_64-apple-darwin
+            os_name: macos
+            arch: x64
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            os_name: linux
+            arch: x64
+          - os: ubuntu-22.04
+            target: aarch64-unknown-linux-gnu
+            os_name: linux
+            arch: arm64
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            os_name: windows
+            arch: x64
+          - os: windows-2022
+            target: aarch64-pc-windows-msvc
+            os_name: windows
+            arch: arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux cross-compiler
+        if: matrix.os == 'ubuntu-22.04' && matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+
+      - name: Build
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctrmml-lsp-${{ matrix.os_name }}-${{ matrix.arch }}
+          path: target/${{ matrix.target }}/release/ctrmml-lsp*
