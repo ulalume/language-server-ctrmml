@@ -45,12 +45,6 @@ jobs:
             arch: x64
             archive_ext: zip
             bin_ext: ".exe"
-          - os: windows-2022
-            target: aarch64-pc-windows-msvc
-            os_name: windows
-            arch: arm64
-            archive_ext: zip
-            bin_ext: ".exe"
 
     steps:
       - uses: actions/checkout@v4
@@ -70,6 +64,37 @@ jobs:
         if: matrix.os == 'ubuntu-22.04' && matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo dpkg --add-architecture arm64
+          sudo python3 - <<'PY'
+          from pathlib import Path
+          def rewrite_list(path: Path) -> None:
+              lines = path.read_text().splitlines()
+              out = []
+              for line in lines:
+                  if line.startswith('deb ') and '[arch=' not in line:
+                      out.append('deb [arch=amd64] ' + line[4:])
+                  elif line.startswith('deb-src ') and '[arch=' not in line:
+                      out.append('deb-src [arch=amd64] ' + line[8:])
+                  else:
+                      out.append(line)
+              path.write_text('\n'.join(out) + '\n')
+          for p in [Path('/etc/apt/sources.list')]:
+              if p.exists():
+                  rewrite_list(p)
+          list_dir = Path('/etc/apt/sources.list.d')
+          for p in list_dir.glob('*.list'):
+              rewrite_list(p)
+          for p in list_dir.glob('*.sources'):
+              lines = p.read_text().splitlines()
+              if not any(line.strip().lower().startswith('architectures:') for line in lines):
+                  out = []
+                  inserted = False
+                  for line in lines:
+                      out.append(line)
+                      if not inserted and line.strip().lower().startswith('types:'):
+                          out.append('Architectures: amd64')
+                          inserted = True
+                  p.write_text('\n'.join(out) + '\n')
+          PY
           sudo tee /etc/apt/sources.list.d/arm64.list <<'EOF'
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse
