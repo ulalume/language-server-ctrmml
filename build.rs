@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR"));
+    let manifest_dir =
+        PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR"));
     let default_cmd_dir = manifest_dir.join("ctrmml-cmd");
     let cmd_dir = env::var("CTRMML_CMD_DIR")
         .map(PathBuf::from)
@@ -16,9 +17,16 @@ fn main() {
     }
 
     println!("cargo:rerun-if-changed={}", cmd_dir.join("CMakeLists.txt").display());
-    println!("cargo:rerun-if-changed={}", cmd_dir.join("src/ctrmml_cmd_c_api.h").display());
-    println!("cargo:rerun-if-changed={}", cmd_dir.join("src/ctrmml_cmd_c_api.cpp").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        cmd_dir.join("src/ctrmml_cmd_c_api.h").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        cmd_dir.join("src/ctrmml_cmd_c_api.cpp").display()
+    );
 
+    let target = env::var("TARGET").unwrap_or_default();
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("missing OUT_DIR"));
     let build_id = hex_hash(cmd_dir.to_string_lossy().as_bytes());
     let build_dir = out_dir.join(format!("ctrmml-cmd-build-{}", build_id));
@@ -28,6 +36,7 @@ fn main() {
         }
     }
 
+    let use_ninja = cfg!(windows);
     let mut configure = Command::new("cmake");
     configure
         .arg("-S")
@@ -36,15 +45,35 @@ fn main() {
         .arg(&build_dir)
         .arg("-DCMAKE_BUILD_TYPE=Release")
         .arg("-DAUDIODRV_LIBAO=OFF");
-    if cfg!(target_os = "macos") {
+    if use_ninja {
+        configure.arg("-G").arg("Ninja");
+    }
+    if target.ends_with("apple-darwin") {
         configure.arg("-DAUDIODRV_APPLE=ON");
         configure.arg("-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0");
+        let arch = if target.contains("x86_64") {
+            "x86_64"
+        } else if target.contains("aarch64") {
+            "arm64"
+        } else {
+            ""
+        };
+        if !arch.is_empty() {
+            configure.arg(format!("-DCMAKE_OSX_ARCHITECTURES={}", arch));
+        }
+    } else if target.contains("aarch64-unknown-linux-gnu") {
+        configure.arg("-DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc");
+        configure.arg("-DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++");
     }
     run_cmd(&mut configure, "cmake configure");
 
     let mut build = Command::new("cmake");
-    build.arg("--build").arg(&build_dir).arg("--target").arg("ctrmml-cmd-lib");
-    if cfg!(windows) {
+    build
+        .arg("--build")
+        .arg(&build_dir)
+        .arg("--target")
+        .arg("ctrmml-cmd-lib");
+    if cfg!(windows) && !use_ninja {
         build.arg("--config").arg("Release");
     }
     run_cmd(&mut build, "cmake build");
@@ -95,7 +124,9 @@ fn main() {
 }
 
 fn run_cmd(cmd: &mut Command, label: &str) {
-    let status = cmd.status().unwrap_or_else(|e| panic!("failed to run {}: {}", label, e));
+    let status = cmd
+        .status()
+        .unwrap_or_else(|e| panic!("failed to run {}: {}", label, e));
     if !status.success() {
         panic!("{} failed with status {}", label, status);
     }
