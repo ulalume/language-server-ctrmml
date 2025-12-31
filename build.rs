@@ -6,10 +6,7 @@ use std::process::Command;
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("missing CARGO_MANIFEST_DIR"));
-    let default_cmd_dir = manifest_dir
-        .parent()
-        .map(|p| p.join("ctrmml-cmd"))
-        .expect("missing parent directory for ctrmml-cmd");
+    let default_cmd_dir = manifest_dir.join("ctrmml-cmd");
     let cmd_dir = env::var("CTRMML_CMD_DIR")
         .map(PathBuf::from)
         .unwrap_or(default_cmd_dir);
@@ -23,7 +20,13 @@ fn main() {
     println!("cargo:rerun-if-changed={}", cmd_dir.join("src/ctrmml_cmd_c_api.cpp").display());
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("missing OUT_DIR"));
-    let build_dir = out_dir.join("ctrmml-cmd-build");
+    let build_id = hex_hash(cmd_dir.to_string_lossy().as_bytes());
+    let build_dir = out_dir.join(format!("ctrmml-cmd-build-{}", build_id));
+    if let Some(cmake_home) = read_cmake_home(&build_dir) {
+        if cmake_home != cmd_dir {
+            let _ = std::fs::remove_dir_all(&build_dir);
+        }
+    }
 
     let mut configure = Command::new("cmake");
     configure
@@ -131,5 +134,23 @@ fn find_lib_in_dir(dir: &Path, base: &str) -> Option<String> {
         }
     }
 
+    None
+}
+
+fn hex_hash(data: &[u8]) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    use std::hash::Hasher;
+    hasher.write(data);
+    format!("{:x}", hasher.finish())
+}
+
+fn read_cmake_home(build_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let cache_path = build_dir.join("CMakeCache.txt");
+    let cache = std::fs::read_to_string(cache_path).ok()?;
+    for line in cache.lines() {
+        if let Some(rest) = line.strip_prefix("CMAKE_HOME_DIRECTORY:INTERNAL=") {
+            return Some(std::path::PathBuf::from(rest));
+        }
+    }
     None
 }
