@@ -34,7 +34,12 @@ fn main() {
         .arg(&cmd_dir)
         .arg("-B")
         .arg(&build_dir)
-        .arg("-DCMAKE_BUILD_TYPE=Release");
+        .arg("-DCMAKE_BUILD_TYPE=Release")
+        .arg("-DAUDIODRV_LIBAO=OFF");
+    if cfg!(target_os = "macos") {
+        configure.arg("-DAUDIODRV_APPLE=ON");
+        configure.arg("-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0");
+    }
     run_cmd(&mut configure, "cmake configure");
 
     let mut build = Command::new("cmake");
@@ -79,6 +84,7 @@ fn main() {
     }
 
     if cfg!(target_os = "macos") {
+        println!("cargo:rustc-link-lib=framework=AudioToolbox");
         println!("cargo:rustc-link-lib=iconv");
         println!("cargo:rustc-link-lib=z");
         println!("cargo:rustc-link-lib=c++");

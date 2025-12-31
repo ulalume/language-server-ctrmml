@@ -1,9 +1,7 @@
 mod backend;
 mod check;
 mod completion;
-mod config;
 mod docs;
-mod ctrmml_cmd;
 mod ctrmml_cmd_ffi;
 mod diagnostics;
 mod export;

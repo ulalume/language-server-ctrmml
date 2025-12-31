@@ -13,9 +13,3 @@ tower-lsp = "0.20.0"
 tower = "0.4"
 walkdir = "2.5.0"
 url = "2.5.0"
-
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-flate2 = "1.0"
-tar = "0.4"
-zip = "0.6"
-dirs = "5.0"

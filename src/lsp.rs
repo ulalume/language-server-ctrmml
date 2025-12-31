@@ -20,7 +20,6 @@ use crate::completion::{
     option_items, platform_command_items, platform_items,
     rate_offset_items,
 };
-use crate::config::config_from_value;
 use crate::export::ExportFormat;
 use crate::hover::{fm_hover_text, hover_text, two_op_hover_text};
 use crate::utils::{is_mml_uri, line_at};
@@ -41,12 +40,6 @@ impl LanguageServer for Backend {
             }
         }
         *self.roots.write().await = roots;
-
-        if let Some(options) = params.initialization_options {
-            if let Some(config) = config_from_value(&options) {
-                *self.config.write().await = config;
-            }
-        }
 
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
