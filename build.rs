@@ -52,6 +52,13 @@ fn main() {
         configure.arg("-DCMAKE_C_COMPILER=cl");
         configure.arg("-DCMAKE_CXX_COMPILER=cl");
         configure.arg("-DCMAKE_OBJECT_PATH_MAX=200");
+        configure.env("CC", "cl");
+        configure.env("CXX", "cl");
+        if let Ok(pkg) = env::var("PKG_CONFIG") {
+            configure.arg(format!("-DPKG_CONFIG_EXECUTABLE={}", pkg));
+        } else if Path::new("C:\\ProgramData\\chocolatey\\bin\\pkg-config.exe").exists() {
+            configure.arg("-DPKG_CONFIG_EXECUTABLE=C:\\ProgramData\\chocolatey\\bin\\pkg-config.exe");
+        }
     }
     if target.ends_with("apple-darwin") {
         configure.arg("-DAUDIODRV_APPLE=ON");
@@ -70,11 +77,18 @@ fn main() {
         configure.arg("-DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc");
         configure.arg("-DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++");
 
-        let zlib_lib = if Path::new("/usr/aarch64-linux-gnu/lib/libz.so").exists() {
-            "/usr/aarch64-linux-gnu/lib/libz.so"
-        } else {
-            "/usr/lib/aarch64-linux-gnu/libz.so"
-        };
+        let zlib_candidates = [
+            "/usr/aarch64-linux-gnu/lib/libz.so",
+            "/usr/lib/aarch64-linux-gnu/libz.so",
+            "/usr/aarch64-linux-gnu/lib/libz.so.1",
+            "/usr/lib/aarch64-linux-gnu/libz.so.1",
+            "/usr/lib/aarch64-linux-gnu/libz.so.1.2.11",
+        ];
+        let zlib_lib = zlib_candidates
+            .iter()
+            .copied()
+            .find(|p| Path::new(p).exists())
+            .unwrap_or("/usr/lib/aarch64-linux-gnu/libz.so");
         let zlib_include = if Path::new("/usr/aarch64-linux-gnu/include").exists() {
             "/usr/aarch64-linux-gnu/include"
         } else {
