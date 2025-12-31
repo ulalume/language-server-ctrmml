@@ -48,6 +48,11 @@ fn main() {
     if use_ninja {
         configure.arg("-G").arg("Ninja");
     }
+    if cfg!(windows) {
+        configure.arg("-DCMAKE_C_COMPILER=cl");
+        configure.arg("-DCMAKE_CXX_COMPILER=cl");
+        configure.arg("-DCMAKE_OBJECT_PATH_MAX=200");
+    }
     if target.ends_with("apple-darwin") {
         configure.arg("-DAUDIODRV_APPLE=ON");
         configure.arg("-DCMAKE_OSX_DEPLOYMENT_TARGET=11.0");
@@ -64,6 +69,19 @@ fn main() {
     } else if target.contains("aarch64-unknown-linux-gnu") {
         configure.arg("-DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc");
         configure.arg("-DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++");
+
+        let zlib_lib = if Path::new("/usr/aarch64-linux-gnu/lib/libz.so").exists() {
+            "/usr/aarch64-linux-gnu/lib/libz.so"
+        } else {
+            "/usr/lib/aarch64-linux-gnu/libz.so"
+        };
+        let zlib_include = if Path::new("/usr/aarch64-linux-gnu/include").exists() {
+            "/usr/aarch64-linux-gnu/include"
+        } else {
+            "/usr/include"
+        };
+        configure.arg(format!("-DZLIB_LIBRARY={}", zlib_lib));
+        configure.arg(format!("-DZLIB_INCLUDE_DIR={}", zlib_include));
     }
     run_cmd(&mut configure, "cmake configure");
 
