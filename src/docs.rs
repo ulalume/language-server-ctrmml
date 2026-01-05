@@ -307,7 +307,7 @@ pub(crate) fn command_doc(label: &str) -> Option<&'static str> {
         "T" => Some("Set tempo using the platform's native timer values."),
         "v" => Some("Set volume."),
         "V" => Some("Set volume (fine), or modify volume (fine) depending on parameter range."),
-        "p" => Some("Set panning."),
+        "p" => Some("Set panning.\n\n#### Limitations\nPanning using the `p` command is only allowed for FM channels and the accepted range is 0-3. Bit 1 enables the right channel, bit 2 enables the left channel."),
         "k" => Some("Set transpose. Default behavior is the same as the `_` command."),
         "K" => Some("Set detune."),
         "E" => Some("Set envelope. 0 to disable."),
