@@ -621,10 +621,11 @@ fn is_token_char(ch: char) -> bool {
 }
 
 fn format_hover(label: &str, doc: &str) -> String {
+    let link = "[mml_ref.md](https://github.com/superctr/ctrmml/blob/master/mml_ref.md)";
     if doc.is_empty() {
-        format!("**{}**", label)
+        format!("**{}**\n\n{}", label, link)
     } else {
-        format!("**{}**\n\n{}", label, doc)
+        format!("**{}**\n\n{}\n\n{}", label, doc, link)
     }
 }
 
