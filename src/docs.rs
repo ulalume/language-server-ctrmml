@@ -212,6 +212,12 @@ pub(crate) const PLATFORM_COMMANDS: &[PlatformCommand] = &[
         doc: "Set hardware LFO rate. 0 disables; 1..9 increase speed (last two are much faster).",
     },
     PlatformCommand {
+        key: "carry",
+        label: "carry",
+        insert: "carry",
+        doc: "Keep macro track position after new notes. Use at the start of a macro track.",
+    },
+    PlatformCommand {
         key: "mode",
         label: "mode <0..1>",
         insert: "mode 0",
