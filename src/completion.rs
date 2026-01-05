@@ -8,24 +8,8 @@ use tower_lsp::lsp_types::{
 use walkdir::WalkDir;
 
 use crate::docs;
+use crate::mml::is_at_number;
 use crate::utils::{is_wav, uri_to_dir};
-
-const META_KEYWORDS: &[&str] = &[
-    "#title",
-    "#composer",
-    "#author",
-    "#date",
-    "#comment",
-    "#platform",
-    "#option",
-    "#game",
-    "#composerj",
-    "#programmer",
-];
-
-const PLATFORM_VALUES: &[&str] = &["megadrive", "mdsdrv"];
-const OPTION_VALUES: &[&str] = &["noextpitch"];
-const INSTRUMENT_TYPES: &[&str] = &["pcm", "fm", "psg", "2op"];
 
 pub(crate) fn meta_completion_items(
     line: &str,
@@ -38,7 +22,7 @@ pub(crate) fn meta_completion_items(
         end: Position::new(line_index, col as u32),
     };
 
-    META_KEYWORDS
+    docs::META_KEYWORDS
         .iter()
         .map(|kw| {
             let insert = kw.strip_prefix('#').unwrap_or(kw);
@@ -74,15 +58,21 @@ pub(crate) fn at_meta_completion_items(
 }
 
 pub(crate) fn platform_items() -> Vec<CompletionItem> {
-    PLATFORM_VALUES.iter().map(|value| platform_item(value)).collect()
+    docs::PLATFORM_VALUES
+        .iter()
+        .map(|value| platform_item(value))
+        .collect()
 }
 
 pub(crate) fn option_items() -> Vec<CompletionItem> {
-    OPTION_VALUES.iter().map(|value| option_item(value)).collect()
+    docs::OPTION_VALUES
+        .iter()
+        .map(|value| option_item(value))
+        .collect()
 }
 
 pub(crate) fn instrument_items() -> Vec<CompletionItem> {
-    INSTRUMENT_TYPES
+    docs::INSTRUMENT_TYPES
         .iter()
         .map(|value| instrument_item(value))
         .collect()
@@ -184,24 +174,6 @@ pub(crate) fn complete_pcm_paths(
     }
 
     Some(items)
-}
-
-pub(crate) fn is_in_comment(line: &str, col: usize) -> bool {
-    let prefix = match line.get(..col) {
-        Some(text) => text,
-        None => return false,
-    };
-    let mut in_string = false;
-    for ch in prefix.chars() {
-        if ch == '"' {
-            in_string = !in_string;
-            continue;
-        }
-        if ch == ';' && !in_string {
-            return true;
-        }
-    }
-    false
 }
 
 pub(crate) fn is_rate_offset_context(line: &str, col: usize) -> bool {
@@ -419,15 +391,6 @@ fn tokenize_outside_quotes(input: &str) -> Vec<String> {
     tokens
 }
 
-fn is_at_number(token: &str) -> bool {
-    let mut chars = token.chars();
-    if chars.next() != Some('@') {
-        return false;
-    }
-    let rest: String = chars.collect();
-    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
-}
-
 fn is_quoted(token: &str) -> bool {
     token.len() >= 2 && token.starts_with('"') && token.ends_with('"')
 }
@@ -516,4 +479,3 @@ fn platform_command_item(
         ..CompletionItem::default()
     }
 }
-

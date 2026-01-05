@@ -6,6 +6,23 @@ pub(crate) struct CommandCompletion {
     pub(crate) insert: &'static str,
 }
 
+pub(crate) const META_KEYWORDS: &[&str] = &[
+    "#title",
+    "#composer",
+    "#author",
+    "#date",
+    "#comment",
+    "#platform",
+    "#option",
+    "#game",
+    "#composerj",
+    "#programmer",
+];
+
+pub(crate) const PLATFORM_VALUES: &[&str] = &["megadrive", "mdsdrv"];
+pub(crate) const OPTION_VALUES: &[&str] = &["noextpitch"];
+pub(crate) const INSTRUMENT_TYPES: &[&str] = &["pcm", "fm", "psg", "2op"];
+
 pub(crate) const COMMAND_COMPLETIONS: &[CommandCompletion] = &[
     CommandCompletion {
         key: "o",
@@ -246,7 +263,8 @@ pub(crate) const PLATFORM_COMMANDS: &[PlatformCommand] = &[
 
 pub(crate) fn meta_doc(label: &str) -> Option<&'static str> {
     match label {
-        "#title" | "#composer" | "#author" | "#date" | "#comment" => Some("Song metadata."),
+        "#title" | "#composer" | "#author" | "#date" | "#comment" | "#game" | "#composerj"
+        | "#programmer" => Some("Song metadata."),
         "#platform" => Some("Sets the MML target platform."),
         "#option" => Some("Sets platform options."),
         _ => None,

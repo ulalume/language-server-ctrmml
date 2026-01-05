@@ -1,9 +1,7 @@
-use std::process::Stdio;
-use tokio::io::AsyncWriteExt;
-use tokio::process::Command as TokioCommand;
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 
 use crate::backend::Backend;
+use crate::ctrmml_cmd::{output_message, run_ctrmml_cmd};
 use crate::diagnostics::diagnostic_for_check;
 use crate::utils::{is_mml_uri, read_file_text, uri_to_path};
 
@@ -23,45 +21,22 @@ impl Backend {
             .cloned()
             .or_else(|| read_file_text(&uri));
 
-        let output = if let Some(text) = text {
+        let output = if let Some(text) = text.as_deref() {
             let path = uri_to_path(&uri).ok_or_else(|| "invalid file uri".to_string())?;
-            let mut child = TokioCommand::new(cmd_path)
-                .arg("check")
-                .arg("--stdin")
-                .arg("--path")
-                .arg(&path)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .map_err(|e| format!("failed to run ctrmml-cmd check: {e}"))?;
-
-            if let Some(mut stdin) = child.stdin.take() {
-                stdin
-                    .write_all(text.as_bytes())
-                    .await
-                    .map_err(|e| format!("failed to write ctrmml-cmd stdin: {e}"))?;
-            }
-
-            child
-                .wait_with_output()
-                .await
-                .map_err(|e| format!("failed to run ctrmml-cmd check: {e}"))?
+            run_ctrmml_cmd(&cmd_path, "check", Some(text), |cmd| {
+                cmd.arg("check").arg("--stdin").arg("--path").arg(&path);
+            })
+            .await?
         } else {
             let file_path = uri_to_path(&uri).ok_or_else(|| "invalid file uri".to_string())?;
-            TokioCommand::new(cmd_path)
-                .arg("check")
-                .arg(&file_path)
-                .output()
-                .await
-                .map_err(|e| format!("failed to run ctrmml-cmd check: {e}"))?
+            run_ctrmml_cmd(&cmd_path, "check", None, |cmd| {
+                cmd.arg("check").arg(&file_path);
+            })
+            .await?
         };
 
         let mut diagnostics: Vec<Diagnostic> = Vec::new();
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let message = if !stderr.trim().is_empty() { stderr } else { stdout };
             let text = self
                 .docs
                 .read()
@@ -70,19 +45,21 @@ impl Backend {
                 .cloned()
                 .or_else(|| read_file_text(&uri))
                 .unwrap_or_default();
-            if let Some(diag) = diagnostic_for_check(&text, &message) {
-                diagnostics.push(diag);
-            } else if !message.trim().is_empty() {
-                diagnostics.push(Diagnostic {
-                    range: Range {
-                        start: Position::new(0, 0),
-                        end: Position::new(0, 0),
-                    },
-                    severity: Some(DiagnosticSeverity::ERROR),
-                    source: Some("ctrmml-check".to_string()),
-                    message: message.trim().to_string(),
-                    ..Diagnostic::default()
-                });
+            if let Some(message) = output_message(&output) {
+                if let Some(diag) = diagnostic_for_check(&text, &message) {
+                    diagnostics.push(diag);
+                } else {
+                    diagnostics.push(Diagnostic {
+                        range: Range {
+                            start: Position::new(0, 0),
+                            end: Position::new(0, 0),
+                        },
+                        severity: Some(DiagnosticSeverity::ERROR),
+                        source: Some("ctrmml-check".to_string()),
+                        message,
+                        ..Diagnostic::default()
+                    });
+                }
             }
         }
 

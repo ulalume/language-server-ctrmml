@@ -8,6 +8,8 @@ mod diagnostics;
 mod export;
 mod hover;
 mod lsp;
+mod lsp_commands;
+mod mml;
 mod playback;
 mod utils;
 

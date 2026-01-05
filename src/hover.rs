@@ -1,4 +1,5 @@
 use crate::docs;
+use crate::mml::{double_quote_bounds, is_at_number, single_quote_bounds, token_at};
 
 pub(crate) fn hover_text(line: &str, col: usize) -> Option<String> {
     if line.is_empty() {
@@ -377,10 +378,6 @@ fn pcm_sample_path_hover(line: &str, col: usize) -> Option<String> {
     ))
 }
 
-fn is_at_number(token: &str) -> bool {
-    token.len() > 1 && token.starts_with('@') && token[1..].chars().all(|c| c.is_ascii_digit())
-}
-
 fn is_track_token(line: &str, start: usize, token: &str) -> bool {
     if token.starts_with('*') && token.len() > 1 && token[1..].chars().all(|c| c.is_ascii_digit()) {
         return true;
@@ -539,85 +536,6 @@ fn is_command_char(ch: char) -> bool {
         'o' | 'l' | 'Q' | 'q' | 'C' | 'R' | 'L' | 's' | 't' | 'T' | 'v' | 'V' | 'p' | 'k' | 'K'
             | 'E' | 'M' | 'P' | 'G' | 'D' | 'r' | '^' | '&'
     )
-}
-
-fn single_quote_bounds(line: &str, col: usize) -> Option<(usize, usize)> {
-    let bytes = line.as_bytes();
-    let mut left = col.min(line.len().saturating_sub(1));
-    while left > 0 && bytes[left] != b'\'' {
-        left = left.saturating_sub(1);
-    }
-    if bytes[left] != b'\'' {
-        return None;
-    }
-
-    let mut right = col.min(line.len().saturating_sub(1));
-    while right < line.len() && bytes[right] != b'\'' {
-        right += 1;
-    }
-    if right >= line.len() || bytes[right] != b'\'' {
-        return None;
-    }
-    if left >= right {
-        return None;
-    }
-    Some((left, right))
-}
-
-fn double_quote_bounds(line: &str, col: usize) -> Option<(usize, usize)> {
-    let bytes = line.as_bytes();
-    let mut left = col.min(line.len().saturating_sub(1));
-    while left > 0 && bytes[left] != b'"' {
-        left = left.saturating_sub(1);
-    }
-    if bytes[left] != b'"' {
-        return None;
-    }
-
-    let mut right = col.min(line.len().saturating_sub(1));
-    while right < line.len() && bytes[right] != b'"' {
-        right += 1;
-    }
-    if right >= line.len() || bytes[right] != b'"' {
-        return None;
-    }
-    if left >= right {
-        return None;
-    }
-    Some((left, right))
-}
-
-fn token_at(line: &str, col: usize) -> Option<(&str, usize, usize)> {
-    let bytes = line.as_bytes();
-    if bytes.is_empty() {
-        return None;
-    }
-    let mut idx = col.min(line.len().saturating_sub(1));
-    while idx > 0 && bytes[idx].is_ascii_whitespace() {
-        idx -= 1;
-    }
-
-    let ch = bytes[idx] as char;
-    if ch == '^' || ch == '&' {
-        return Some((&line[idx..idx + 1], idx, idx + 1));
-    }
-
-    let mut start = idx;
-    while start > 0 && is_token_char(bytes[start - 1] as char) {
-        start -= 1;
-    }
-    let mut end = idx + 1;
-    while end < line.len() && is_token_char(bytes[end] as char) {
-        end += 1;
-    }
-    if start == end {
-        return None;
-    }
-    Some((&line[start..end], start, end))
-}
-
-fn is_token_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || matches!(ch, '#' | '@' | '_' | '=' | '*' | '-' | '+' | '{' | '}')
 }
 
 fn format_hover(label: &str, doc: &str) -> String {

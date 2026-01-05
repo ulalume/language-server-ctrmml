@@ -1,12 +1,10 @@
 use std::process::Stdio;
 
-use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    process::Command as TokioCommand,
-};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tower_lsp::lsp_types::Diagnostic;
 
 use crate::backend::Backend;
+use crate::ctrmml_cmd::spawn_ctrmml_cmd;
 use crate::diagnostics::{diagnostics_for_positions, HighlightMessage};
 use crate::utils::{read_file_text, uri_to_path};
 
@@ -34,29 +32,18 @@ impl Backend {
             .or_else(|| read_file_text(&uri));
         let text = text.ok_or_else(|| "failed to read mml text".to_string())?;
         let path = uri_to_path(&uri).ok_or_else(|| "invalid file uri".to_string())?;
-        let mut cmd = TokioCommand::new(cmd_path);
-        cmd.arg("play")
-            .arg("--stdin")
-            .arg("--path")
-            .arg(&path)
-            .arg("--follow");
-        if let Some((line, col)) = start {
-            cmd.arg("--start").arg(format!("{line}:{col}"));
-        }
-        cmd.stdin(Stdio::piped());
-        cmd.stdout(Stdio::piped());
-
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("failed to spawn ctrmml-cmd: {e}"))?;
-        {
-            if let Some(mut stdin) = child.stdin.take() {
-                stdin
-                    .write_all(text.as_bytes())
-                    .await
-                    .map_err(|e| format!("failed to write ctrmml-cmd stdin: {e}"))?;
+        let mut child = spawn_ctrmml_cmd(&cmd_path, "play", &text, |cmd| {
+            cmd.arg("play")
+                .arg("--stdin")
+                .arg("--path")
+                .arg(&path)
+                .arg("--follow");
+            if let Some((line, col)) = start {
+                cmd.arg("--start").arg(format!("{line}:{col}"));
             }
-        }
+            cmd.stdout(Stdio::piped());
+        })
+        .await?;
 
         let stdout = child
             .stdout

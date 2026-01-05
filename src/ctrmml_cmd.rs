@@ -1,9 +1,18 @@
-use std::{env, fs, io, path::{Path, PathBuf}, time::SystemTime};
+use std::{
+    env,
+    fs,
+    io,
+    path::{Path, PathBuf},
+    process::{Output, Stdio},
+    time::SystemTime,
+};
 
 use dirs::cache_dir;
 use flate2::read::GzDecoder;
 use reqwest::Client as HttpClient;
 use tar::Archive;
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command as TokioCommand;
 use zip::ZipArchive;
 
 const CTRMML_CMD_REPO: &str = "ulalume/ctrmml-cmd";
@@ -47,6 +56,81 @@ pub(crate) async fn resolve_command_path(
         Ok(None) => Ok(CTRMML_CMD_NAME.to_string()),
         Err(err) => Err(err),
     }
+}
+
+pub(crate) async fn run_ctrmml_cmd<F>(
+    cmd_path: &str,
+    context: &str,
+    stdin_text: Option<&str>,
+    configure: F,
+) -> std::result::Result<Output, String>
+where
+    F: FnOnce(&mut TokioCommand),
+{
+    let mut cmd = TokioCommand::new(cmd_path);
+    configure(&mut cmd);
+    if stdin_text.is_some() {
+        cmd.stdin(Stdio::piped());
+    }
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("failed to run ctrmml-cmd {context}: {e}"))?;
+
+    if let Some(text) = stdin_text {
+        write_stdin(&mut child, text).await?;
+    }
+
+    child
+        .wait_with_output()
+        .await
+        .map_err(|e| format!("failed to run ctrmml-cmd {context}: {e}"))
+}
+
+pub(crate) async fn spawn_ctrmml_cmd<F>(
+    cmd_path: &str,
+    context: &str,
+    stdin_text: &str,
+    configure: F,
+) -> std::result::Result<tokio::process::Child, String>
+where
+    F: FnOnce(&mut TokioCommand),
+{
+    let mut cmd = TokioCommand::new(cmd_path);
+    configure(&mut cmd);
+    cmd.stdin(Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("failed to spawn ctrmml-cmd {context}: {e}"))?;
+    write_stdin(&mut child, stdin_text).await?;
+    Ok(child)
+}
+
+pub(crate) fn output_message(output: &Output) -> Option<String> {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let message = if !stderr.trim().is_empty() { stderr } else { stdout };
+    let message = message.trim();
+    if message.is_empty() {
+        None
+    } else {
+        Some(message.to_string())
+    }
+}
+
+async fn write_stdin(
+    child: &mut tokio::process::Child,
+    text: &str,
+) -> std::result::Result<(), String> {
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(text.as_bytes())
+            .await
+            .map_err(|e| format!("failed to write ctrmml-cmd stdin: {e}"))?;
+    }
+    Ok(())
 }
 
 fn which_in_path(cmd: &str) -> Option<String> {
@@ -320,4 +404,3 @@ async fn download_ctrmml_cmd() -> std::result::Result<Option<PathBuf>, String> {
     make_executable(&bin_path)?;
     Ok(Some(bin_path))
 }
-

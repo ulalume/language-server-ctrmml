@@ -1,9 +1,9 @@
-use serde_json::{json, Value};
+use serde_json::Value;
 use tower_lsp::{
     jsonrpc::Result,
     lsp_types::{
-        CodeAction, CodeActionOrCommand, CodeActionParams, CodeActionProviderCapability,
-        Command, CompletionOptions, CompletionParams, CompletionResponse, DidSaveTextDocumentParams,
+        CodeActionOrCommand, CodeActionParams, CodeActionProviderCapability,
+        CompletionOptions, CompletionParams, CompletionResponse, DidSaveTextDocumentParams,
         ExecuteCommandParams, ExecuteCommandOptions, GotoDefinitionParams, GotoDefinitionResponse,
         Hover, HoverContents, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
         Location, MarkupContent, MarkupKind, OneOf, Position, Range, SaveOptions, ServerCapabilities,
@@ -15,7 +15,7 @@ use tower_lsp::{
 use crate::backend::Backend;
 use crate::completion::{
     at_meta_completion_items, command_items, complete_pcm_paths, instrument_items,
-    is_at_meta_context, is_in_comment, is_instrument_definition_context, is_meta_keyword_context,
+    is_at_meta_context, is_instrument_definition_context, is_meta_keyword_context,
     is_meta_value_context, is_platform_command_context, is_rate_offset_context, meta_completion_items,
     option_items, platform_command_items, platform_items,
     rate_offset_items,
@@ -23,6 +23,11 @@ use crate::completion::{
 use crate::config::config_from_value;
 use crate::export::ExportFormat;
 use crate::hover::{fm_hover_text, hover_text, two_op_hover_text};
+use crate::lsp_commands::{
+    code_actions, command_ids, CMD_EXPORT_VGM, CMD_EXPORT_WAV, CMD_PLAY, CMD_PLAY_FROM_CURSOR,
+    CMD_STOP,
+};
+use crate::mml::{is_in_comment, token_at};
 use crate::utils::{is_mml_uri, line_at};
 
 #[tower_lsp::async_trait]
@@ -76,13 +81,7 @@ impl LanguageServer for Backend {
                 }),
                 definition_provider: Some(OneOf::Left(true)),
                 execute_command_provider: Some(ExecuteCommandOptions {
-                    commands: vec![
-                        "ctrmml.play".to_string(),
-                        "ctrmml.playFromCursor".to_string(),
-                        "ctrmml.stop".to_string(),
-                        "ctrmml.exportVgm".to_string(),
-                        "ctrmml.exportWav".to_string(),
-                    ],
+                    commands: command_ids(),
                     ..ExecuteCommandOptions::default()
                 }),
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
@@ -271,17 +270,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
         let start = params.range.start;
-        let actions = vec![
-            command_action("ctrmml: play", "ctrmml.play", vec![json!(uri.clone())]),
-            command_action(
-                "ctrmml: play from cursor",
-                "ctrmml.playFromCursor",
-                vec![json!(uri.clone()), json!(start.line), json!(start.character)],
-            ),
-            command_action("ctrmml: stop", "ctrmml.stop", vec![]),
-            command_action("ctrmml: export vgm", "ctrmml.exportVgm", vec![json!(uri.clone())]),
-            command_action("ctrmml: export wav", "ctrmml.exportWav", vec![json!(uri)]),
-        ];
+        let actions = code_actions(&uri, start);
         Ok(Some(
             actions
                 .into_iter()
@@ -293,11 +282,11 @@ impl LanguageServer for Backend {
     async fn execute_command(&self, params: ExecuteCommandParams) -> Result<Option<Value>> {
         let args = params.arguments;
         match params.command.as_str() {
-            "ctrmml.play" => {
+            CMD_PLAY => {
                 let uri = self.resolve_uri_arg(&args).await.map_err(lsp_err)?;
                 self.start_playback(uri, None).await.map_err(lsp_err)?;
             }
-            "ctrmml.playFromCursor" => {
+            CMD_PLAY_FROM_CURSOR => {
                 let uri = self.resolve_uri_arg(&args).await.map_err(lsp_err)?;
                 let line = args.get(1).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                 let col = args.get(2).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
@@ -305,16 +294,16 @@ impl LanguageServer for Backend {
                     .await
                     .map_err(lsp_err)?;
             }
-            "ctrmml.stop" => {
+            CMD_STOP => {
                 self.stop_playback().await;
             }
-            "ctrmml.exportVgm" => {
+            CMD_EXPORT_VGM => {
                 let uri = self.resolve_uri_arg(&args).await.map_err(lsp_err)?;
                 self.run_export(uri, ExportFormat::Vgm)
                     .await
                     .map_err(lsp_err)?;
             }
-            "ctrmml.exportWav" => {
+            CMD_EXPORT_WAV => {
                 let uri = self.resolve_uri_arg(&args).await.map_err(lsp_err)?;
                 self.run_export(uri, ExportFormat::Wav)
                     .await
@@ -332,23 +321,6 @@ impl LanguageServer for Backend {
 
 fn lsp_err(err: impl Into<String>) -> tower_lsp::jsonrpc::Error {
     tower_lsp::jsonrpc::Error::invalid_params(err.into())
-}
-
-fn command_action(title: &str, command: &str, arguments: Vec<Value>) -> CodeAction {
-    let args = if arguments.is_empty() {
-        None
-    } else {
-        Some(arguments)
-    };
-    CodeAction {
-        title: title.to_string(),
-        command: Some(Command {
-            title: title.to_string(),
-            command: command.to_string(),
-            arguments: args,
-        }),
-        ..CodeAction::default()
-    }
 }
 
 enum DefinitionTarget {
@@ -466,32 +438,4 @@ fn find_track_definition(text: &str, target: &str) -> Option<Range> {
         return Some(range);
     }
     None
-}
-
-fn token_at(line: &str, col: usize) -> Option<(&str, usize, usize)> {
-    let bytes = line.as_bytes();
-    if bytes.is_empty() {
-        return None;
-    }
-    let mut idx = col.min(line.len().saturating_sub(1));
-    while idx > 0 && bytes[idx].is_ascii_whitespace() {
-        idx -= 1;
-    }
-
-    let mut start = idx;
-    while start > 0 && is_token_char(bytes[start - 1] as char) {
-        start -= 1;
-    }
-    let mut end = idx + 1;
-    while end < line.len() && is_token_char(bytes[end] as char) {
-        end += 1;
-    }
-    if start == end {
-        return None;
-    }
-    Some((&line[start..end], start, end))
-}
-
-fn is_token_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || matches!(ch, '#' | '@' | '_' | '=' | '*' | '-' | '+' | '{' | '}')
 }
