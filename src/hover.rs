@@ -13,6 +13,10 @@ pub(crate) fn hover_text(line: &str, col: usize) -> Option<String> {
         return Some(format_hover(&label, doc));
     }
 
+    if let Some(hover) = pcm_sample_path_hover(line, col) {
+        return Some(hover);
+    }
+
     if let Some((token, start, _end)) = token_at(line, col) {
         if is_track_token(line, start, token) {
             if let Some(doc) = docs::track_doc(token) {
@@ -347,6 +351,36 @@ fn platform_command_at(line: &str, col: usize) -> Option<(String, &'static str)>
     docs::platform_command_doc(cmd).map(|doc| (cmd.to_string(), doc))
 }
 
+fn pcm_sample_path_hover(line: &str, col: usize) -> Option<String> {
+    let (start, end) = double_quote_bounds(line, col)?;
+    if start + 1 >= end {
+        return None;
+    }
+    let prefix = line.get(..start)?.trim_end();
+    let tokens: Vec<&str> = prefix.split_whitespace().collect();
+    let pcm_pos = tokens.iter().position(|token| *token == "pcm")?;
+    if pcm_pos == 0 {
+        return None;
+    }
+    let at_token = tokens[pcm_pos - 1];
+    if !is_at_number(at_token) {
+        return None;
+    }
+    let mut path = line.get(start + 1..end)?.to_string();
+    if path.is_empty() {
+        return None;
+    }
+    path = path.replace('`', "\\`");
+    Some(format!(
+        "**PCM sample path**\n\nRelative to the MML file: `{}`",
+        path
+    ))
+}
+
+fn is_at_number(token: &str) -> bool {
+    token.len() > 1 && token.starts_with('@') && token[1..].chars().all(|c| c.is_ascii_digit())
+}
+
 fn is_track_token(line: &str, start: usize, token: &str) -> bool {
     if token.starts_with('*') && token.len() > 1 && token[1..].chars().all(|c| c.is_ascii_digit()) {
         return true;
@@ -522,6 +556,29 @@ fn single_quote_bounds(line: &str, col: usize) -> Option<(usize, usize)> {
         right += 1;
     }
     if right >= line.len() || bytes[right] != b'\'' {
+        return None;
+    }
+    if left >= right {
+        return None;
+    }
+    Some((left, right))
+}
+
+fn double_quote_bounds(line: &str, col: usize) -> Option<(usize, usize)> {
+    let bytes = line.as_bytes();
+    let mut left = col.min(line.len().saturating_sub(1));
+    while left > 0 && bytes[left] != b'"' {
+        left = left.saturating_sub(1);
+    }
+    if bytes[left] != b'"' {
+        return None;
+    }
+
+    let mut right = col.min(line.len().saturating_sub(1));
+    while right < line.len() && bytes[right] != b'"' {
+        right += 1;
+    }
+    if right >= line.len() || bytes[right] != b'"' {
         return None;
     }
     if left >= right {
