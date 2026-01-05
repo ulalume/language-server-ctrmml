@@ -3,11 +3,11 @@ use tower_lsp::{
     jsonrpc::Result,
     lsp_types::{
         CodeAction, CodeActionOrCommand, CodeActionParams, CodeActionProviderCapability,
-        Command, CompletionOptions, CompletionParams, CompletionResponse, ExecuteCommandParams,
-        ExecuteCommandOptions, Hover, HoverContents, HoverParams, HoverProviderCapability, InitializeParams,
-        InitializeResult, DidSaveTextDocumentParams, MarkupContent, MarkupKind, SaveOptions,
-        ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
-        TextDocumentSyncSaveOptions,
+        Command, CompletionOptions, CompletionParams, CompletionResponse, DidSaveTextDocumentParams,
+        ExecuteCommandParams, ExecuteCommandOptions, GotoDefinitionParams, GotoDefinitionResponse,
+        Hover, HoverContents, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
+        Location, MarkupContent, MarkupKind, OneOf, Position, Range, SaveOptions, ServerCapabilities,
+        TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions,
     },
     LanguageServer,
 };
@@ -74,6 +74,7 @@ impl LanguageServer for Backend {
                     ]),
                     ..CompletionOptions::default()
                 }),
+                definition_provider: Some(OneOf::Left(true)),
                 execute_command_provider: Some(ExecuteCommandOptions {
                     commands: vec![
                         "ctrmml.play".to_string(),
@@ -155,6 +156,48 @@ impl LanguageServer for Backend {
                 }),
                 range: None,
             }));
+        }
+
+        Ok(None)
+    }
+
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = params
+            .text_document_position_params
+            .text_document
+            .uri
+            .to_string();
+        if !is_mml_uri(&uri) {
+            return Ok(None);
+        }
+        let position = params.text_document_position_params.position;
+        let text = self.docs.read().await.get(&uri).cloned().unwrap_or_default();
+        let line = line_at(&text, position.line).unwrap_or_default();
+        let col = position.character as usize;
+        if is_in_comment(&line, col) {
+            return Ok(None);
+        }
+
+        let target = match definition_target_at(&line, col) {
+            Some(value) => value,
+            None => return Ok(None),
+        };
+
+        let range = match target {
+            DefinitionTarget::Instrument(num) => find_instrument_definition(&text, &num),
+            DefinitionTarget::AtMeta { prefix, num } => find_prefixed_definition(&text, prefix, &num),
+            DefinitionTarget::Track(num) => find_track_definition(&text, &num),
+        };
+
+        if let Some(range) = range {
+            let location = Location {
+                uri: params.text_document_position_params.text_document.uri,
+                range,
+            };
+            return Ok(Some(GotoDefinitionResponse::Scalar(location)));
         }
 
         Ok(None)
@@ -306,4 +349,149 @@ fn command_action(title: &str, command: &str, arguments: Vec<Value>) -> CodeActi
         }),
         ..CodeAction::default()
     }
+}
+
+enum DefinitionTarget {
+    Instrument(String),
+    AtMeta { prefix: &'static str, num: String },
+    Track(String),
+}
+
+fn definition_target_at(line: &str, col: usize) -> Option<DefinitionTarget> {
+    let (token, _start, _end) = token_at(line, col)?;
+    let mut chars = token.chars();
+    let first = chars.next()?;
+    if first == '@' {
+        let rest: String = chars.collect();
+        if let Some(stripped) = rest.strip_prefix('E') {
+            let digits = stripped.chars().take_while(|ch| ch.is_ascii_digit()).collect::<String>();
+            if !digits.is_empty() {
+                return Some(DefinitionTarget::AtMeta { prefix: "@E", num: digits });
+            }
+        }
+        if let Some(stripped) = rest.strip_prefix('M') {
+            let digits = stripped.chars().take_while(|ch| ch.is_ascii_digit()).collect::<String>();
+            if !digits.is_empty() {
+                return Some(DefinitionTarget::AtMeta { prefix: "@M", num: digits });
+            }
+        }
+        if let Some(stripped) = rest.strip_prefix('P') {
+            let digits = stripped.chars().take_while(|ch| ch.is_ascii_digit()).collect::<String>();
+            if !digits.is_empty() {
+                return Some(DefinitionTarget::AtMeta { prefix: "@P", num: digits });
+            }
+        }
+        let digits = rest.chars().take_while(|ch| ch.is_ascii_digit()).collect::<String>();
+        if !digits.is_empty() {
+            return Some(DefinitionTarget::Instrument(digits));
+        }
+        return None;
+    }
+    if first == '*' {
+        let digits = chars.take_while(|ch| ch.is_ascii_digit()).collect::<String>();
+        if !digits.is_empty() {
+            return Some(DefinitionTarget::Track(digits));
+        }
+    }
+    None
+}
+
+fn find_instrument_definition(text: &str, target: &str) -> Option<Range> {
+    find_prefixed_definition(text, "@", target)
+}
+
+fn find_prefixed_definition(text: &str, prefix: &str, target: &str) -> Option<Range> {
+    for (idx, line) in text.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with(';') {
+            continue;
+        }
+        if !trimmed.starts_with(prefix) {
+            continue;
+        }
+        let mut end = prefix.len();
+        while end < trimmed.len() {
+            let ch = trimmed.as_bytes()[end] as char;
+            if ch.is_ascii_digit() {
+                end += 1;
+            } else {
+                break;
+            }
+        }
+        if end == prefix.len() {
+            continue;
+        }
+        if trimmed.get(prefix.len()..end)? != target {
+            continue;
+        }
+        let start_col = line.len() - trimmed.len();
+        let range = Range {
+            start: Position::new(idx as u32, start_col as u32),
+            end: Position::new(idx as u32, (start_col + end) as u32),
+        };
+        return Some(range);
+    }
+    None
+}
+
+fn find_track_definition(text: &str, target: &str) -> Option<Range> {
+    for (idx, line) in text.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with(';') {
+            continue;
+        }
+        if !trimmed.starts_with('*') {
+            continue;
+        }
+        let mut end = 1;
+        while end < trimmed.len() {
+            let ch = trimmed.as_bytes()[end] as char;
+            if ch.is_ascii_digit() {
+                end += 1;
+            } else {
+                break;
+            }
+        }
+        if end == 1 {
+            continue;
+        }
+        if trimmed.get(1..end)? != target {
+            continue;
+        }
+        let start_col = line.len() - trimmed.len();
+        let range = Range {
+            start: Position::new(idx as u32, start_col as u32),
+            end: Position::new(idx as u32, (start_col + end) as u32),
+        };
+        return Some(range);
+    }
+    None
+}
+
+fn token_at(line: &str, col: usize) -> Option<(&str, usize, usize)> {
+    let bytes = line.as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+    let mut idx = col.min(line.len().saturating_sub(1));
+    while idx > 0 && bytes[idx].is_ascii_whitespace() {
+        idx -= 1;
+    }
+
+    let mut start = idx;
+    while start > 0 && is_token_char(bytes[start - 1] as char) {
+        start -= 1;
+    }
+    let mut end = idx + 1;
+    while end < line.len() && is_token_char(bytes[end] as char) {
+        end += 1;
+    }
+    if start == end {
+        return None;
+    }
+    Some((&line[start..end], start, end))
+}
+
+fn is_token_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '#' | '@' | '_' | '=' | '*' | '-' | '+' | '{' | '}')
 }

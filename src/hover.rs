@@ -24,7 +24,7 @@ pub(crate) fn hover_text(line: &str, col: usize) -> Option<String> {
             }
         }
 
-        if let Some((meta_start, meta_end, meta_keyword)) = meta_keyword_bounds(line) {
+        if let Some((_meta_start, meta_end, meta_keyword)) = meta_keyword_bounds(line) {
             if col >= meta_end && start >= meta_end {
                 if meta_keyword == "#platform" {
                     if let Some(doc) = docs::platform_value_doc(token) {
