@@ -51,6 +51,9 @@ pub(crate) fn hover_text(line: &str, col: usize) -> Option<String> {
         if let Some((label, doc)) = at_meta_in_token(token, offset) {
             return Some(format_hover(label, doc));
         }
+        if let Some(doc) = docs::instrument_doc(token) {
+            return Some(format_hover(token, doc));
+        }
         if let Some((label, doc)) = command_at(token, offset) {
             return Some(format_hover(label, doc));
         }
@@ -59,9 +62,6 @@ pub(crate) fn hover_text(line: &str, col: usize) -> Option<String> {
             return Some(format_hover(token, doc));
         }
         if let Some(doc) = docs::platform_value_doc(token) {
-            return Some(format_hover(token, doc));
-        }
-        if let Some(doc) = docs::instrument_doc(token) {
             return Some(format_hover(token, doc));
         }
         if let Some(doc) = docs::rate_offset_doc(token) {
