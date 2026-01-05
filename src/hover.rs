@@ -539,11 +539,10 @@ fn is_command_char(ch: char) -> bool {
 }
 
 fn format_hover(label: &str, doc: &str) -> String {
-    let link = "[mml_ref.md](https://github.com/superctr/ctrmml/blob/master/mml_ref.md)";
     if doc.is_empty() {
-        format!("**{}**\n\n{}", label, link)
+        format!("# {}", label)
     } else {
-        format!("**{}**\n\n{}\n\n{}", label, doc, link)
+        format!("# {}\n{}", label, doc)
     }
 }
 
