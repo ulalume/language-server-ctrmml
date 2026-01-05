@@ -464,7 +464,14 @@ pub(crate) fn track_doc(label: &str) -> Option<&'static str> {
     }
     if label.chars().all(|c| c.is_ascii_uppercase()) {
         return Some(
-            "Select tracks. A span of characters at the beginning of a line selects tracks (e.g. A, ABC).",
+            "Select tracks.\n\n\
+Channel mapping:\n\
+- `ABCDEF` = FM 1-6\n\
+- `GHI` = PSG tone 1-3 (`I` may be FM3 special mode)\n\
+- `J` = PSG noise\n\
+- `KL` = PCM 2-3\n\
+- `MNOP` = Dummy (may be FM3 special mode).\n\n\
+Channels `F`,`K`,`L` can play PCM instruments; PCM takes priority over FM at channel 6 (`F`). With `#platform mdsdrv`, software mixing and volume control apply to these PCM channels.",
         );
     }
     None
