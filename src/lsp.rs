@@ -22,7 +22,7 @@ use crate::completion::{
 };
 use crate::config::config_from_value;
 use crate::export::ExportFormat;
-use crate::hover::{fm_hover_text, hover_text, two_op_hover_text};
+use crate::hover::{fm_hover_text, hover_text, rate_offset_hover, two_op_hover_text};
 use crate::lsp_commands::{
     code_actions, command_ids, CMD_EXPORT_VGM, CMD_EXPORT_WAV, CMD_PLAY, CMD_PLAY_FROM_CURSOR,
     CMD_STOP,
@@ -144,6 +144,19 @@ impl LanguageServer for Backend {
                     value,
                 }),
                 range: None,
+            }));
+        }
+
+        if let Some((value, start, end)) = rate_offset_hover(&line, col) {
+            return Ok(Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value,
+                }),
+                range: Some(Range {
+                    start: Position::new(position.line, start as u32),
+                    end: Position::new(position.line, end as u32),
+                }),
             }));
         }
 

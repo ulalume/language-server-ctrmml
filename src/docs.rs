@@ -317,6 +317,14 @@ pub(crate) fn rate_offset_doc(label: &str) -> Option<&'static str> {
     }
 }
 
+pub(crate) fn rate_offset_label(label: &str) -> Option<&'static str> {
+    match label {
+        "rate=" => Some("rate=<num>"),
+        "offset=" => Some("offset=<num>"),
+        _ => None,
+    }
+}
+
 pub(crate) fn command_doc(label: &str) -> Option<&'static str> {
     match label {
         "o" => Some("Set octave."),

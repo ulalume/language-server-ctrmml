@@ -54,6 +54,9 @@ pub(crate) fn hover_text(line: &str, col: usize) -> Option<String> {
         if let Some(doc) = docs::instrument_doc(token) {
             return Some(format_hover(token, doc));
         }
+        if let Some((label, doc)) = rate_offset_in_token(token) {
+            return Some(format_hover(label, doc));
+        }
         if let Some((label, doc)) = command_at(token, offset) {
             return Some(format_hover(label, doc));
         }
@@ -425,6 +428,24 @@ fn at_meta_in_token(token: &str, offset: usize) -> Option<(&'static str, &'stati
         return docs::at_meta_doc(label).map(|doc| (label, doc));
     }
 
+    None
+}
+
+pub(crate) fn rate_offset_hover(line: &str, col: usize) -> Option<(String, usize, usize)> {
+    let (token, start, end) = token_at(line, col)?;
+    let (label, doc) = rate_offset_in_token(token)?;
+    Some((format_hover(label, doc), start, end))
+}
+
+fn rate_offset_in_token(token: &str) -> Option<(&'static str, &'static str)> {
+    if token.starts_with("rate=") {
+        let label = docs::rate_offset_label("rate=").unwrap_or("rate=");
+        return docs::rate_offset_doc("rate=").map(|doc| (label, doc));
+    }
+    if token.starts_with("offset=") {
+        let label = docs::rate_offset_label("offset=").unwrap_or("offset=");
+        return docs::rate_offset_doc("offset=").map(|doc| (label, doc));
+    }
     None
 }
 

@@ -425,7 +425,22 @@ fn instrument_item(label: &str) -> CompletionItem {
 }
 
 fn rate_offset_item(label: &str) -> CompletionItem {
-    documented_item(label, CompletionItemKind::PROPERTY, docs::rate_offset_doc(label))
+    let display_label = docs::rate_offset_label(label).unwrap_or(label);
+    let insert_text = match label {
+        "rate=" => "rate=${1:<num>}",
+        "offset=" => "offset=${1:<num>}",
+        _ => label,
+    };
+    CompletionItem {
+        label: display_label.to_string(),
+        kind: Some(CompletionItemKind::PROPERTY),
+        documentation: docs::rate_offset_doc(label)
+            .map(|text| Documentation::String(text.to_string())),
+        insert_text: Some(insert_text.to_string()),
+        insert_text_format: Some(tower_lsp::lsp_types::InsertTextFormat::SNIPPET),
+        filter_text: Some(label.to_string()),
+        ..CompletionItem::default()
+    }
 }
 
 fn command_item(entry: &docs::CommandCompletion) -> CompletionItem {
