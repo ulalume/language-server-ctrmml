@@ -4,7 +4,7 @@ use std::{
     io,
     path::{Path, PathBuf},
     process::{Output, Stdio},
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 use dirs::cache_dir;
@@ -17,6 +17,8 @@ use zip::ZipArchive;
 
 const CTRMML_CMD_REPO: &str = "ulalume/ctrmml-cmd";
 pub(crate) const CTRMML_CMD_NAME: &str = "ctrmml-cmd";
+const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(30 * 60);
+const UPDATE_CHECK_FILENAME: &str = "last_update_check";
 
 #[derive(serde::Deserialize)]
 struct GithubRelease {
@@ -152,6 +154,38 @@ fn which_in_path(cmd: &str) -> Option<String> {
 
 fn cache_base_dir() -> PathBuf {
     cache_dir().unwrap_or_else(env::temp_dir).join("ctrmml-cmd")
+}
+
+fn update_check_path() -> PathBuf {
+    cache_base_dir().join(UPDATE_CHECK_FILENAME)
+}
+
+fn read_last_update_check() -> Option<SystemTime> {
+    let contents = fs::read_to_string(update_check_path()).ok()?;
+    let secs = contents.trim().parse::<u64>().ok()?;
+    Some(SystemTime::UNIX_EPOCH + Duration::from_secs(secs))
+}
+
+fn update_check_due() -> bool {
+    match read_last_update_check() {
+        Some(last) => last
+            .elapsed()
+            .map(|elapsed| elapsed >= UPDATE_CHECK_INTERVAL)
+            .unwrap_or(true),
+        None => true,
+    }
+}
+
+fn record_update_check() {
+    let secs = match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
+        Ok(duration) => duration.as_secs(),
+        Err(_) => return,
+    };
+    let path = update_check_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(path, secs.to_string());
 }
 
 fn cached_bin_name() -> String {
@@ -303,6 +337,11 @@ fn make_executable(_path: &Path) -> std::result::Result<(), String> {
 }
 
 async fn download_ctrmml_cmd() -> std::result::Result<Option<PathBuf>, String> {
+    let cached_path = find_cached_binary();
+    if cached_path.is_some() && !update_check_due() {
+        return Ok(cached_path);
+    }
+
     let (os, arch, ext) = platform_asset_parts()?;
     let client = HttpClient::builder()
         .user_agent("ctrmml-lsp")
@@ -310,10 +349,14 @@ async fn download_ctrmml_cmd() -> std::result::Result<Option<PathBuf>, String> {
         .map_err(|e| format!("failed to build http client: {e}"))?;
 
     let release = match fetch_latest_release(&client).await {
-        Ok(release) => release,
+        Ok(release) => {
+            record_update_check();
+            release
+        }
         Err(err) => {
-            if let Some(path) = find_cached_binary() {
-                return Ok(Some(path));
+            if let Some(path) = cached_path.as_ref() {
+                record_update_check();
+                return Ok(Some(path.clone()));
             }
             return Err(err);
         }
@@ -335,8 +378,8 @@ async fn download_ctrmml_cmd() -> std::result::Result<Option<PathBuf>, String> {
     {
         Some(asset) => asset,
         None => {
-            if let Some(path) = find_cached_binary() {
-                return Ok(Some(path));
+            if let Some(path) = cached_path.as_ref() {
+                return Ok(Some(path.clone()));
             }
             return Err(format!("no asset found matching {asset_name}"));
         }
@@ -370,8 +413,8 @@ async fn download_ctrmml_cmd() -> std::result::Result<Option<PathBuf>, String> {
     {
         Ok(bytes) => bytes,
         Err(e) => {
-            if let Some(path) = find_cached_binary() {
-                return Ok(Some(path));
+            if let Some(path) = cached_path.as_ref() {
+                return Ok(Some(path.clone()));
             }
             return Err(format!("failed to read asset: {e}"));
         }
@@ -380,15 +423,15 @@ async fn download_ctrmml_cmd() -> std::result::Result<Option<PathBuf>, String> {
 
     if ext == "zip" {
         if let Err(err) = extract_zip(&tmp_path, &version_dir) {
-            if let Some(path) = find_cached_binary() {
-                return Ok(Some(path));
+            if let Some(path) = cached_path.as_ref() {
+                return Ok(Some(path.clone()));
             }
             return Err(err);
         }
     } else {
         if let Err(err) = extract_targz(&tmp_path, &version_dir) {
-            if let Some(path) = find_cached_binary() {
-                return Ok(Some(path));
+            if let Some(path) = cached_path.as_ref() {
+                return Ok(Some(path.clone()));
             }
             return Err(err);
         }
@@ -396,8 +439,8 @@ async fn download_ctrmml_cmd() -> std::result::Result<Option<PathBuf>, String> {
     let _ = fs::remove_file(&tmp_path);
 
     if !bin_path.is_file() {
-        if let Some(path) = find_cached_binary() {
-            return Ok(Some(path));
+        if let Some(path) = cached_path.as_ref() {
+            return Ok(Some(path.clone()));
         }
         return Err(format!("ctrmml-cmd binary not found after extracting {asset_name}"));
     }

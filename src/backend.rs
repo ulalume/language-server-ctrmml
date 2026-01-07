@@ -13,9 +13,15 @@ pub(crate) struct Backend {
     pub(crate) docs: Arc<RwLock<HashMap<String, String>>>,
     pub(crate) roots: Arc<RwLock<Vec<PathBuf>>>,
     pub(crate) config: Arc<RwLock<Config>>,
+    pub(crate) command_path_cache: Arc<Mutex<Option<CommandPathCache>>>,
     pub(crate) playback: Arc<Mutex<Option<Playback>>>,
     pub(crate) playback_seq: Arc<Mutex<u64>>,
     pub(crate) last_doc: Arc<RwLock<Option<String>>>,
+}
+
+struct CommandPathCache {
+    config_path: Option<String>,
+    resolved_path: String,
 }
 
 impl Backend {
@@ -25,6 +31,7 @@ impl Backend {
             docs: Arc::new(RwLock::new(HashMap::new())),
             roots: Arc::new(RwLock::new(Vec::new())),
             config: Arc::new(RwLock::new(Config::default())),
+            command_path_cache: Arc::new(Mutex::new(None)),
             playback: Arc::new(Mutex::new(None)),
             playback_seq: Arc::new(Mutex::new(0)),
             last_doc: Arc::new(RwLock::new(None)),
@@ -46,6 +53,21 @@ impl Backend {
 
     pub(crate) async fn command_path(&self) -> std::result::Result<String, String> {
         let config_path = self.config.read().await.command_path.clone();
-        resolve_command_path(config_path).await
+        {
+            let cache = self.command_path_cache.lock().await;
+            if let Some(cached) = cache.as_ref() {
+                if cached.config_path == config_path {
+                    return Ok(cached.resolved_path.clone());
+                }
+            }
+        }
+
+        let resolved = resolve_command_path(config_path.clone()).await?;
+        let mut cache = self.command_path_cache.lock().await;
+        *cache = Some(CommandPathCache {
+            config_path,
+            resolved_path: resolved.clone(),
+        });
+        Ok(resolved)
     }
 }
