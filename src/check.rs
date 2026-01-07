@@ -2,7 +2,7 @@ use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 
 use crate::backend::Backend;
 use crate::ctrmml_cmd::{output_message, run_ctrmml_cmd};
-use crate::diagnostics::diagnostic_for_check;
+use crate::diagnostics::{diagnostic_for_check, diagnostics_for_check_report, CheckReport};
 use crate::utils::{is_mml_uri, read_file_text, uri_to_path};
 
 impl Backend {
@@ -24,32 +24,33 @@ impl Backend {
         let output = if let Some(text) = text.as_deref() {
             let path = uri_to_path(&uri).ok_or_else(|| "invalid file uri".to_string())?;
             run_ctrmml_cmd(&cmd_path, "check", Some(text), |cmd| {
-                cmd.arg("check").arg("--stdin").arg("--path").arg(&path);
+                cmd.arg("check")
+                    .arg("--json")
+                    .arg("--stdin")
+                    .arg("--path")
+                    .arg(&path);
             })
             .await?
         } else {
             let file_path = uri_to_path(&uri).ok_or_else(|| "invalid file uri".to_string())?;
             run_ctrmml_cmd(&cmd_path, "check", None, |cmd| {
-                cmd.arg("check").arg(&file_path);
+                cmd.arg("check").arg("--json").arg(&file_path);
             })
             .await?
         };
 
-        let mut diagnostics: Vec<Diagnostic> = Vec::new();
-        if !output.status.success() {
-            let text = self
-                .docs
-                .read()
-                .await
-                .get(&uri)
-                .cloned()
-                .or_else(|| read_file_text(&uri))
-                .unwrap_or_default();
+        let text = text
+            .or_else(|| read_file_text(&uri))
+            .unwrap_or_default();
+        let diagnostics = if let Some(report) = parse_check_report(&output) {
+            diagnostics_for_check_report(&text, &report)
+        } else if !output.status.success() {
+            let mut out = Vec::new();
             if let Some(message) = output_message(&output) {
                 if let Some(diag) = diagnostic_for_check(&text, &message) {
-                    diagnostics.push(diag);
+                    out.push(diag);
                 } else {
-                    diagnostics.push(Diagnostic {
+                    out.push(Diagnostic {
                         range: Range {
                             start: Position::new(0, 0),
                             end: Position::new(0, 0),
@@ -61,7 +62,10 @@ impl Backend {
                     });
                 }
             }
-        }
+            out
+        } else {
+            Vec::new()
+        };
 
         if let Ok(uri) = uri.parse() {
             let _ = self.client.publish_diagnostics(uri, diagnostics, None).await;
@@ -69,4 +73,13 @@ impl Backend {
 
         Ok(())
     }
+}
+
+fn parse_check_report(output: &std::process::Output) -> Option<CheckReport> {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    serde_json::from_str(trimmed).ok()
 }
