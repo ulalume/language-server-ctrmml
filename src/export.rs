@@ -12,7 +12,7 @@ impl Backend {
         &self,
         uri: String,
         format: ExportFormat,
-    ) -> std::result::Result<(), String> {
+    ) -> std::result::Result<std::path::PathBuf, String> {
         let original_path = uri_to_path(&uri).ok_or_else(|| "invalid file uri".to_string())?;
         let out_path = match format {
             ExportFormat::Vgm => original_path.with_extension("vgm"),
@@ -41,7 +41,7 @@ impl Backend {
                     cmd.arg("--wav");
                 }
             };
-            cmd.arg("--out").arg(out_path);
+            cmd.arg("--out").arg(&out_path);
         })
         .await?;
         if !output.status.success() {
@@ -50,6 +50,6 @@ impl Backend {
             }
             return Err("ctrmml-cmd export failed".to_string());
         }
-        Ok(())
+        Ok(out_path)
     }
 }

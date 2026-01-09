@@ -6,7 +6,8 @@ use tower_lsp::{
         CompletionOptions, CompletionParams, CompletionResponse, DidSaveTextDocumentParams,
         ExecuteCommandParams, ExecuteCommandOptions, GotoDefinitionParams, GotoDefinitionResponse,
         Hover, HoverContents, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
-        Location, MarkupContent, MarkupKind, OneOf, Position, Range, SaveOptions, ServerCapabilities,
+        Location, MarkupContent, MarkupKind, MessageType, OneOf, Position, Range, SaveOptions,
+        ServerCapabilities,
         TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions,
     },
     LanguageServer,
@@ -22,10 +23,11 @@ use crate::completion::{
 };
 use crate::config::config_from_value;
 use crate::export::ExportFormat;
+use crate::mdslink::MdslinkRunResult;
 use crate::hover::{fm_hover_text, hover_text, rate_offset_hover, two_op_hover_text};
 use crate::lsp_commands::{
-    code_actions, command_ids, CMD_EXPORT_VGM, CMD_EXPORT_WAV, CMD_PLAY, CMD_PLAY_FROM_CURSOR,
-    CMD_STOP,
+    code_actions, command_ids, CMD_EXPORT_VGM, CMD_EXPORT_WAV, CMD_MDSLINK_DIRECTORY,
+    CMD_MDSLINK_FILE, CMD_MDSLINK_FROM_CONFIG, CMD_PLAY, CMD_PLAY_FROM_CURSOR, CMD_STOP,
 };
 use crate::mml::{is_in_comment, token_at};
 use crate::utils::{is_mml_uri, line_at};
@@ -296,31 +298,107 @@ impl LanguageServer for Backend {
         let args = params.arguments;
         match params.command.as_str() {
             CMD_PLAY => {
-                let uri = self.resolve_uri_arg(&args).await.map_err(lsp_err)?;
-                self.start_playback(uri, None).await.map_err(lsp_err)?;
+                let uri = match self.resolve_uri_arg(&args).await {
+                    Ok(uri) => uri,
+                    Err(err) => {
+                        let _ = self.client.show_message(MessageType::ERROR, err).await;
+                        return Ok(None);
+                    }
+                };
+                if let Err(err) = self.start_playback(uri, None).await {
+                    let _ = self.client.show_message(MessageType::ERROR, err).await;
+                }
             }
             CMD_PLAY_FROM_CURSOR => {
-                let uri = self.resolve_uri_arg(&args).await.map_err(lsp_err)?;
+                let uri = match self.resolve_uri_arg(&args).await {
+                    Ok(uri) => uri,
+                    Err(err) => {
+                        let _ = self.client.show_message(MessageType::ERROR, err).await;
+                        return Ok(None);
+                    }
+                };
                 let line = args.get(1).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
                 let col = args.get(2).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                self.start_playback(uri, Some((line, col)))
-                    .await
-                    .map_err(lsp_err)?;
+                if let Err(err) = self.start_playback(uri, Some((line, col))).await {
+                    let _ = self.client.show_message(MessageType::ERROR, err).await;
+                }
             }
             CMD_STOP => {
                 self.stop_playback().await;
             }
             CMD_EXPORT_VGM => {
-                let uri = self.resolve_uri_arg(&args).await.map_err(lsp_err)?;
-                self.run_export(uri, ExportFormat::Vgm)
-                    .await
-                    .map_err(lsp_err)?;
+                let uri = match self.resolve_uri_arg(&args).await {
+                    Ok(uri) => uri,
+                    Err(err) => {
+                        let _ = self.client.show_message(MessageType::ERROR, err).await;
+                        return Ok(None);
+                    }
+                };
+                match self.run_export(uri, ExportFormat::Vgm).await {
+                    Ok(path) => {
+                        let roots = self.roots.read().await.clone();
+                        let display = relative_path_display(&path, &roots);
+                        let _ = self
+                            .client
+                            .show_message(MessageType::INFO, format!("exported {display}"))
+                            .await;
+                    }
+                    Err(err) => {
+                        let _ = self.client.show_message(MessageType::ERROR, err).await;
+                    }
+                }
             }
             CMD_EXPORT_WAV => {
-                let uri = self.resolve_uri_arg(&args).await.map_err(lsp_err)?;
-                self.run_export(uri, ExportFormat::Wav)
-                    .await
-                    .map_err(lsp_err)?;
+                let uri = match self.resolve_uri_arg(&args).await {
+                    Ok(uri) => uri,
+                    Err(err) => {
+                        let _ = self.client.show_message(MessageType::ERROR, err).await;
+                        return Ok(None);
+                    }
+                };
+                match self.run_export(uri, ExportFormat::Wav).await {
+                    Ok(path) => {
+                        let roots = self.roots.read().await.clone();
+                        let display = relative_path_display(&path, &roots);
+                        let _ = self
+                            .client
+                            .show_message(MessageType::INFO, format!("exported {display}"))
+                            .await;
+                    }
+                    Err(err) => {
+                        let _ = self.client.show_message(MessageType::ERROR, err).await;
+                    }
+                }
+            }
+            CMD_MDSLINK_FILE => {
+                let uri = match self.resolve_uri_arg(&args).await {
+                    Ok(uri) => uri,
+                    Err(err) => {
+                        let _ = self.client.show_message(MessageType::ERROR, err).await;
+                        return Ok(None);
+                    }
+                };
+                handle_mdslink_result(self, self.run_mdslink_single(uri).await).await;
+            }
+            CMD_MDSLINK_DIRECTORY => {
+                let uri = match self.resolve_uri_arg(&args).await {
+                    Ok(uri) => uri,
+                    Err(err) => {
+                        let _ = self.client.show_message(MessageType::ERROR, err).await;
+                        return Ok(None);
+                    }
+                };
+                handle_mdslink_result(self, self.run_mdslink_directory(uri).await).await;
+            }
+            CMD_MDSLINK_FROM_CONFIG => {
+                let uri = match self.resolve_uri_arg(&args).await {
+                    Ok(uri) => uri,
+                    Err(err) => {
+                        let _ = self.client.show_message(MessageType::ERROR, err).await;
+                        return Ok(None);
+                    }
+                };
+                handle_mdslink_result(self, self.run_mdslink_config(uri).await).await;
             }
             _ => {}
         }
@@ -332,8 +410,59 @@ impl LanguageServer for Backend {
     }
 }
 
-fn lsp_err(err: impl Into<String>) -> tower_lsp::jsonrpc::Error {
-    tower_lsp::jsonrpc::Error::invalid_params(err.into())
+async fn handle_mdslink_result(
+    backend: &Backend,
+    result: std::result::Result<MdslinkRunResult, String>,
+) {
+    match result {
+        Ok(result) => {
+            let roots = backend.roots.read().await.clone();
+            let seq = relative_path_display(&result.outputs.seq_output, &roots);
+            let pcm = relative_path_display(&result.outputs.pcm_output, &roots);
+            let inc = relative_path_display(&result.outputs.asm_header_output, &roots);
+            let header = relative_path_display(&result.outputs.c_header_output, &roots);
+            let mut message = format!("mdslink outputs: {seq}, {pcm}, {inc}, {header}");
+            if let Some(warning) = result.warning {
+                message.push_str(";\n\n**warning**: ");
+                message.push_str(&warning);
+            }
+            let _ = backend
+                .client
+                .show_message(MessageType::INFO, message)
+                .await;
+        }
+        Err(err) => {
+            let _ = backend.client.show_message(MessageType::ERROR, err).await;
+        }
+    }
+}
+
+fn relative_path_display(path: &std::path::Path, roots: &[std::path::PathBuf]) -> String {
+    if let Some(root) = best_workspace_root(path, roots) {
+        if let Some(rel) = pathdiff::diff_paths(path, root) {
+            return rel.to_string_lossy().to_string();
+        }
+    }
+    path.to_string_lossy().to_string()
+}
+
+fn best_workspace_root(
+    path: &std::path::Path,
+    roots: &[std::path::PathBuf],
+) -> Option<std::path::PathBuf> {
+    let mut best: Option<std::path::PathBuf> = None;
+    for root in roots {
+        if path.starts_with(root) {
+            let replace = match &best {
+                Some(existing) => root.components().count() > existing.components().count(),
+                None => true,
+            };
+            if replace {
+                best = Some(root.clone());
+            }
+        }
+    }
+    best
 }
 
 enum DefinitionTarget {
