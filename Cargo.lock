@@ -194,7 +194,7 @@ dependencies = [
 
 [[package]]
 name = "ctrmml-lsp"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "dirs",
  "flate2",
