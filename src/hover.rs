@@ -186,6 +186,10 @@ pub(crate) fn fm_hover_text(text: &str, line_index: u32, col: usize) -> Option<S
         return Some(format_hover(label, doc));
     }
 
+    if !is_numeric_fm_param_line(line, parse_end) {
+        return None;
+    }
+
     let anchor = find_fm_anchor(text, line_index)?;
     if line_index <= anchor {
         return None;
@@ -215,6 +219,22 @@ pub(crate) fn fm_hover_text(text: &str, line_index: u32, col: usize) -> Option<S
         label.to_string()
     };
     Some(format_hover(&label, doc))
+}
+
+fn is_numeric_fm_param_line(line: &str, parse_end: usize) -> bool {
+    let slice = &line[..parse_end.min(line.len())];
+    for ch in slice.chars() {
+        if ch.is_ascii_whitespace()
+            || ch.is_ascii_digit()
+            || ch == '+'
+            || ch == '-'
+            || ch == ','
+        {
+            continue;
+        }
+        return false;
+    }
+    true
 }
 
 fn find_fm_anchor(text: &str, line_index: u32) -> Option<u32> {
