@@ -79,7 +79,7 @@ pub(crate) fn command_ids() -> Vec<String> {
     COMMANDS.iter().map(|entry| entry.id.to_string()).collect()
 }
 
-pub(crate) fn command_title<'a>(command_id: &'a str) -> &'a str {
+pub(crate) fn command_title(command_id: &str) -> &str {
     COMMANDS
         .iter()
         .find(|entry| entry.id == command_id)

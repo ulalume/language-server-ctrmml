@@ -11,7 +11,7 @@ pub(crate) fn hover_text(line: &str, col: usize) -> Option<String> {
     }
 
     if let Some((label, doc)) = at_meta_at(line, col) {
-        return Some(format_hover(&label, doc));
+        return Some(format_hover(label, doc));
     }
 
     if let Some(hover) = pcm_sample_path_hover(line, col) {

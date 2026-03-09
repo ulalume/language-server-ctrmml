@@ -13,7 +13,7 @@ pub(crate) struct Backend {
     pub(crate) docs: Arc<RwLock<HashMap<String, String>>>,
     pub(crate) roots: Arc<RwLock<Vec<PathBuf>>>,
     pub(crate) config: Arc<RwLock<Config>>,
-    pub(crate) command_path_cache: Arc<Mutex<Option<CommandPathCache>>>,
+    command_path_cache: Arc<Mutex<Option<CommandPathCache>>>,
     pub(crate) playback: Arc<Mutex<Option<Playback>>>,
     pub(crate) playback_seq: Arc<Mutex<u64>>,
     pub(crate) last_doc: Arc<RwLock<Option<String>>>,
@@ -42,7 +42,7 @@ impl Backend {
         &self,
         args: &[Value],
     ) -> std::result::Result<String, String> {
-        if let Some(Value::String(uri)) = args.get(0) {
+        if let Some(Value::String(uri)) = args.first() {
             return Ok(uri.clone());
         }
         if let Some(uri) = self.last_doc.read().await.clone() {

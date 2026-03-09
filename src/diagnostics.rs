@@ -19,8 +19,6 @@ pub(crate) struct HighlightPosition {
 #[derive(Deserialize)]
 pub(crate) struct CheckReport {
     #[serde(default)]
-    pub(crate) ok: bool,
-    #[serde(default)]
     pub(crate) errors: Vec<CheckMessage>,
     #[serde(default)]
     pub(crate) warnings: Vec<CheckMessage>,
@@ -30,8 +28,6 @@ pub(crate) struct CheckReport {
 pub(crate) struct CheckMessage {
     #[serde(default)]
     pub(crate) message: String,
-    #[serde(default)]
-    pub(crate) path: String,
     #[serde(default)]
     pub(crate) line: u32,
     #[serde(default)]
