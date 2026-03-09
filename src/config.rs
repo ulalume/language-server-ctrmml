@@ -3,6 +3,7 @@ use serde_json::Value;
 #[derive(Clone, Default)]
 pub(crate) struct Config {
     pub(crate) command_path: Option<String>,
+    pub(crate) ym2612_convert_path: Option<String>,
 }
 
 pub(crate) fn config_from_value(value: &Value) -> Option<Config> {
@@ -12,5 +13,13 @@ pub(crate) fn config_from_value(value: &Value) -> Option<Config> {
         .or_else(|| obj.get("commandPath"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    Some(Config { command_path })
+    let ym2612_convert_path = obj
+        .get("ym2612_convert_path")
+        .or_else(|| obj.get("ym2612ConvertPath"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    Some(Config {
+        command_path,
+        ym2612_convert_path,
+    })
 }

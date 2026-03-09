@@ -34,3 +34,16 @@ pub(crate) fn is_wav(path: &std::path::Path) -> bool {
         .map(|ext| ext.eq_ignore_ascii_case("wav"))
         .unwrap_or(false)
 }
+
+pub(crate) fn is_fm_instrument(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            let lower = ext.to_ascii_lowercase();
+            matches!(
+                lower.as_str(),
+                "dmp" | "fui" | "fur" | "gin" | "rym2612" | "dmf" | "ginpkg"
+            )
+        })
+        .unwrap_or(false)
+}

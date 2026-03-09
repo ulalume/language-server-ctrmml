@@ -200,6 +200,51 @@ pub(crate) fn is_rate_offset_context(line: &str, col: usize) -> bool {
     is_quoted(&tokens[2])
 }
 
+pub(crate) enum FmCompletionKind {
+    SelectFile { fm_end_col: u32 },
+    SelectPatch { file_key: String, fm_end_col: u32 },
+}
+
+pub(crate) fn fm_instrument_context(line: &str, col: usize) -> Option<FmCompletionKind> {
+    let prefix = match line.get(..col) {
+        Some(text) => text,
+        None => return None,
+    };
+    let trimmed = prefix.trim_start();
+    if !trimmed.starts_with('@') {
+        return None;
+    }
+    let leading_ws = prefix.len() - trimmed.len();
+    let rest = &trimmed[1..];
+    let digits_len = rest
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .count();
+    if digits_len == 0 {
+        return None;
+    }
+    let after_digits = &rest[digits_len..];
+    let after_trimmed = after_digits.trim_start();
+    if !after_trimmed.starts_with("fm") {
+        return None;
+    }
+    let after_fm = &after_trimmed[2..];
+    if !after_fm.starts_with(' ') {
+        return None;
+    }
+
+    let gap = after_digits.len() - after_trimmed.len();
+    let fm_end_col = (leading_ws + 1 + digits_len + gap + 2 + 1) as u32;
+    let after_fm_space = &after_fm[1..];
+
+    if let Some(slash_pos) = after_fm_space.find('/') {
+        let file_key = after_fm_space[..slash_pos].to_string();
+        Some(FmCompletionKind::SelectPatch { file_key, fm_end_col })
+    } else {
+        Some(FmCompletionKind::SelectFile { fm_end_col })
+    }
+}
+
 pub(crate) fn is_instrument_definition_context(line: &str, col: usize) -> bool {
     let prefix = match line.get(..col) {
         Some(text) => text,

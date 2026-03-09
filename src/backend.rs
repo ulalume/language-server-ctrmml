@@ -6,7 +6,9 @@ use tower_lsp::Client;
 
 use crate::config::Config;
 use crate::ctrmml_cmd::resolve_command_path;
+use crate::fm_completion::FmInstrumentCache;
 use crate::playback::Playback;
+use crate::ym2612_convert::resolve_ym2612_convert_path;
 
 pub(crate) struct Backend {
     pub(crate) client: Client,
@@ -14,9 +16,12 @@ pub(crate) struct Backend {
     pub(crate) roots: Arc<RwLock<Vec<PathBuf>>>,
     pub(crate) config: Arc<RwLock<Config>>,
     command_path_cache: Arc<Mutex<Option<CommandPathCache>>>,
+    ym2612_convert_path_cache: Arc<Mutex<Option<CommandPathCache>>>,
+    pub(crate) fm_instrument_cache: Arc<Mutex<Option<FmInstrumentCache>>>,
     pub(crate) playback: Arc<Mutex<Option<Playback>>>,
     pub(crate) playback_seq: Arc<Mutex<u64>>,
     pub(crate) last_doc: Arc<RwLock<Option<String>>>,
+    pub(crate) supports_hierarchy: Arc<RwLock<bool>>,
 }
 
 struct CommandPathCache {
@@ -32,9 +37,12 @@ impl Backend {
             roots: Arc::new(RwLock::new(Vec::new())),
             config: Arc::new(RwLock::new(Config::default())),
             command_path_cache: Arc::new(Mutex::new(None)),
+            ym2612_convert_path_cache: Arc::new(Mutex::new(None)),
+            fm_instrument_cache: Arc::new(Mutex::new(None)),
             playback: Arc::new(Mutex::new(None)),
             playback_seq: Arc::new(Mutex::new(0)),
             last_doc: Arc::new(RwLock::new(None)),
+            supports_hierarchy: Arc::new(RwLock::new(false)),
         }
     }
 
@@ -64,6 +72,26 @@ impl Backend {
 
         let resolved = resolve_command_path(config_path.clone()).await?;
         let mut cache = self.command_path_cache.lock().await;
+        *cache = Some(CommandPathCache {
+            config_path,
+            resolved_path: resolved.clone(),
+        });
+        Ok(resolved)
+    }
+
+    pub(crate) async fn ym2612_convert_path(&self) -> std::result::Result<String, String> {
+        let config_path = self.config.read().await.ym2612_convert_path.clone();
+        {
+            let cache = self.ym2612_convert_path_cache.lock().await;
+            if let Some(cached) = cache.as_ref() {
+                if cached.config_path == config_path {
+                    return Ok(cached.resolved_path.clone());
+                }
+            }
+        }
+
+        let resolved = resolve_ym2612_convert_path(config_path.clone()).await?;
+        let mut cache = self.ym2612_convert_path_cache.lock().await;
         *cache = Some(CommandPathCache {
             config_path,
             resolved_path: resolved.clone(),

@@ -6,6 +6,7 @@ mod ctrmml_cmd;
 mod diagnostics;
 mod docs;
 mod export;
+mod fm_completion;
 mod hover;
 mod lsp;
 mod lsp_commands;
@@ -14,6 +15,7 @@ mod mml;
 mod playback;
 mod quickrom;
 mod utils;
+mod ym2612_convert;
 
 use serde_json::Value;
 use tower::Service;

@@ -15,10 +15,11 @@ use tower_lsp::{
 
 use crate::backend::Backend;
 use crate::completion::{
-    at_meta_completion_items, command_items, complete_pcm_paths, instrument_items,
-    is_at_meta_context, is_instrument_definition_context, is_meta_keyword_context,
-    is_meta_value_context, is_platform_command_context, is_rate_offset_context,
-    meta_completion_items, option_items, platform_command_items, platform_items, rate_offset_items,
+    at_meta_completion_items, command_items, complete_pcm_paths, fm_instrument_context,
+    instrument_items, is_at_meta_context, is_instrument_definition_context,
+    is_meta_keyword_context, is_meta_value_context, is_platform_command_context,
+    is_rate_offset_context, meta_completion_items, option_items, platform_command_items,
+    platform_items, rate_offset_items,
 };
 use crate::config::config_from_value;
 use crate::export::ExportFormat;
@@ -55,6 +56,12 @@ impl LanguageServer for Backend {
             if let Some(config) = config_from_value(&options) {
                 *self.config.write().await = config;
             }
+        }
+
+        if let Some(info) = &params.client_info {
+            let name = info.name.to_lowercase();
+            *self.supports_hierarchy.write().await =
+                name.contains("visual studio code") || name.contains("vscode");
         }
 
         Ok(InitializeResult {
@@ -275,6 +282,23 @@ impl LanguageServer for Backend {
 
         if line.trim_start().starts_with('#') {
             return Ok(None);
+        }
+
+        if let Some(fm_kind) = fm_instrument_context(&line, col) {
+            if let Ok(items) = self
+                .complete_fm_instruments(
+                    &uri,
+                    &roots,
+                    &fm_kind,
+                    position.line,
+                    position.character,
+                )
+                .await
+            {
+                if !items.is_empty() {
+                    return Ok(Some(CompletionResponse::Array(items)));
+                }
+            }
         }
 
         if is_rate_offset_context(&line, col) {
