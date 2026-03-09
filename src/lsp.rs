@@ -2,13 +2,13 @@ use serde_json::Value;
 use tower_lsp::{
     jsonrpc::Result,
     lsp_types::{
-        CodeActionOrCommand, CodeActionParams, CodeActionProviderCapability,
-        CompletionOptions, CompletionParams, CompletionResponse, DidSaveTextDocumentParams,
-        ExecuteCommandParams, ExecuteCommandOptions, GotoDefinitionParams, GotoDefinitionResponse,
-        Hover, HoverContents, HoverParams, HoverProviderCapability, InitializeParams, InitializeResult,
-        Location, MarkupContent, MarkupKind, MessageType, OneOf, Position, Range, SaveOptions,
-        ServerCapabilities,
-        TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions, TextDocumentSyncSaveOptions,
+        CodeActionOrCommand, CodeActionParams, CodeActionProviderCapability, CompletionOptions,
+        CompletionParams, CompletionResponse, DidSaveTextDocumentParams, ExecuteCommandOptions,
+        ExecuteCommandParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
+        HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, Location,
+        MarkupContent, MarkupKind, MessageActionItem, MessageType, OneOf, Position, Range,
+        SaveOptions, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
+        TextDocumentSyncOptions, TextDocumentSyncSaveOptions,
     },
     LanguageServer,
 };
@@ -17,19 +17,21 @@ use crate::backend::Backend;
 use crate::completion::{
     at_meta_completion_items, command_items, complete_pcm_paths, instrument_items,
     is_at_meta_context, is_instrument_definition_context, is_meta_keyword_context,
-    is_meta_value_context, is_platform_command_context, is_rate_offset_context, meta_completion_items,
-    option_items, platform_command_items, platform_items,
-    rate_offset_items,
+    is_meta_value_context, is_platform_command_context, is_rate_offset_context,
+    meta_completion_items, option_items, platform_command_items, platform_items, rate_offset_items,
 };
 use crate::config::config_from_value;
 use crate::export::ExportFormat;
-use crate::mdslink::MdslinkRunResult;
 use crate::hover::{fm_hover_text, hover_text, rate_offset_hover, two_op_hover_text};
 use crate::lsp_commands::{
     code_actions, command_ids, CMD_EXPORT_VGM, CMD_EXPORT_WAV, CMD_MDSLINK_DIRECTORY,
-    CMD_MDSLINK_FILE, CMD_MDSLINK_FROM_CONFIG, CMD_PLAY, CMD_PLAY_FROM_CURSOR, CMD_STOP,
+    CMD_MDSLINK_FILE, CMD_MDSLINK_FROM_CONFIG, CMD_MDSLINK_MENU, CMD_PLAY, CMD_PLAY_FROM_CURSOR,
+    CMD_QUICKROM_DIRECTORY, CMD_QUICKROM_FILE, CMD_QUICKROM_FROM_CONFIG, CMD_QUICKROM_MENU,
+    CMD_STOP,
 };
+use crate::mdslink::MdslinkRunResult;
 use crate::mml::{is_in_comment, token_at};
+use crate::quickrom::QuickromRunResult;
 use crate::utils::{is_mml_uri, line_at};
 
 #[tower_lsp::async_trait]
@@ -122,7 +124,13 @@ impl LanguageServer for Backend {
             .uri
             .to_string();
         let position = params.text_document_position_params.position;
-        let text = self.docs.read().await.get(&uri).cloned().unwrap_or_default();
+        let text = self
+            .docs
+            .read()
+            .await
+            .get(&uri)
+            .cloned()
+            .unwrap_or_default();
         let line = line_at(&text, position.line).unwrap_or_default();
         let col = position.character as usize;
         if is_in_comment(&line, col) {
@@ -188,7 +196,13 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
         let position = params.text_document_position_params.position;
-        let text = self.docs.read().await.get(&uri).cloned().unwrap_or_default();
+        let text = self
+            .docs
+            .read()
+            .await
+            .get(&uri)
+            .cloned()
+            .unwrap_or_default();
         let line = line_at(&text, position.line).unwrap_or_default();
         let col = position.character as usize;
         if is_in_comment(&line, col) {
@@ -202,7 +216,9 @@ impl LanguageServer for Backend {
 
         let range = match target {
             DefinitionTarget::Instrument(num) => find_instrument_definition(&text, &num),
-            DefinitionTarget::AtMeta { prefix, num } => find_prefixed_definition(&text, prefix, &num),
+            DefinitionTarget::AtMeta { prefix, num } => {
+                find_prefixed_definition(&text, prefix, &num)
+            }
             DefinitionTarget::Track(num) => find_track_definition(&text, &num),
         };
 
@@ -218,13 +234,15 @@ impl LanguageServer for Backend {
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
-        let uri = params
-            .text_document_position
-            .text_document
-            .uri
-            .to_string();
+        let uri = params.text_document_position.text_document.uri.to_string();
         let position = params.text_document_position.position;
-        let text = self.docs.read().await.get(&uri).cloned().unwrap_or_default();
+        let text = self
+            .docs
+            .read()
+            .await
+            .get(&uri)
+            .cloned()
+            .unwrap_or_default();
 
         let line = line_at(&text, position.line).unwrap_or_default();
         let col = position.character as usize;
@@ -279,7 +297,10 @@ impl LanguageServer for Backend {
         Ok(Some(CompletionResponse::Array(command_items())))
     }
 
-    async fn code_action(&self, params: CodeActionParams) -> Result<Option<Vec<CodeActionOrCommand>>> {
+    async fn code_action(
+        &self,
+        params: CodeActionParams,
+    ) -> Result<Option<Vec<CodeActionOrCommand>>> {
         let uri = params.text_document.uri.to_string();
         if !is_mml_uri(&uri) {
             return Ok(None);
@@ -378,7 +399,7 @@ impl LanguageServer for Backend {
                         return Ok(None);
                     }
                 };
-                handle_mdslink_result(self, self.run_mdslink_single(uri).await).await;
+                run_mdslink_command(self, CMD_MDSLINK_FILE, uri).await;
             }
             CMD_MDSLINK_DIRECTORY => {
                 let uri = match self.resolve_uri_arg(&args).await {
@@ -388,7 +409,7 @@ impl LanguageServer for Backend {
                         return Ok(None);
                     }
                 };
-                handle_mdslink_result(self, self.run_mdslink_directory(uri).await).await;
+                run_mdslink_command(self, CMD_MDSLINK_DIRECTORY, uri).await;
             }
             CMD_MDSLINK_FROM_CONFIG => {
                 let uri = match self.resolve_uri_arg(&args).await {
@@ -398,7 +419,81 @@ impl LanguageServer for Backend {
                         return Ok(None);
                     }
                 };
-                handle_mdslink_result(self, self.run_mdslink_config(uri).await).await;
+                run_mdslink_command(self, CMD_MDSLINK_FROM_CONFIG, uri).await;
+            }
+            CMD_MDSLINK_MENU => {
+                let uri = match self.resolve_uri_arg(&args).await {
+                    Ok(uri) => uri,
+                    Err(err) => {
+                        let _ = self.client.show_message(MessageType::ERROR, err).await;
+                        return Ok(None);
+                    }
+                };
+                if let Some(command) = select_menu_command(
+                    self,
+                    "mdslink",
+                    &[
+                        ("mdslink file", CMD_MDSLINK_FILE),
+                        ("mdslink directory", CMD_MDSLINK_DIRECTORY),
+                        ("mdslink from mdslink.json", CMD_MDSLINK_FROM_CONFIG),
+                    ],
+                )
+                .await
+                {
+                    run_mdslink_command(self, command, uri).await;
+                }
+            }
+            CMD_QUICKROM_FILE => {
+                let uri = match self.resolve_uri_arg(&args).await {
+                    Ok(uri) => uri,
+                    Err(err) => {
+                        let _ = self.client.show_message(MessageType::ERROR, err).await;
+                        return Ok(None);
+                    }
+                };
+                run_quickrom_command(self, CMD_QUICKROM_FILE, uri).await;
+            }
+            CMD_QUICKROM_DIRECTORY => {
+                let uri = match self.resolve_uri_arg(&args).await {
+                    Ok(uri) => uri,
+                    Err(err) => {
+                        let _ = self.client.show_message(MessageType::ERROR, err).await;
+                        return Ok(None);
+                    }
+                };
+                run_quickrom_command(self, CMD_QUICKROM_DIRECTORY, uri).await;
+            }
+            CMD_QUICKROM_FROM_CONFIG => {
+                let uri = match self.resolve_uri_arg(&args).await {
+                    Ok(uri) => uri,
+                    Err(err) => {
+                        let _ = self.client.show_message(MessageType::ERROR, err).await;
+                        return Ok(None);
+                    }
+                };
+                run_quickrom_command(self, CMD_QUICKROM_FROM_CONFIG, uri).await;
+            }
+            CMD_QUICKROM_MENU => {
+                let uri = match self.resolve_uri_arg(&args).await {
+                    Ok(uri) => uri,
+                    Err(err) => {
+                        let _ = self.client.show_message(MessageType::ERROR, err).await;
+                        return Ok(None);
+                    }
+                };
+                if let Some(command) = select_menu_command(
+                    self,
+                    "quickrom",
+                    &[
+                        ("quickrom file", CMD_QUICKROM_FILE),
+                        ("quickrom directory", CMD_QUICKROM_DIRECTORY),
+                        ("quickrom from quickrom.json", CMD_QUICKROM_FROM_CONFIG),
+                    ],
+                )
+                .await
+                {
+                    run_quickrom_command(self, command, uri).await;
+                }
             }
             _ => {}
         }
@@ -408,6 +503,84 @@ impl LanguageServer for Backend {
     async fn shutdown(&self) -> Result<()> {
         Ok(())
     }
+}
+
+async fn select_menu_command(
+    backend: &Backend,
+    menu_name: &str,
+    choices: &[(&'static str, &'static str)],
+) -> Option<&'static str> {
+    let actions: Vec<MessageActionItem> = choices
+        .iter()
+        .map(|(title, _)| MessageActionItem {
+            title: (*title).to_string(),
+            properties: Default::default(),
+        })
+        .collect();
+    let selected = match backend
+        .client
+        .show_message_request(
+            MessageType::INFO,
+            format!("ctrmml: {menu_name}"),
+            Some(actions),
+        )
+        .await
+    {
+        Ok(item) => item,
+        Err(err) => {
+            let _ = backend
+                .client
+                .show_message(
+                    MessageType::ERROR,
+                    format!("failed to open {menu_name} menu: {err}"),
+                )
+                .await;
+            return None;
+        }
+    }?;
+
+    choices
+        .iter()
+        .find(|(title, _)| *title == selected.title.as_str())
+        .map(|(_, command)| *command)
+}
+
+async fn run_mdslink_command(backend: &Backend, command: &str, uri: String) {
+    let result = match command {
+        CMD_MDSLINK_FILE => backend.run_mdslink_single(uri).await,
+        CMD_MDSLINK_DIRECTORY => backend.run_mdslink_directory(uri).await,
+        CMD_MDSLINK_FROM_CONFIG => backend.run_mdslink_config(uri).await,
+        _ => {
+            let _ = backend
+                .client
+                .show_message(
+                    MessageType::ERROR,
+                    format!("unsupported mdslink command: {command}"),
+                )
+                .await;
+            return;
+        }
+    };
+    handle_mdslink_result(backend, result).await;
+}
+
+async fn run_quickrom_command(backend: &Backend, command: &str, uri: String) {
+    let result = match command {
+        CMD_QUICKROM_FILE => backend.run_quickrom_single(uri).await,
+        CMD_QUICKROM_DIRECTORY => backend.run_quickrom_directory(uri).await,
+        CMD_QUICKROM_FROM_CONFIG => backend.run_quickrom_config(uri).await,
+        _ => {
+            let _ = backend
+                .client
+                .show_message(
+                    MessageType::ERROR,
+                    format!("unsupported quickrom command: {command}"),
+                )
+                .await;
+            return;
+        }
+    };
+    handle_quickrom_result(backend, result).await;
 }
 
 async fn handle_mdslink_result(
@@ -422,6 +595,30 @@ async fn handle_mdslink_result(
             let inc = relative_path_display(&result.outputs.asm_header_output, &roots);
             let header = relative_path_display(&result.outputs.c_header_output, &roots);
             let mut message = format!("mdslink outputs: {seq}, {pcm}, {inc}, {header}");
+            if let Some(warning) = result.warning {
+                message.push_str(";\n\n**warning**: ");
+                message.push_str(&warning);
+            }
+            let _ = backend
+                .client
+                .show_message(MessageType::INFO, message)
+                .await;
+        }
+        Err(err) => {
+            let _ = backend.client.show_message(MessageType::ERROR, err).await;
+        }
+    }
+}
+
+async fn handle_quickrom_result(
+    backend: &Backend,
+    result: std::result::Result<QuickromRunResult, String>,
+) {
+    match result {
+        Ok(result) => {
+            let roots = backend.roots.read().await.clone();
+            let rom = relative_path_display(&result.rom_output, &roots);
+            let mut message = format!("quickrom output: {rom}");
             if let Some(warning) = result.warning {
                 message.push_str(";\n\n**warning**: ");
                 message.push_str(&warning);
@@ -478,31 +675,54 @@ fn definition_target_at(line: &str, col: usize) -> Option<DefinitionTarget> {
     if first == '@' {
         let rest: String = chars.collect();
         if let Some(stripped) = rest.strip_prefix('E') {
-            let digits = stripped.chars().take_while(|ch| ch.is_ascii_digit()).collect::<String>();
+            let digits = stripped
+                .chars()
+                .take_while(|ch| ch.is_ascii_digit())
+                .collect::<String>();
             if !digits.is_empty() {
-                return Some(DefinitionTarget::AtMeta { prefix: "@E", num: digits });
+                return Some(DefinitionTarget::AtMeta {
+                    prefix: "@E",
+                    num: digits,
+                });
             }
         }
         if let Some(stripped) = rest.strip_prefix('M') {
-            let digits = stripped.chars().take_while(|ch| ch.is_ascii_digit()).collect::<String>();
+            let digits = stripped
+                .chars()
+                .take_while(|ch| ch.is_ascii_digit())
+                .collect::<String>();
             if !digits.is_empty() {
-                return Some(DefinitionTarget::AtMeta { prefix: "@M", num: digits });
+                return Some(DefinitionTarget::AtMeta {
+                    prefix: "@M",
+                    num: digits,
+                });
             }
         }
         if let Some(stripped) = rest.strip_prefix('P') {
-            let digits = stripped.chars().take_while(|ch| ch.is_ascii_digit()).collect::<String>();
+            let digits = stripped
+                .chars()
+                .take_while(|ch| ch.is_ascii_digit())
+                .collect::<String>();
             if !digits.is_empty() {
-                return Some(DefinitionTarget::AtMeta { prefix: "@P", num: digits });
+                return Some(DefinitionTarget::AtMeta {
+                    prefix: "@P",
+                    num: digits,
+                });
             }
         }
-        let digits = rest.chars().take_while(|ch| ch.is_ascii_digit()).collect::<String>();
+        let digits = rest
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect::<String>();
         if !digits.is_empty() {
             return Some(DefinitionTarget::Instrument(digits));
         }
         return None;
     }
     if first == '*' {
-        let digits = chars.take_while(|ch| ch.is_ascii_digit()).collect::<String>();
+        let digits = chars
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect::<String>();
         if !digits.is_empty() {
             return Some(DefinitionTarget::Track(digits));
         }

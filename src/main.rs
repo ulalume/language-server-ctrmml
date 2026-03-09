@@ -2,9 +2,9 @@ mod backend;
 mod check;
 mod completion;
 mod config;
-mod docs;
 mod ctrmml_cmd;
 mod diagnostics;
+mod docs;
 mod export;
 mod hover;
 mod lsp;
@@ -12,6 +12,7 @@ mod lsp_commands;
 mod mdslink;
 mod mml;
 mod playback;
+mod quickrom;
 mod utils;
 
 use serde_json::Value;

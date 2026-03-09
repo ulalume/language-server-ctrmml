@@ -14,6 +14,11 @@ pub(crate) const CMD_EXPORT_WAV: &str = "ctrmml.exportWav";
 pub(crate) const CMD_MDSLINK_FILE: &str = "ctrmml.mdslinkFile";
 pub(crate) const CMD_MDSLINK_DIRECTORY: &str = "ctrmml.mdslinkDirectory";
 pub(crate) const CMD_MDSLINK_FROM_CONFIG: &str = "ctrmml.mdslinkFromConfig";
+pub(crate) const CMD_MDSLINK_MENU: &str = "ctrmml.mdslinkMenu";
+pub(crate) const CMD_QUICKROM_FILE: &str = "ctrmml.quickromFile";
+pub(crate) const CMD_QUICKROM_DIRECTORY: &str = "ctrmml.quickromDirectory";
+pub(crate) const CMD_QUICKROM_FROM_CONFIG: &str = "ctrmml.quickromFromConfig";
+pub(crate) const CMD_QUICKROM_MENU: &str = "ctrmml.quickromMenu";
 
 pub(crate) const COMMANDS: &[CommandDef] = &[
     CommandDef {
@@ -48,6 +53,26 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         id: CMD_MDSLINK_FROM_CONFIG,
         title: "ctrmml: mdslink from mdslink.json",
     },
+    CommandDef {
+        id: CMD_MDSLINK_MENU,
+        title: "ctrmml: mdslink...",
+    },
+    CommandDef {
+        id: CMD_QUICKROM_FILE,
+        title: "ctrmml: quickrom file",
+    },
+    CommandDef {
+        id: CMD_QUICKROM_DIRECTORY,
+        title: "ctrmml: quickrom directory",
+    },
+    CommandDef {
+        id: CMD_QUICKROM_FROM_CONFIG,
+        title: "ctrmml: quickrom from quickrom.json",
+    },
+    CommandDef {
+        id: CMD_QUICKROM_MENU,
+        title: "ctrmml: quickrom...",
+    },
 ];
 
 pub(crate) fn command_ids() -> Vec<String> {
@@ -71,19 +96,22 @@ pub(crate) fn code_actions(uri: &str, start: Position) -> Vec<CodeAction> {
             vec![json!(uri), json!(start.line), json!(start.character)],
         ),
         command_action(command_title(CMD_STOP), CMD_STOP, vec![]),
-        command_action(command_title(CMD_EXPORT_VGM), CMD_EXPORT_VGM, vec![json!(uri)]),
-        command_action(command_title(CMD_EXPORT_WAV), CMD_EXPORT_WAV, vec![json!(uri)]),
-        command_action(command_title(CMD_MDSLINK_FILE), CMD_MDSLINK_FILE, vec![json!(uri)]),
         command_action(
-            command_title(CMD_MDSLINK_DIRECTORY),
-            CMD_MDSLINK_DIRECTORY,
+            command_title(CMD_EXPORT_VGM),
+            CMD_EXPORT_VGM,
             vec![json!(uri)],
         ),
         command_action(
-            command_title(CMD_MDSLINK_FROM_CONFIG),
-            CMD_MDSLINK_FROM_CONFIG,
+            command_title(CMD_EXPORT_WAV),
+            CMD_EXPORT_WAV,
             vec![json!(uri)],
         ),
+        command_action(
+            command_title(CMD_QUICKROM_MENU),
+            CMD_QUICKROM_MENU,
+            vec![json!(uri)],
+        ),
+        command_action(command_title(CMD_MDSLINK_MENU), CMD_MDSLINK_MENU, vec![json!(uri)]),
     ]
 }
 

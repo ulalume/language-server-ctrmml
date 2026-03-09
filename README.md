@@ -24,5 +24,5 @@ This server can control playback and exports via `ctrmml-cmd`.
   - `command_path` in LSP initialization options
   - `CTRMML_CMD_PATH` environment variable
   - `ctrmml-cmd` on PATH
-- Use Code Actions in Zed to run: `ctrmml: play`, `ctrmml: play from cursor`, `ctrmml: stop`, `ctrmml: export vgm`, `ctrmml: export wav`.
+- Use Code Actions in Zed to run: `ctrmml: play`, `ctrmml: play from cursor`, `ctrmml: stop`, `ctrmml: export vgm`, `ctrmml: export wav`, `ctrmml: mdslink file`, `ctrmml: mdslink directory`, `ctrmml: mdslink from mdslink.json`, `ctrmml: quickrom file`, `ctrmml: quickrom directory`, `ctrmml: quickrom from quickrom.json`.
 - Playback highlighting is sent as Diagnostics with source `ctrmml-playback`.
