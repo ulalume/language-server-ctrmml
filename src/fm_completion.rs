@@ -140,7 +140,7 @@ async fn parse_instruments(
     all_patches
 }
 
-fn path_basename(p: &PathBuf) -> String {
+fn path_basename(p: &std::path::Path) -> String {
     file_basename(&p.to_string_lossy()).to_string()
 }
 

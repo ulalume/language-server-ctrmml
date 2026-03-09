@@ -206,10 +206,7 @@ pub(crate) enum FmCompletionKind {
 }
 
 pub(crate) fn fm_instrument_context(line: &str, col: usize) -> Option<FmCompletionKind> {
-    let prefix = match line.get(..col) {
-        Some(text) => text,
-        None => return None,
-    };
+    let prefix = line.get(..col)?;
     let trimmed = prefix.trim_start();
     if !trimmed.starts_with('@') {
         return None;
