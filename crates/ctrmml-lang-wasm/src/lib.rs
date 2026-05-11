@@ -209,11 +209,16 @@ fn key_sig_from_slice(arr: &[i8]) -> KeySig {
     k
 }
 
-fn chord_def_by_suffix(suffix: &str) -> Option<&'static ctrmml_lang_core::ChordDef> {
-    CHORDS_3
-        .iter()
-        .chain(CHORDS_4.iter())
-        .find(|d| d.suffix == suffix)
+/// Lookup a chord definition by `(suffix, size)`. The `"4th"` suffix
+/// appears in both CHORDS_3 (quartal triad) and CHORDS_4 (quartal
+/// 7th); the size discriminator picks the right one.
+fn chord_def_by_suffix(suffix: &str, size: u32) -> Option<&'static ctrmml_lang_core::ChordDef> {
+    let table: &[ctrmml_lang_core::ChordDef] = match size {
+        3 => CHORDS_3,
+        4 => CHORDS_4,
+        _ => return None,
+    };
+    table.iter().find(|d| d.suffix == suffix)
 }
 
 fn chord_size_from_u32(size: u32) -> Option<ChordSize> {
@@ -236,7 +241,11 @@ pub fn render_generic_chord(root: char, root_accidental: i32, size: u32) -> Opti
 }
 
 /// Render a named chord by its suffix (e.g. `""`, `"m"`, `"7"`, `"M7"`,
-/// `"dim7"`, `"sus2"`, ...). Returns `null` for an unknown suffix or
+/// `"dim7"`, `"sus2"`, ...). `size` is `3` for a triad or `4` for a
+/// seventh chord — required because the `"4th"` suffix exists in
+/// both tables and can't be disambiguated by name alone.
+///
+/// Returns `null` for an unknown suffix, an invalid size, or an
 /// invalid root.
 ///
 /// `key_sig` is a 7-element `Int8Array` indexed `[c, d, e, f, g, a, b]`.
@@ -249,18 +258,17 @@ pub fn render_chord(
     root: char,
     root_accidental: i32,
     suffix: &str,
+    size: u32,
     key_sig: &[i8],
 ) -> Option<String> {
-    let def = chord_def_by_suffix(suffix)?;
+    let def = chord_def_by_suffix(suffix, size)?;
     let acc = decode_root_accidental(root_accidental);
     let ks = key_sig_from_slice(key_sig);
     core_render_chord(root, acc, def, &ks)
 }
 
-/// Render a named chord, stacked bottom-up with `>` / `<` prefixes per
-/// branch to keep each tone above the previous. `channel_octaves` is
-/// the per-channel base octave at the cursor; `compensate` controls
-/// whether each shifted branch gets a restoring `<` / `>` suffix.
+/// Render a named chord, stacked bottom-up. See [`render_chord`] for
+/// the `size` discriminator semantics.
 ///
 /// Replaces `renderStackedChord` from `web-ctrmml/src/mml/chord.ts`.
 #[wasm_bindgen]
@@ -268,11 +276,12 @@ pub fn render_stacked_chord(
     root: char,
     root_accidental: i32,
     suffix: &str,
+    size: u32,
     key_sig: &[i8],
     channel_octaves: &[i32],
     compensate: bool,
 ) -> Option<String> {
-    let def = chord_def_by_suffix(suffix)?;
+    let def = chord_def_by_suffix(suffix, size)?;
     let acc = decode_root_accidental(root_accidental);
     let ks = key_sig_from_slice(key_sig);
     core_render_stacked_chord(root, acc, def, &ks, channel_octaves, compensate)
@@ -783,7 +792,7 @@ mod tests {
         let none = root_accidental_none();
         let ks = empty_key_sig();
         assert_eq!(
-            render_chord('c', none, "m", &ks).as_deref(),
+            render_chord('c', none, "m", 3, &ks).as_deref(),
             Some("c/e-/g")
         );
     }
@@ -792,19 +801,40 @@ mod tests {
     fn named_chord_unknown_suffix_returns_null() {
         let none = root_accidental_none();
         let ks = empty_key_sig();
-        assert!(render_chord('c', none, "nonsense", &ks).is_none());
+        assert!(render_chord('c', none, "nonsense", 3, &ks).is_none());
+    }
+
+    #[test]
+    fn named_chord_invalid_size_returns_null() {
+        let none = root_accidental_none();
+        let ks = empty_key_sig();
+        assert!(render_chord('c', none, "m", 5, &ks).is_none());
+    }
+
+    #[test]
+    fn named_chord_4th_disambiguates_by_size() {
+        // "4th" exists in both CHORDS_3 (triad) and CHORDS_4 (7th).
+        let none = root_accidental_none();
+        let ks = empty_key_sig();
+        assert_eq!(
+            render_chord('c', none, "4th", 3, &ks).as_deref(),
+            Some("c/f/b-"),
+            "triad form"
+        );
+        assert_eq!(
+            render_chord('c', none, "4th", 4, &ks).as_deref(),
+            Some("c/f/b-/e-"),
+            "seventh form"
+        );
     }
 
     #[test]
     fn named_chord_respects_key_sig() {
-        // `e` flat is in the key sig → no explicit accidental needed
-        // (matches the TS test "omits accidental when key sig already
-        // provides it").
         let none = root_accidental_none();
         let mut ks = empty_key_sig();
         ks[2] = -1; // e flat (index 2 is 'e')
         assert_eq!(
-            render_chord('c', none, "m", &ks).as_deref(),
+            render_chord('c', none, "m", 3, &ks).as_deref(),
             Some("c/e/g")
         );
     }
@@ -815,7 +845,7 @@ mod tests {
         let ks = empty_key_sig();
         let chans = [4, 4, 4];
         assert_eq!(
-            render_stacked_chord('f', none, "", &ks, &chans, false).as_deref(),
+            render_stacked_chord('f', none, "", 3, &ks, &chans, false).as_deref(),
             Some("f/a/>c")
         );
     }
@@ -837,7 +867,7 @@ mod tests {
         // Explicit `+` on the root letter — should preserve it.
         let ks = empty_key_sig();
         assert_eq!(
-            render_chord('c', 1, "", &ks).as_deref(),
+            render_chord('c', 1, "", 3, &ks).as_deref(),
             Some("c+/e+/g+")
         );
     }
