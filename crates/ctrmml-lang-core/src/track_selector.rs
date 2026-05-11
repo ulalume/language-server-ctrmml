@@ -32,8 +32,21 @@ pub struct LeadingTrackSelector {
 /// Source of line content addressed by 1-based line number — mirrors the
 /// TS `LeadingTrackSelectorLineReader` shape used by
 /// [`find_enclosing_track_selector`].
+///
+/// Implementors that don't know their total line count (e.g. infinite or
+/// lazy streams) can fall back to the default
+/// [`LineReader::get_line_count`] which reports `u32::MAX`; callers that
+/// need a bounded forward scan can check for empty lines instead.
 pub trait LineReader {
     fn get_line_content(&self, line_number: u32) -> &str;
+
+    /// Total number of lines, 1-based. Defaults to `u32::MAX` so existing
+    /// implementors keep working unchanged; consumers like
+    /// [`crate::block_finder`] that walk forward to a boundary may use
+    /// this to terminate.
+    fn get_line_count(&self) -> u32 {
+        u32::MAX
+    }
 }
 
 /// Parse a ctrmml leading track selector starting exactly at column 0 of

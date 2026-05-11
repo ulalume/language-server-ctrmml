@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod beat_fill;
+pub mod block_finder;
 pub mod brace_state;
 pub mod chord;
 pub mod key_sig;
@@ -37,6 +38,9 @@ pub use psg_parser::{
 };
 pub use beat_fill::{
     generate_measure_rests, is_after_bar_line, measure_remainder_ticks, ticks_to_mml_rest,
+};
+pub use block_finder::{
+    find_block_at, find_fm_block_at, find_psg_block_at, InstrumentBlock, InstrumentKind,
 };
 pub use brace_state::BraceState;
 pub use timesig::{

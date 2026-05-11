@@ -27,4 +27,8 @@ impl LineReader for LinesModel {
             .map(String::as_str)
             .unwrap_or("")
     }
+
+    fn get_line_count(&self) -> u32 {
+        self.0.len() as u32
+    }
 }
