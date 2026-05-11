@@ -13,6 +13,7 @@ mod lsp;
 mod lsp_commands;
 mod mdslink;
 mod mml;
+mod note_hover;
 mod playback;
 mod quickrom;
 mod utils;

@@ -15,6 +15,7 @@ use tower_lsp::{
 
 use crate::backend::Backend;
 use crate::chord_completion::chord_completion_items;
+use crate::note_hover::note_hover_text;
 use crate::completion::{
     at_meta_completion_items, command_items, complete_pcm_paths, fm_instrument_context,
     instrument_items, is_at_meta_context, is_instrument_definition_context,
@@ -186,6 +187,25 @@ impl LanguageServer for Backend {
                     value,
                 }),
                 range: None,
+            }));
+        }
+
+        // Last layer: note hover. Resolves the absolute MIDI pitch
+        // plus the ambient key-sig context for a note letter at the
+        // cursor. Suppressed inside FM/PSG blocks and outside any
+        // track selector.
+        if let Some((value, start, end)) =
+            note_hover_text(&text, position.line, position.character, &line)
+        {
+            return Ok(Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value,
+                }),
+                range: Some(Range {
+                    start: Position::new(position.line, start as u32),
+                    end: Position::new(position.line, end as u32),
+                }),
             }));
         }
 
