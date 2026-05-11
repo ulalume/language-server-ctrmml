@@ -1,5 +1,9 @@
 [workspace]
-members = ["crates/ctrmml-lang-core", "crates/ctrmml-lang-wasm"]
+members = [
+    "crates/ctrmml-lang-core",
+    "crates/ctrmml-lang-wasm",
+    "crates/lsp-wasm-spike",
+]
 
 [package]
 name = "ctrmml-lsp"
