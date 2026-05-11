@@ -13,16 +13,13 @@ use crate::track_selector::{parse_leading_track_selector, LineReader};
 const DEFAULT_OCTAVE: i32 = 6;
 
 /// Per-channel octave plus the cursor's active branch.
-///
-/// `active_channel` is `-1` when the cursor is outside any `{...}` block,
-/// otherwise a 0-based branch index. The `-1` sentinel mirrors the TS API
-/// shape so existing callers' `< 0` checks port unchanged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChannelContext {
     /// Octave for each channel (0-indexed). `len() == max(num_channels, 1)`.
     pub octaves: Vec<i32>,
-    /// Branch index the cursor sits in (0-based), or `-1` when outside.
-    pub active_channel: i32,
+    /// Which `{...}` branch the cursor sits in (0-based), or `None` when
+    /// outside any brace.
+    pub active_channel: Option<usize>,
 }
 
 /// Compute each channel's effective octave at `(line_number, column)` by
@@ -132,7 +129,7 @@ pub fn scan_channel_context_at(
 
     ChannelContext {
         octaves: state.channel_octave().to_vec(),
-        active_channel: state.cur_channel_raw(),
+        active_channel: state.active_channel(),
     }
 }
 
@@ -245,7 +242,7 @@ mod tests {
             ctx("ABC o4 |", 3),
             ChannelContext {
                 octaves: vec![4, 4, 4],
-                active_channel: -1
+                active_channel: None
             }
         );
     }
@@ -256,7 +253,7 @@ mod tests {
             ctx("ABC o4 {|c/e/g}", 3),
             ChannelContext {
                 octaves: vec![4, 4, 4],
-                active_channel: 0
+                active_channel: Some(0)
             }
         );
     }
@@ -267,7 +264,7 @@ mod tests {
             ctx("ABC o4 {c/|e/g}", 3),
             ChannelContext {
                 octaves: vec![4, 4, 4],
-                active_channel: 1
+                active_channel: Some(1)
             }
         );
     }
@@ -278,7 +275,7 @@ mod tests {
             ctx("ABC o4 {f/a/>c} {|g}", 3),
             ChannelContext {
                 octaves: vec![4, 4, 5],
-                active_channel: 0
+                active_channel: Some(0)
             }
         );
     }
@@ -291,7 +288,7 @@ mod tests {
             got,
             ChannelContext {
                 octaves: vec![4, 4, 4],
-                active_channel: -1
+                active_channel: None
             }
         );
     }

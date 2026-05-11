@@ -56,13 +56,6 @@ impl BraceState {
         self.branch_idx
     }
 
-    /// `-1` when outside any brace, otherwise the current branch index.
-    /// Prefer [`Self::active_channel`] for new code.
-    #[inline]
-    pub fn cur_channel_raw(&self) -> i32 {
-        self.cur_channel
-    }
-
     /// `Some(idx)` while inside a `{...}` whose branch maps to a real
     /// channel, otherwise `None`.
     #[inline]
