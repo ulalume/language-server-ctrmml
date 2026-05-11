@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod beat_fill;
+pub mod brace_state;
 pub mod chord;
 pub mod key_sig;
 pub mod octave_scan;
@@ -37,6 +38,7 @@ pub use psg_parser::{
 pub use beat_fill::{
     generate_measure_rests, is_after_bar_line, measure_remainder_ticks, ticks_to_mml_rest,
 };
+pub use brace_state::BraceState;
 pub use timesig::{
     parse_time_signature, scan_time_signature, TimeSignature, DEFAULT_TIME_SIGNATURE,
 };

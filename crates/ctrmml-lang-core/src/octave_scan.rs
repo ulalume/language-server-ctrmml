@@ -7,6 +7,7 @@
 //! `>`/`<` and `oN` inside a `{.../...}` branch affect only that branch's
 //! channel; outside braces they affect every channel.
 
+use crate::brace_state::BraceState;
 use crate::track_selector::{parse_leading_track_selector, LineReader};
 
 const DEFAULT_OCTAVE: i32 = 6;
@@ -50,11 +51,7 @@ pub fn scan_channel_context_at(
         }
     });
 
-    let width = num_channels.max(1);
-    let mut channels: Vec<i32> = vec![DEFAULT_OCTAVE; width];
-    let mut brace_depth: u32 = 0;
-    let mut branch_idx: usize = 0;
-    let mut cur_channel: i32 = -1;
+    let mut state = BraceState::new(num_channels, DEFAULT_OCTAVE);
 
     for ln in track_line..=line_number {
         let line = model.get_line_content(ln);
@@ -98,41 +95,34 @@ pub fn scan_channel_context_at(
 
             if ch == b'o' || ch == b'O' {
                 if let Some((oct, len)) = parse_leading_digits(&bytes[i + 1..eff_end]) {
-                    apply_set(&mut channels, cur_channel, oct);
+                    state.on_octave_set(oct);
                     i += 1 + len;
                     continue;
                 }
             }
             if ch == b'>' {
-                apply_shift(&mut channels, cur_channel, 1);
+                state.on_octave_shift(1);
                 i += 1;
                 continue;
             }
             if ch == b'<' {
-                apply_shift(&mut channels, cur_channel, -1);
+                state.on_octave_shift(-1);
                 i += 1;
                 continue;
             }
             if ch == b'{' {
-                brace_depth += 1;
-                branch_idx = 0;
-                cur_channel = if num_channels > 1 { 0 } else { -1 };
+                let prev = if i > 0 { bytes[i - 1] } else { 0 };
+                state.on_open_brace(prev);
                 i += 1;
                 continue;
             }
-            if ch == b'/' && brace_depth > 0 {
-                branch_idx += 1;
-                if num_channels > 1 && branch_idx < num_channels {
-                    cur_channel = branch_idx as i32;
-                }
+            if ch == b'/' && state.brace_depth() > 0 {
+                state.on_slash();
                 i += 1;
                 continue;
             }
-            if ch == b'}' && brace_depth > 0 {
-                brace_depth -= 1;
-                if brace_depth == 0 {
-                    cur_channel = -1;
-                }
+            if ch == b'}' && state.brace_depth() > 0 {
+                state.on_close_brace();
                 i += 1;
                 continue;
             }
@@ -141,30 +131,8 @@ pub fn scan_channel_context_at(
     }
 
     ChannelContext {
-        octaves: channels,
-        active_channel: cur_channel,
-    }
-}
-
-#[inline]
-fn apply_shift(channels: &mut [i32], cur_channel: i32, delta: i32) {
-    if cur_channel < 0 {
-        for c in channels.iter_mut() {
-            *c += delta;
-        }
-    } else if (cur_channel as usize) < channels.len() {
-        channels[cur_channel as usize] += delta;
-    }
-}
-
-#[inline]
-fn apply_set(channels: &mut [i32], cur_channel: i32, oct: i32) {
-    if cur_channel < 0 {
-        for c in channels.iter_mut() {
-            *c = oct;
-        }
-    } else if (cur_channel as usize) < channels.len() {
-        channels[cur_channel as usize] = oct;
+        octaves: state.channel_octave().to_vec(),
+        active_channel: state.cur_channel_raw(),
     }
 }
 

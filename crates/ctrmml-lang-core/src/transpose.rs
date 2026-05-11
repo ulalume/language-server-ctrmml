@@ -11,6 +11,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::brace_state::BraceState;
 use crate::chord::chord_natural_semitones;
 use crate::key_sig::{parse_key_sig, scan_key_sig_at, KeySig};
 use crate::text_scan::{is_in_comment, is_in_key_sig};
@@ -238,11 +239,7 @@ pub fn transpose_selection(
     let mut octave_shifts: Vec<OctaveShiftToken> = Vec::new();
     let mut branch_ends: Vec<(usize, BranchEnd)> = Vec::new();
 
-    let mut channel_octave: Vec<i32> = start_ctx.channel_octave.clone();
-    let mut cur_channel: i32 = start_ctx.cur_channel;
-    let mut brace_depth: u32 = start_ctx.brace_depth;
-    let mut branch_idx: usize = start_ctx.branch_idx;
-    let mut shared_octave: i32 = start_ctx.shared_octave;
+    let mut state = start_ctx.clone();
 
     let mut i: usize = 0;
     let mut line_idx: usize = 0;
@@ -308,14 +305,7 @@ pub fn transpose_selection(
 
         if (ch == b'o' || ch == b'O') && i + 1 < bytes.len() {
             if let Some((oct, len)) = parse_leading_u32(&bytes[i + 1..]) {
-                if cur_channel < 0 {
-                    shared_octave = oct as i32;
-                    for c in channel_octave.iter_mut() {
-                        *c = oct as i32;
-                    }
-                } else {
-                    channel_octave[cur_channel as usize] = oct as i32;
-                }
+                state.on_octave_set(oct as i32);
                 let total = 1 + len;
                 i += total;
                 col_in_line += total;
@@ -325,14 +315,7 @@ pub fn transpose_selection(
 
         if ch == b'>' || ch == b'<' {
             let delta: i32 = if ch == b'>' { 1 } else { -1 };
-            if cur_channel < 0 {
-                shared_octave += delta;
-                for c in channel_octave.iter_mut() {
-                    *c += delta;
-                }
-            } else {
-                channel_octave[cur_channel as usize] += delta;
-            }
+            state.on_octave_shift(delta);
             octave_shifts.push(OctaveShiftToken { offset: i });
             i += 1;
             col_in_line += 1;
@@ -340,32 +323,22 @@ pub fn transpose_selection(
         }
 
         if ch == b'{' {
-            // Don't enter conditional if preceded by `_` (key-sig block).
             let prev = if i > 0 { bytes[i - 1] } else { 0 };
-            if prev != b'_' {
-                brace_depth += 1;
-                branch_idx = 0;
-                cur_channel = if num_channels > 1 { 0 } else { -1 };
-            }
+            state.on_open_brace(prev);
             i += 1;
             col_in_line += 1;
             continue;
         }
 
-        if ch == b'/' && brace_depth > 0 {
-            if cur_channel >= 0 && (cur_channel as usize) < channel_octave.len() {
-                let cc = cur_channel as usize;
+        if ch == b'/' && state.brace_depth() > 0 {
+            if let Some((channel, orig_octave)) = state.on_slash() {
                 branch_ends.push((
                     i,
                     BranchEnd {
-                        channel: cc,
-                        orig_octave: channel_octave[cc],
+                        channel,
+                        orig_octave,
                     },
                 ));
-            }
-            branch_idx += 1;
-            if num_channels > 1 && branch_idx < num_channels {
-                cur_channel = branch_idx as i32;
             }
             i += 1;
             col_in_line += 1;
@@ -373,20 +346,15 @@ pub fn transpose_selection(
         }
 
         if ch == b'}' {
-            if brace_depth > 0 {
-                if cur_channel >= 0 && (cur_channel as usize) < channel_octave.len() {
-                    let cc = cur_channel as usize;
+            if state.brace_depth() > 0 {
+                if let Some((channel, orig_octave)) = state.on_close_brace() {
                     branch_ends.push((
                         i,
                         BranchEnd {
-                            channel: cc,
-                            orig_octave: channel_octave[cc],
+                            channel,
+                            orig_octave,
                         },
                     ));
-                }
-                brace_depth -= 1;
-                if brace_depth == 0 {
-                    cur_channel = -1;
                 }
             }
             i += 1;
@@ -464,11 +432,7 @@ pub fn transpose_selection(
                 continue;
             }
             let effective_acc = explicit_acc.unwrap_or_else(|| key_sig.get_or_zero(letter) as i32);
-            let oct = if cur_channel >= 0 {
-                channel_octave[cur_channel as usize]
-            } else {
-                shared_octave
-            };
+            let oct = state.current_octave();
             let midi =
                 (oct - 1) * 12 + chord_natural_semitones(letter).unwrap() + effective_acc;
             notes.push(NoteToken {
@@ -490,9 +454,7 @@ pub fn transpose_selection(
     // Snapshot Lift's end-of-selection state. Compensation in the Lower
     // phase targets this state so notes after the selection keep their
     // original pitch.
-    let lift_end_shared = shared_octave;
-    let lift_end_channels = channel_octave.clone();
-    let lift_end_cur_channel = cur_channel;
+    let lift_end_state = state;
 
     // -- Phase 2: Transform -------------------------------------------------
     let delta = direction.as_i32();
@@ -512,26 +474,15 @@ pub fn transpose_selection(
         });
     }
 
-    let mut lower_octave: Vec<i32> = start_ctx.channel_octave.clone();
-    let mut lower_shared: i32 = start_ctx.shared_octave;
-    let mut lower_channel: i32 = start_ctx.cur_channel;
-    let mut lower_brace_depth: u32 = start_ctx.brace_depth;
-    let mut lower_branch: usize = start_ctx.branch_idx;
+    let mut lower = start_ctx.clone();
     let mut j: usize = 0;
 
     let shift_set: HashSet<usize> = octave_shifts.iter().map(|s| s.offset).collect();
     let branch_end_by_offset: HashMap<usize, BranchEnd> = branch_ends.into_iter().collect();
 
-    // Per-branch compensation: emitted closure captures `lower_*` mutables,
-    // so we inline it where it's needed instead.
-
     let advance_lower_state = |j: &mut usize,
                                until: usize,
-                               lower_octave: &mut Vec<i32>,
-                               lower_shared: &mut i32,
-                               lower_channel: &mut i32,
-                               lower_brace_depth: &mut u32,
-                               lower_branch: &mut usize,
+                               lower: &mut BraceState,
                                replacements: &mut Vec<Replacement>| {
         while *j < until {
             let c = bytes[*j];
@@ -541,51 +492,20 @@ pub fn transpose_selection(
             }
             if (c == b'o' || c == b'O') && *j + 1 < bytes.len() {
                 if let Some((oct, len)) = parse_leading_u32(&bytes[*j + 1..]) {
-                    if *lower_channel < 0 {
-                        *lower_shared = oct as i32;
-                        for v in lower_octave.iter_mut() {
-                            *v = oct as i32;
-                        }
-                    } else {
-                        lower_octave[*lower_channel as usize] = oct as i32;
-                    }
+                    lower.on_octave_set(oct as i32);
                     *j += 1 + len;
                     continue;
                 }
             }
             if c == b'{' {
                 let prev = if *j > 0 { bytes[*j - 1] } else { 0 };
-                if prev != b'_' {
-                    *lower_brace_depth += 1;
-                    *lower_branch = 0;
-                    *lower_channel = if num_channels > 1 { 0 } else { -1 };
-                }
-            } else if c == b'/' && *lower_brace_depth > 0 {
-                apply_branch_end_comp(
-                    *j,
-                    &branch_end_by_offset,
-                    *lower_channel,
-                    lower_octave,
-                    replacements,
-                );
-                *lower_branch += 1;
-                if num_channels > 1 && *lower_branch < num_channels {
-                    *lower_channel = *lower_branch as i32;
-                }
-            } else if c == b'}' {
-                if *lower_brace_depth > 0 {
-                    apply_branch_end_comp(
-                        *j,
-                        &branch_end_by_offset,
-                        *lower_channel,
-                        lower_octave,
-                        replacements,
-                    );
-                    *lower_brace_depth -= 1;
-                    if *lower_brace_depth == 0 {
-                        *lower_channel = -1;
-                    }
-                }
+                lower.on_open_brace(prev);
+            } else if c == b'/' && lower.brace_depth() > 0 {
+                apply_branch_end_comp(*j, &branch_end_by_offset, lower, replacements);
+                lower.on_slash();
+            } else if c == b'}' && lower.brace_depth() > 0 {
+                apply_branch_end_comp(*j, &branch_end_by_offset, lower, replacements);
+                lower.on_close_brace();
             }
             *j += 1;
         }
@@ -593,47 +513,25 @@ pub fn transpose_selection(
 
     let mut last_note_rep: Option<usize> = None;
     for note in &notes {
-        advance_lower_state(
-            &mut j,
-            note.offset,
-            &mut lower_octave,
-            &mut lower_shared,
-            &mut lower_channel,
-            &mut lower_brace_depth,
-            &mut lower_branch,
-            &mut replacements,
-        );
+        advance_lower_state(&mut j, note.offset, &mut lower, &mut replacements);
 
         let new_semi = note.midi.rem_euclid(12);
         let new_oct = note.midi.div_euclid(12) + 1;
         let (letter, acc_str) = spell_semitone(new_semi, &key_sig, direction);
 
-        let cur_oct = if lower_channel >= 0 {
-            lower_octave[lower_channel as usize]
-        } else {
-            lower_shared
-        };
-        let mut prefix = String::new();
+        let cur_oct = lower.current_octave();
+        let mut text = String::new();
         if new_oct > cur_oct {
             for _ in 0..(new_oct - cur_oct) {
-                prefix.push('>');
+                text.push('>');
             }
         } else if new_oct < cur_oct {
             for _ in 0..(cur_oct - new_oct) {
-                prefix.push('<');
+                text.push('<');
             }
         }
+        lower.on_octave_set(new_oct);
 
-        if lower_channel >= 0 {
-            lower_octave[lower_channel as usize] = new_oct;
-        } else {
-            lower_shared = new_oct;
-            for v in lower_octave.iter_mut() {
-                *v = new_oct;
-            }
-        }
-
-        let mut text = prefix;
         text.push(letter);
         text.push_str(acc_str);
         replacements.push(Replacement {
@@ -645,26 +543,11 @@ pub fn transpose_selection(
         j = note.offset + note.length;
     }
 
-    advance_lower_state(
-        &mut j,
-        bytes.len(),
-        &mut lower_octave,
-        &mut lower_shared,
-        &mut lower_channel,
-        &mut lower_brace_depth,
-        &mut lower_branch,
-        &mut replacements,
-    );
+    advance_lower_state(&mut j, bytes.len(), &mut lower, &mut replacements);
 
     // Compensate for any net octave drift between original and rewritten.
     if let Some(idx) = last_note_rep {
-        let mut shift_count: i32 = 0;
-        if lift_end_cur_channel < 0 && lower_channel < 0 {
-            shift_count = lift_end_shared - lower_shared;
-        } else if lift_end_cur_channel >= 0 && lower_channel == lift_end_cur_channel {
-            let lc = lift_end_cur_channel as usize;
-            shift_count = lift_end_channels[lc] - lower_octave[lc];
-        }
+        let shift_count = compute_end_drift(&lift_end_state, &lower);
         if shift_count > 0 {
             for _ in 0..shift_count {
                 replacements[idx].text.push('>');
@@ -700,22 +583,24 @@ pub fn transpose_selection(
     })
 }
 
-/// Per-branch compensation helper extracted from the Lower-phase scan.
+/// Per-branch compensation helper. When the Lower phase reaches a `/` or
+/// `}` whose original Lift-side branch ended at a different octave, emit
+/// `>` / `<` glyphs before the boundary so the next chord's branches
+/// resume from the original position.
 fn apply_branch_end_comp(
     offset: usize,
     branch_end_by_offset: &HashMap<usize, BranchEnd>,
-    lower_channel: i32,
-    lower_octave: &mut Vec<i32>,
+    lower: &mut BraceState,
     replacements: &mut Vec<Replacement>,
 ) {
     let be = match branch_end_by_offset.get(&offset) {
         Some(b) => *b,
         None => return,
     };
-    if lower_channel != be.channel as i32 {
+    if lower.active_channel() != Some(be.channel) {
         return;
     }
-    let diff = be.orig_octave - lower_octave[be.channel];
+    let diff = be.orig_octave - lower.channel_octave()[be.channel];
     if diff == 0 {
         return;
     }
@@ -729,7 +614,22 @@ fn apply_branch_end_comp(
         length: 0,
         text,
     });
-    lower_octave[be.channel] = be.orig_octave;
+    // Restore the channel's original octave so subsequent state stays
+    // aligned with the Lift snapshot.
+    lower.on_octave_set(be.orig_octave);
+}
+
+/// End-of-selection compensation amount: positive emits trailing `>`,
+/// negative emits trailing `<`. Returns 0 when no compensation is needed
+/// (either the channels don't match up or the octaves already agree).
+fn compute_end_drift(lift_end: &BraceState, lower: &BraceState) -> i32 {
+    match (lift_end.active_channel(), lower.active_channel()) {
+        (None, None) => lift_end.shared_octave() - lower.shared_octave(),
+        (Some(a), Some(b)) if a == b => {
+            lift_end.channel_octave()[a] - lower.channel_octave()[a]
+        }
+        _ => 0,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -791,15 +691,6 @@ fn scan_octave_at(model: &dyn LineReader, line_number: u32, column: u32) -> i32 
     }
 }
 
-#[derive(Debug)]
-struct BraceContext {
-    brace_depth: u32,
-    branch_idx: usize,
-    cur_channel: i32,
-    shared_octave: i32,
-    channel_octave: Vec<i32>,
-}
-
 /// Reconstruct the brace / branch / channel-octave state at
 /// `(line_number, column)` by scanning the line forward from its start.
 /// Mirrors `scanBraceContextAt` in `transpose.ts`.
@@ -809,13 +700,8 @@ fn scan_brace_context_at(
     column: u32,
     num_channels: usize,
     initial_octave: i32,
-) -> BraceContext {
-    let width = num_channels.max(1);
-    let mut channel_octave: Vec<i32> = vec![initial_octave; width];
-    let mut shared_octave = initial_octave;
-    let mut cur_channel: i32 = -1;
-    let mut brace_depth: u32 = 0;
-    let mut branch_idx: usize = 0;
+) -> BraceState {
+    let mut state = BraceState::new(num_channels, initial_octave);
 
     let line_text = model.get_line_content(line_number);
     let bytes = line_text.as_bytes();
@@ -849,60 +735,38 @@ fn scan_brace_context_at(
 
         if ch == b'o' || ch == b'O' {
             if let Some((oct, len)) = parse_leading_u32(&bytes[i + 1..end]) {
-                if cur_channel < 0 {
-                    shared_octave = oct as i32;
-                    for v in channel_octave.iter_mut() {
-                        *v = oct as i32;
-                    }
-                } else {
-                    channel_octave[cur_channel as usize] = oct as i32;
-                }
+                state.on_octave_set(oct as i32);
                 i += 1 + len;
                 continue;
             }
         }
 
-        if ch == b'>' || ch == b'<' {
-            let delta: i32 = if ch == b'>' { 1 } else { -1 };
-            if cur_channel < 0 {
-                shared_octave += delta;
-                for v in channel_octave.iter_mut() {
-                    *v += delta;
-                }
-            } else {
-                channel_octave[cur_channel as usize] += delta;
-            }
+        if ch == b'>' {
+            state.on_octave_shift(1);
+            i += 1;
+            continue;
+        }
+        if ch == b'<' {
+            state.on_octave_shift(-1);
             i += 1;
             continue;
         }
 
         if ch == b'{' {
             let prev = if i > 0 { bytes[i - 1] } else { 0 };
-            if prev != b'_' {
-                brace_depth += 1;
-                branch_idx = 0;
-                cur_channel = if num_channels > 1 { 0 } else { -1 };
-            }
+            state.on_open_brace(prev);
             i += 1;
             continue;
         }
 
-        if ch == b'/' && brace_depth > 0 {
-            branch_idx += 1;
-            if num_channels > 1 && branch_idx < num_channels {
-                cur_channel = branch_idx as i32;
-            }
+        if ch == b'/' && state.brace_depth() > 0 {
+            state.on_slash();
             i += 1;
             continue;
         }
 
-        if ch == b'}' {
-            if brace_depth > 0 {
-                brace_depth -= 1;
-                if brace_depth == 0 {
-                    cur_channel = -1;
-                }
-            }
+        if ch == b'}' && state.brace_depth() > 0 {
+            state.on_close_brace();
             i += 1;
             continue;
         }
@@ -910,13 +774,7 @@ fn scan_brace_context_at(
         i += 1;
     }
 
-    BraceContext {
-        brace_depth,
-        branch_idx,
-        cur_channel,
-        shared_octave,
-        channel_octave,
-    }
+    state
 }
 
 // ---------------------------------------------------------------------------
