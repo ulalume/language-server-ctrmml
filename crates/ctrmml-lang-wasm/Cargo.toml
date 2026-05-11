@@ -1,0 +1,20 @@
+[package]
+name = "ctrmml-lang-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "wasm-bindgen wrapper exposing ctrmml-lang-core to JavaScript / TypeScript callers (web-ctrmml)."
+license = "MIT OR Apache-2.0"
+
+# Build for the browser: cdylib produces the .wasm artifact, rlib lets
+# native consumers (e.g. integration tests) reuse the same crate.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ctrmml-lang-core = { path = "../ctrmml-lang-core" }
+wasm-bindgen = "0.2"
+
+# wee_alloc is a smaller WASM allocator than the default. We don't pull
+# it in yet — the default alloc keeps the door open for debug assertions
+# and the crate is small enough that a few KB of allocator code isn't a
+# significant fraction of the final bundle.
