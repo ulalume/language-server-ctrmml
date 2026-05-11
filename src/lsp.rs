@@ -91,6 +91,7 @@ impl LanguageServer for Backend {
                         "'".into(),
                         "/".into(),
                         ".".into(),
+                        "{".into(),
                     ]),
                     ..CompletionOptions::default()
                 }),
@@ -341,18 +342,12 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
 
-        // Track-content fallback: combine the existing MML command
-        // list with chord-shape snippets so users can pick either a
-        // single-letter command (l, r, v, ...) or a chord expansion
-        // (cm, cM7, csus2, ...). Chord items return [] outside any
-        // track selector or inside an FM/PSG block.
-        let mut items = command_items();
-        items.extend(chord_completion_items(
-            &text,
-            position.line,
-            position.character,
-        ));
-        Ok(Some(CompletionResponse::Array(items)))
+        if let Some(items) =
+            chord_completion_items(&text, position.line, position.character)
+        {
+            return Ok(Some(CompletionResponse::Array(items)));
+        }
+        Ok(Some(CompletionResponse::Array(command_items())))
     }
 
     async fn code_action(
