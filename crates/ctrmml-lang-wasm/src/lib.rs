@@ -546,17 +546,79 @@ pub fn find_psg_block_at(doc_text: &str, line: u32) -> Option<InstrumentBlockRes
 // ---------------------------------------------------------------------------
 
 /// Number of selector spans on `line`'s leading track selector, or `0`
-/// if the line doesn't begin with one. Most TS callers only need the
-/// channel count for downstream brace tracking, which this returns
-/// directly to avoid round-tripping the full span list.
-///
-/// Used in conjunction with [`find_track_selector_line`] to locate the
-/// enclosing track block.
+/// if the line doesn't begin with one. Lightweight alternative to
+/// [`parse_leading_track_selector`] for callers that only need the
+/// channel count.
 #[wasm_bindgen]
 pub fn leading_track_selector_channel_count(line: &str) -> u32 {
     ctrmml_lang_core::parse_leading_track_selector(line)
         .map(|s| s.spans.len() as u32)
         .unwrap_or(0)
+}
+
+/// Opaque handle exposing the full result of parsing a leading track
+/// selector. Span data is delivered via index-based getters so JS
+/// callers don't need a serde round trip.
+#[wasm_bindgen]
+pub struct LeadingTrackSelectorResult {
+    end: u32,
+    spans: Vec<ctrmml_lang_core::LeadingTrackSpan>,
+}
+
+#[wasm_bindgen]
+impl LeadingTrackSelectorResult {
+    /// Byte offset just past the last span (before any trailing
+    /// whitespace) — used by TS callers to bound completion-context
+    /// queries.
+    #[wasm_bindgen(getter)]
+    pub fn end(&self) -> u32 {
+        self.end
+    }
+
+    /// Number of selector spans on the line.
+    #[wasm_bindgen(getter)]
+    pub fn span_count(&self) -> u32 {
+        self.spans.len() as u32
+    }
+
+    /// Track id for span `index`. Returns `u32::MAX` when `index` is
+    /// out of range — JS callers should bounds-check against
+    /// [`Self::span_count`] first.
+    pub fn span_track_id(&self, index: u32) -> u32 {
+        self.spans
+            .get(index as usize)
+            .map(|s| s.track_id)
+            .unwrap_or(u32::MAX)
+    }
+
+    /// Byte start offset for span `index`.
+    pub fn span_start(&self, index: u32) -> u32 {
+        self.spans
+            .get(index as usize)
+            .map(|s| s.start as u32)
+            .unwrap_or(u32::MAX)
+    }
+
+    /// Byte end offset for span `index` (exclusive).
+    pub fn span_end(&self, index: u32) -> u32 {
+        self.spans
+            .get(index as usize)
+            .map(|s| s.end as u32)
+            .unwrap_or(u32::MAX)
+    }
+}
+
+/// Parse a ctrmml leading track selector at the start of `line`.
+/// Returns `null` when the line doesn't begin with a valid selector.
+///
+/// Replaces `parseLeadingTrackSelector` from
+/// `web-ctrmml/src/mml/track-selector.ts`.
+#[wasm_bindgen]
+pub fn parse_leading_track_selector(line: &str) -> Option<LeadingTrackSelectorResult> {
+    ctrmml_lang_core::parse_leading_track_selector(line).map(|sel| LeadingTrackSelectorResult {
+        end: sel.end as u32,
+        spans: sel.spans,
+    })
 }
 
 /// Walk backward from `line` to find the nearest line beginning with a
@@ -936,5 +998,30 @@ mod tests {
     fn find_track_selector_line_returns_zero_when_none() {
         let doc = "; just comments\n@0 fm";
         assert_eq!(find_track_selector_line(doc, 2), 0);
+    }
+
+    #[test]
+    fn parse_leading_track_selector_full() {
+        let sel = parse_leading_track_selector("ABC cdefg").unwrap();
+        assert_eq!(sel.span_count(), 3);
+        assert_eq!(sel.span_track_id(0), 0); // A
+        assert_eq!(sel.span_track_id(1), 1); // B
+        assert_eq!(sel.span_track_id(2), 2); // C
+        assert_eq!(sel.end(), 3);
+    }
+
+    #[test]
+    fn parse_leading_track_selector_returns_null_on_non_selector() {
+        assert!(parse_leading_track_selector("; comment").is_none());
+        assert!(parse_leading_track_selector("@0 fm").is_none());
+    }
+
+    #[test]
+    fn parse_leading_track_selector_star_explicit_track() {
+        let sel = parse_leading_track_selector("*42 cdefg").unwrap();
+        assert_eq!(sel.span_count(), 1);
+        assert_eq!(sel.span_track_id(0), 42);
+        assert_eq!(sel.span_start(0), 0);
+        assert_eq!(sel.span_end(0), 3);
     }
 }
