@@ -2,8 +2,9 @@ use serde_json::Value;
 use tower_lsp::{
     jsonrpc::Result,
     lsp_types::{
-        CodeActionOrCommand, CodeActionParams, CodeActionProviderCapability, CompletionOptions,
-        CompletionParams, CompletionResponse, DidSaveTextDocumentParams, ExecuteCommandOptions,
+        CodeActionOrCommand, CodeActionParams, CodeActionProviderCapability, CompletionList,
+        CompletionOptions, CompletionParams, CompletionResponse, DidSaveTextDocumentParams,
+        ExecuteCommandOptions,
         ExecuteCommandParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
         HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, Location,
         MarkupContent, MarkupKind, MessageActionItem, MessageType, OneOf, Position, Range,
@@ -92,6 +93,9 @@ impl LanguageServer for Backend {
                         "/".into(),
                         ".".into(),
                         "{".into(),
+                        "+".into(),
+                        "-".into(),
+                        "=".into(),
                     ]),
                     ..CompletionOptions::default()
                 }),
@@ -347,7 +351,16 @@ impl LanguageServer for Backend {
         {
             return Ok(Some(CompletionResponse::Array(items)));
         }
-        Ok(Some(CompletionResponse::Array(command_items())))
+        // Mark the command fallback incomplete so editors re-query on each
+        // keystroke instead of filtering this list locally. Without this,
+        // typing `{c` would keep showing the cached `C<ticks>` command from
+        // when the user first hit `{` (the chord context wasn't satisfied
+        // yet) — and `{a` would show nothing at all, since no command starts
+        // with `a`. Matches web-ctrmml's `incomplete: true` (mml-completions.ts).
+        Ok(Some(CompletionResponse::List(CompletionList {
+            is_incomplete: true,
+            items: command_items(),
+        })))
     }
 
     async fn code_action(
