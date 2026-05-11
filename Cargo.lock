@@ -193,6 +193,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctrmml-lang-core"
+version = "0.1.0"
+
+[[package]]
 name = "ctrmml-lsp"
 version = "0.1.1"
 dependencies = [

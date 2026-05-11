@@ -1,3 +1,6 @@
+[workspace]
+members = ["crates/ctrmml-lang-core"]
+
 [package]
 name = "ctrmml-lsp"
 version = "0.1.1"
