@@ -12,6 +12,7 @@
 
 pub mod chord;
 pub mod key_sig;
+pub mod track_selector;
 
 pub use chord::{
     accidental_char, chord_natural_semitones, render_chord, render_generic_chord,
@@ -19,3 +20,7 @@ pub use chord::{
     CHORDS_3, CHORDS_4, CHORD_LETTERS,
 };
 pub use key_sig::KeySig;
+pub use track_selector::{
+    find_enclosing_track_selector, find_enclosing_track_selector_at,
+    parse_leading_track_selector, LeadingTrackSelector, LeadingTrackSpan, LineReader,
+};
