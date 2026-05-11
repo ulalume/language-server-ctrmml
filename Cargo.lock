@@ -200,6 +200,7 @@ version = "0.1.0"
 name = "ctrmml-lsp"
 version = "0.1.1"
 dependencies = [
+ "ctrmml-lang-core",
  "dirs",
  "flate2",
  "pathdiff",

@@ -25,11 +25,12 @@ use crate::config::config_from_value;
 use crate::export::ExportFormat;
 use crate::hover::{fm_hover_text, hover_text, rate_offset_hover, two_op_hover_text};
 use crate::lsp_commands::{
-    code_actions, command_ids, CMD_EXPORT_VGM, CMD_EXPORT_WAV, CMD_MDSLINK_DIRECTORY,
-    CMD_MDSLINK_FILE, CMD_MDSLINK_FROM_CONFIG, CMD_MDSLINK_MENU, CMD_PLAY, CMD_PLAY_FROM_CURSOR,
-    CMD_QUICKROM_DIRECTORY, CMD_QUICKROM_FILE, CMD_QUICKROM_FROM_CONFIG, CMD_QUICKROM_MENU,
-    CMD_STOP,
+    code_actions, command_ids, transpose_code_action, CMD_EXPORT_VGM, CMD_EXPORT_WAV,
+    CMD_MDSLINK_DIRECTORY, CMD_MDSLINK_FILE, CMD_MDSLINK_FROM_CONFIG, CMD_MDSLINK_MENU, CMD_PLAY,
+    CMD_PLAY_FROM_CURSOR, CMD_QUICKROM_DIRECTORY, CMD_QUICKROM_FILE, CMD_QUICKROM_FROM_CONFIG,
+    CMD_QUICKROM_MENU, CMD_STOP,
 };
+use ctrmml_lang_core::transpose::Direction;
 use crate::mdslink::MdslinkRunResult;
 use crate::mml::{is_in_comment, token_at};
 use crate::quickrom::QuickromRunResult;
@@ -325,12 +326,32 @@ impl LanguageServer for Backend {
         &self,
         params: CodeActionParams,
     ) -> Result<Option<Vec<CodeActionOrCommand>>> {
-        let uri = params.text_document.uri.to_string();
-        if !is_mml_uri(&uri) {
+        let uri_str = params.text_document.uri.to_string();
+        if !is_mml_uri(&uri_str) {
             return Ok(None);
         }
         let start = params.range.start;
-        let actions = code_actions(&uri, start);
+        let mut actions = code_actions(&uri_str, start);
+
+        // Transpose actions need the live document text; the existing
+        // command-based actions in `code_actions` only need URI + start.
+        // Only offer them when the selection covers a non-empty range.
+        if params.range.start != params.range.end {
+            let doc_text = self.docs.read().await.get(&uri_str).cloned();
+            if let Some(text) = doc_text {
+                for direction in [Direction::Up, Direction::Down] {
+                    if let Some(action) = transpose_code_action(
+                        &params.text_document.uri,
+                        params.range,
+                        &text,
+                        direction,
+                    ) {
+                        actions.push(action);
+                    }
+                }
+            }
+        }
+
         Ok(Some(
             actions
                 .into_iter()

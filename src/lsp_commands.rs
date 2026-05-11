@@ -1,5 +1,13 @@
+use std::collections::HashMap;
+
+use ctrmml_lang_core::{
+    transpose::{transpose_selection, Direction, Selection},
+    LinesModel,
+};
 use serde_json::{json, Value};
-use tower_lsp::lsp_types::{CodeAction, Command, Position};
+use tower_lsp::lsp_types::{
+    CodeAction, CodeActionKind, Command, Position, Range, TextEdit, Url, WorkspaceEdit,
+};
 
 pub(crate) struct CommandDef {
     pub(crate) id: &'static str,
@@ -85,6 +93,58 @@ pub(crate) fn command_title(command_id: &str) -> &str {
         .find(|entry| entry.id == command_id)
         .map(|entry| entry.title)
         .unwrap_or(command_id)
+}
+
+/// Build a transpose-by-one-semitone code action for `range` in
+/// `doc_text`. Returns `None` when the selection contains no notes (in
+/// which case the edit would be a no-op).
+///
+/// The action is delivered as a `WorkspaceEdit` rather than a command
+/// round-trip, so the client applies it immediately.
+pub(crate) fn transpose_code_action(
+    uri: &Url,
+    range: Range,
+    doc_text: &str,
+    direction: Direction,
+) -> Option<CodeAction> {
+    let model = LinesModel::from_text(doc_text);
+    let sel = Selection {
+        // LSP Position is 0-based; ctrmml-lang-core Selection is 1-based.
+        start_line_number: range.start.line + 1,
+        start_column: range.start.character + 1,
+        end_line_number: range.end.line + 1,
+        end_column: range.end.character + 1,
+    };
+    let edit = transpose_selection(&model, sel, direction)?;
+    let title = match direction {
+        Direction::Up => "ctrmml: transpose up (semitone)",
+        Direction::Down => "ctrmml: transpose down (semitone)",
+    };
+    let text_edit = TextEdit {
+        range: Range {
+            start: Position {
+                line: edit.start_line_number - 1,
+                character: edit.start_column - 1,
+            },
+            end: Position {
+                line: edit.end_line_number - 1,
+                character: edit.end_column - 1,
+            },
+        },
+        new_text: edit.text,
+    };
+    let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+    changes.insert(uri.clone(), vec![text_edit]);
+    Some(CodeAction {
+        title: title.to_string(),
+        kind: Some(CodeActionKind::REFACTOR_REWRITE),
+        edit: Some(WorkspaceEdit {
+            changes: Some(changes),
+            document_changes: None,
+            change_annotations: None,
+        }),
+        ..CodeAction::default()
+    })
 }
 
 pub(crate) fn code_actions(uri: &str, start: Position) -> Vec<CodeAction> {
