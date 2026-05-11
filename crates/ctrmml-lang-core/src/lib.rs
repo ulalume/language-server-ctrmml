@@ -19,7 +19,7 @@ pub use chord::{
     render_stacked_chord, render_stacked_generic_chord, ChordDef, ChordSize, RootAccidental,
     CHORDS_3, CHORDS_4, CHORD_LETTERS,
 };
-pub use key_sig::KeySig;
+pub use key_sig::{default_key_sig, parse_key_sig, scale_for_name, scan_key_sig_at, KeySig};
 pub use track_selector::{
     find_enclosing_track_selector, find_enclosing_track_selector_at,
     parse_leading_track_selector, LeadingTrackSelector, LeadingTrackSpan, LineReader,
