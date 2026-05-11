@@ -14,14 +14,13 @@ use std::collections::{HashMap, HashSet};
 use crate::brace_state::BraceState;
 use crate::chord::chord_natural_semitones;
 use crate::key_sig::{parse_key_sig, scan_key_sig_at, KeySig};
+use crate::octave_scan::scan_brace_state_at;
 use crate::text_scan::{is_in_comment, is_in_key_sig};
 use crate::track_selector::{find_enclosing_track_selector, LineReader};
 
 // ---------------------------------------------------------------------------
 // Shared constants
 // ---------------------------------------------------------------------------
-
-const DEFAULT_OCTAVE: i32 = 6;
 
 /// Preferred sharp spellings for semitones 0..=11: `(letter, accidental)`.
 const SPELL_SHARP: [(char, &str); 12] = [
@@ -204,13 +203,12 @@ pub fn transpose_selection(
     // `_{...}` blocks are encountered during the forward scan.
     let mut key_sig = scan_key_sig_at(model, start_line, start_col);
 
-    let pre_octave = scan_octave_at(model, start_line, start_col);
-
     let selector = find_enclosing_track_selector(model, start_line);
     let num_channels = selector.map(|s| s.spans.len()).unwrap_or(1).max(1);
 
-    // Brace/branch/channel state at the selection start.
-    let start_ctx = scan_brace_context_at(model, start_line, start_col, num_channels, pre_octave);
+    // Brace/branch/channel/octave state at the selection start, in a
+    // single forward walk from the enclosing track selector.
+    let start_ctx = scan_brace_state_at(model, start_line, start_col, num_channels, None);
 
     // -- Extract selection text + full lines -------------------------------
     let mut full_lines: Vec<String> = Vec::new();
@@ -632,150 +630,9 @@ fn compute_end_drift(lift_end: &BraceState, lower: &BraceState) -> i32 {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Octave + brace context scanning (pre-selection)
-// ---------------------------------------------------------------------------
-
-/// Compute the effective octave at `(line_number, column)` by scanning
-/// backward. Mirrors `scanOctaveAt` in `transpose.ts`.
-fn scan_octave_at(model: &dyn LineReader, line_number: u32, column: u32) -> i32 {
-    let mut total_shifts: i32 = 0;
-    let mut octave: i32 = -1;
-
-    let mut ln = line_number;
-    loop {
-        let line_text = model.get_line_content(ln);
-        let bytes = line_text.as_bytes();
-        let end_raw = if ln == line_number {
-            (column.saturating_sub(1) as usize).min(bytes.len())
-        } else {
-            bytes.len()
-        };
-        let semi_pos = bytes[..end_raw].iter().position(|&b| b == b';');
-        let end = semi_pos.map(|p| p.min(end_raw)).unwrap_or(end_raw);
-
-        let mut shifts_after_o: i32 = 0;
-        let mut k = end;
-        while k > 0 {
-            k -= 1;
-            let ch = bytes[k];
-            if ch == b'>' {
-                shifts_after_o += 1;
-            } else if ch == b'<' {
-                shifts_after_o -= 1;
-            } else if (ch == b'o' || ch == b'O') && octave < 0 {
-                if let Some((oct, _)) = parse_leading_u32(&bytes[k + 1..end]) {
-                    octave = oct as i32 + shifts_after_o + total_shifts;
-                }
-            }
-        }
-        if octave < 0 {
-            total_shifts += shifts_after_o;
-        }
-
-        if crate::track_selector::parse_leading_track_selector(line_text).is_some() {
-            if octave < 0 {
-                octave = DEFAULT_OCTAVE + total_shifts;
-            }
-            break;
-        }
-        if ln == 1 {
-            break;
-        }
-        ln -= 1;
-    }
-    if octave >= 0 {
-        octave
-    } else {
-        DEFAULT_OCTAVE + total_shifts
-    }
-}
-
-/// Reconstruct the brace / branch / channel-octave state at
-/// `(line_number, column)` by scanning the line forward from its start.
-/// Mirrors `scanBraceContextAt` in `transpose.ts`.
-fn scan_brace_context_at(
-    model: &dyn LineReader,
-    line_number: u32,
-    column: u32,
-    num_channels: usize,
-    initial_octave: i32,
-) -> BraceState {
-    let mut state = BraceState::new(num_channels, initial_octave);
-
-    let line_text = model.get_line_content(line_number);
-    let bytes = line_text.as_bytes();
-    let end = (column.saturating_sub(1) as usize).min(bytes.len());
-
-    let mut i: usize = 0;
-    while i < end {
-        let ch = bytes[i];
-        if ch == b';' {
-            break;
-        }
-
-        if ch == b'_' && i + 1 < end && bytes[i + 1] == b'{' {
-            if let Some(rel) = bytes[i + 2..end].iter().position(|&b| b == b'}') {
-                i = i + 2 + rel + 1;
-                continue;
-            }
-        }
-
-        if ch == b'"' || ch == b'\'' {
-            let quote = ch;
-            i += 1;
-            while i < end && bytes[i] != quote {
-                i += 1;
-            }
-            if i < end {
-                i += 1;
-            }
-            continue;
-        }
-
-        if ch == b'o' || ch == b'O' {
-            if let Some((oct, len)) = parse_leading_u32(&bytes[i + 1..end]) {
-                state.on_octave_set(oct as i32);
-                i += 1 + len;
-                continue;
-            }
-        }
-
-        if ch == b'>' {
-            state.on_octave_shift(1);
-            i += 1;
-            continue;
-        }
-        if ch == b'<' {
-            state.on_octave_shift(-1);
-            i += 1;
-            continue;
-        }
-
-        if ch == b'{' {
-            let prev = if i > 0 { bytes[i - 1] } else { 0 };
-            state.on_open_brace(prev);
-            i += 1;
-            continue;
-        }
-
-        if ch == b'/' && state.brace_depth() > 0 {
-            state.on_slash();
-            i += 1;
-            continue;
-        }
-
-        if ch == b'}' && state.brace_depth() > 0 {
-            state.on_close_brace();
-            i += 1;
-            continue;
-        }
-
-        i += 1;
-    }
-
-    state
-}
+// (scan_octave_at and scan_brace_context_at retired — see
+// `octave_scan::scan_brace_state_at`, which subsumes both with a single
+// forward walk from the enclosing track selector to the cursor.)
 
 // ---------------------------------------------------------------------------
 // Small byte-classification helpers — avoid pulling in `regex`.

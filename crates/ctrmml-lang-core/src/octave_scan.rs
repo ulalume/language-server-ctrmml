@@ -23,7 +23,8 @@ pub struct ChannelContext {
 }
 
 /// Compute each channel's effective octave at `(line_number, column)` by
-/// walking forward from the enclosing track selector.
+/// walking forward from the enclosing track selector. Thin projection
+/// over [`scan_brace_state_at`].
 ///
 /// Pass `track_line` to skip the backward scan when the caller already
 /// knows it (typically from
@@ -35,6 +36,27 @@ pub fn scan_channel_context_at(
     num_channels: usize,
     track_line: Option<u32>,
 ) -> ChannelContext {
+    let state = scan_brace_state_at(model, line_number, column, num_channels, track_line);
+    ChannelContext {
+        octaves: state.channel_octave().to_vec(),
+        active_channel: state.active_channel(),
+    }
+}
+
+/// Lower-level primitive: walk forward from the enclosing track selector
+/// to `(line_number, column)` and return the full [`BraceState`] at the
+/// cursor.
+///
+/// This is what `transpose` calls to seed its Lift/Lower phases. Callers
+/// that only need the per-channel octaves can use the thin
+/// [`scan_channel_context_at`] wrapper instead.
+pub fn scan_brace_state_at(
+    model: &dyn LineReader,
+    line_number: u32,
+    column: u32,
+    num_channels: usize,
+    track_line: Option<u32>,
+) -> BraceState {
     let track_line = track_line.unwrap_or_else(|| {
         let mut ln = line_number;
         loop {
@@ -127,10 +149,7 @@ pub fn scan_channel_context_at(
         }
     }
 
-    ChannelContext {
-        octaves: state.channel_octave().to_vec(),
-        active_channel: state.active_channel(),
-    }
+    state
 }
 
 /// Parse a leading run of ASCII digits as an `i32`. Returns
