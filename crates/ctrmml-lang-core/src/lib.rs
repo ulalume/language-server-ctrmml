@@ -14,6 +14,7 @@ pub mod chord;
 pub mod key_sig;
 pub mod octave_scan;
 pub mod text_scan;
+pub mod timesig;
 pub mod track_selector;
 pub mod transpose;
 
@@ -27,6 +28,9 @@ pub use chord::{
 };
 pub use key_sig::{default_key_sig, parse_key_sig, scale_for_name, scan_key_sig_at, KeySig};
 pub use octave_scan::{scan_channel_context_at, ChannelContext};
+pub use timesig::{
+    parse_time_signature, scan_time_signature, TimeSignature, DEFAULT_TIME_SIGNATURE,
+};
 pub use text_scan::{is_in_comment, is_in_key_sig};
 pub use transpose::{transpose_selection, Direction, Selection, TransposeEdit};
 pub use track_selector::{
