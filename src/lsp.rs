@@ -14,6 +14,7 @@ use tower_lsp::{
 };
 
 use crate::backend::Backend;
+use crate::chord_completion::chord_completion_items;
 use crate::completion::{
     at_meta_completion_items, command_items, complete_pcm_paths, fm_instrument_context,
     instrument_items, is_at_meta_context, is_instrument_definition_context,
@@ -319,7 +320,18 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
 
-        Ok(Some(CompletionResponse::Array(command_items())))
+        // Track-content fallback: combine the existing MML command
+        // list with chord-shape snippets so users can pick either a
+        // single-letter command (l, r, v, ...) or a chord expansion
+        // (cm, cM7, csus2, ...). Chord items return [] outside any
+        // track selector or inside an FM/PSG block.
+        let mut items = command_items();
+        items.extend(chord_completion_items(
+            &text,
+            position.line,
+            position.character,
+        ));
+        Ok(Some(CompletionResponse::Array(items)))
     }
 
     async fn code_action(

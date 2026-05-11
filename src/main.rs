@@ -1,5 +1,6 @@
 mod backend;
 mod check;
+mod chord_completion;
 mod completion;
 mod config;
 mod ctrmml_cmd;
