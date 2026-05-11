@@ -267,16 +267,7 @@ fn collect_keysig_blocks(segment: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    struct LinesModel(Vec<String>);
-    impl LineReader for LinesModel {
-        fn get_line_content(&self, line_number: u32) -> &str {
-            self.0
-                .get((line_number as usize).saturating_sub(1))
-                .map(String::as_str)
-                .unwrap_or("")
-        }
-    }
+    use crate::test_util::LinesModel;
 
     // ---------- scale_for_name -------------------------------------------------
 

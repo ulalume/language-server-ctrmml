@@ -144,16 +144,7 @@ pub fn find_enclosing_track_selector_at(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A `LineReader` backed by an in-memory `Vec<String>`, addressed
-    /// 1-based to match Monaco / `getLineContent` conventions.
-    struct LinesModel(Vec<String>);
-    impl LineReader for LinesModel {
-        fn get_line_content(&self, line_number: u32) -> &str {
-            let idx = (line_number as usize).saturating_sub(1);
-            self.0.get(idx).map(String::as_str).unwrap_or("")
-        }
-    }
+    use crate::test_util::LinesModel;
 
     // ---------- parse_leading_track_selector ---------------------------------
 

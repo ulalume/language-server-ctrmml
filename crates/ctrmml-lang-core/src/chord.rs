@@ -267,10 +267,10 @@ fn stack_tones(
             target_oct = chans[0];
             target_pitch = (target_oct - 1) * 12 + letter_sem + acc;
         } else {
-            // `Math.floor((prevPitch - letterSem) / 12) + 1`. Rust integer
-            // division truncates toward zero, so for negative dividends we
-            // emulate floor explicitly.
-            let mut t_oct = div_floor(prev_pitch - letter_sem, 12) + 1;
+            // `Math.floor((prevPitch - letterSem) / 12) + 1`. `div_euclid`
+            // matches `Math.floor` for the positive divisor 12, where Rust's
+            // built-in `/` would truncate toward zero on negative dividends.
+            let mut t_oct = (prev_pitch - letter_sem).div_euclid(12) + 1;
             let mut t_pitch = (t_oct - 1) * 12 + letter_sem + acc;
             while t_pitch < prev_pitch {
                 t_oct += 1;
@@ -318,18 +318,6 @@ fn stack_tones(
     }
 
     parts.join("/")
-}
-
-/// Floor division. Matches `Math.floor(a / b)` in JS for positive `b`.
-#[inline]
-fn div_floor(a: i32, b: i32) -> i32 {
-    let q = a / b;
-    let r = a % b;
-    if (r != 0) && ((r < 0) != (b < 0)) {
-        q - 1
-    } else {
-        q
-    }
 }
 
 /// Named chord, stacked bottom-up using `>` / `<` per branch. Pitch of each
@@ -694,17 +682,4 @@ mod tests {
         assert_eq!(accidental_char(None), "");
     }
 
-    // ----- div_floor sanity -------------------------------------------------
-
-    #[test]
-    fn div_floor_matches_math_floor() {
-        // Spot-check the corner-cases JS Math.floor handles for negative
-        // dividends, which Rust's `/` operator does not.
-        assert_eq!(div_floor(-1, 12), -1);
-        assert_eq!(div_floor(-12, 12), -1);
-        assert_eq!(div_floor(-13, 12), -2);
-        assert_eq!(div_floor(0, 12), 0);
-        assert_eq!(div_floor(11, 12), 0);
-        assert_eq!(div_floor(12, 12), 1);
-    }
 }

@@ -15,6 +15,9 @@ pub mod key_sig;
 pub mod text_scan;
 pub mod track_selector;
 
+#[cfg(test)]
+mod test_util;
+
 pub use chord::{
     accidental_char, chord_natural_semitones, render_chord, render_generic_chord,
     render_stacked_chord, render_stacked_generic_chord, ChordDef, ChordSize, RootAccidental,
