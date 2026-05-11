@@ -15,6 +15,7 @@ use tower_lsp::{
 
 use crate::backend::Backend;
 use crate::chord_completion::chord_completion_items;
+use crate::fill_measure::fill_measure_code_action;
 use crate::note_hover::note_hover_text;
 use crate::completion::{
     at_meta_completion_items, command_items, complete_pcm_paths, fm_instrument_context,
@@ -365,12 +366,13 @@ impl LanguageServer for Backend {
         let start = params.range.start;
         let mut actions = code_actions(&uri_str, start);
 
-        // Transpose actions need the live document text; the existing
-        // command-based actions in `code_actions` only need URI + start.
-        // Only offer them when the selection covers a non-empty range.
-        if params.range.start != params.range.end {
-            let doc_text = self.docs.read().await.get(&uri_str).cloned();
-            if let Some(text) = doc_text {
+        // Document-aware actions: transpose and fill-measure both
+        // need the live document text. Take a single snapshot for
+        // both rather than re-locking docs twice.
+        let doc_text = self.docs.read().await.get(&uri_str).cloned();
+        if let Some(text) = doc_text {
+            // Transpose only makes sense for a non-empty selection.
+            if params.range.start != params.range.end {
                 for direction in [Direction::Up, Direction::Down] {
                     if let Some(action) = transpose_code_action(
                         &params.text_document.uri,
@@ -381,6 +383,17 @@ impl LanguageServer for Backend {
                         actions.push(action);
                     }
                 }
+            }
+            // Fill-measure fires on the cursor position (range.start)
+            // regardless of selection width; the trigger condition
+            // is "cursor immediately after a `|` on a track line".
+            if let Some(action) = fill_measure_code_action(
+                &params.text_document.uri,
+                &text,
+                params.range.start.line,
+                params.range.start.character,
+            ) {
+                actions.push(action);
             }
         }
 
