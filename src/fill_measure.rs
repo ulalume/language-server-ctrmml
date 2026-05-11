@@ -1,51 +1,53 @@
-//! Fill-measure code action — Phase 3.2.3.
+//! Fill-measure code action — Phase 3.2.3 (full variant).
 //!
-//! When the cursor sits directly after a `|` bar marker on a track
-//! line, offer a code action that inserts one full measure of rests
-//! followed by another `|`. This is the common workflow of "I just
-//! finished a measure and want to start a new empty one".
+//! When the cursor sits on a track-content line, offer an "insert
+//! rests up to the next bar line" code action. The rest sequence is
+//! computed from the cursor's compiled playback tick (`ctrmml-cmd
+//! find-cursor-tick`) and the song's PPQN, so partial-measure fill
+//! works correctly — `o4 c4 d4 [cursor]` in 4/4 inserts the two
+//! quarter rests needed to reach the next bar line.
 //!
-//! A more powerful fill-from-cursor variant would need the cursor's
-//! compiled tick position (and the active ppqn) — neither is
-//! available today without a subprocess call to `ctrmml-cmd`. The
-//! restricted "right after `|`" trigger sidesteps that entirely: we
-//! know we're on a measure boundary, so the rest length is exactly
-//! one full measure.
+//! Cheap pre-checks run synchronously; the subprocess to `ctrmml-cmd`
+//! only fires when those pre-checks pass, so the typical
+//! cursor-in-header / cursor-in-FM-block case has zero subprocess
+//! cost.
 
 use std::collections::HashMap;
 
 use ctrmml_lang_core::{
     find_enclosing_track_selector, find_fm_block_at, find_psg_block_at,
     generate_measure_rests, is_after_bar_line, scan_time_signature,
-    track_selector::LineReader, LinesModel, TimeSignature, DEFAULT_TIME_SIGNATURE,
+    track_selector::LineReader, LinesModel, TimeSignature,
 };
+use serde::Deserialize;
 use tower_lsp::lsp_types::{
     CodeAction, CodeActionKind, Position, Range, TextEdit, Url, WorkspaceEdit,
 };
 
-/// ctrmml's standard PPQN. The `#ppqn` meta command can override this,
-/// but is rarely used in practice; if we ever need to honour an
-/// override we can scan the document for it the same way
-/// `scan_time_signature` walks the header.
-const DEFAULT_PPQN: u32 = 48;
+use crate::ctrmml_cmd::{output_message, run_ctrmml_cmd};
+use crate::utils::uri_to_path;
 
-/// Build the fill-measure code action for `(line, character)` on
-/// `doc_text`, or `None` when the trigger conditions aren't met.
+/// JSON payload from `ctrmml-cmd find-cursor-tick`.
+#[derive(Debug, Deserialize)]
+struct CursorTickResponse {
+    cursor_tick: i32,
+    ppqn: u32,
+}
+
+/// Cheap synchronous pre-check: returns `Some((line_content, after_bar))`
+/// when the cursor position is a candidate for fill-measure.
 ///
-/// Triggers only when **all** of the following hold:
-///
-/// - The cursor is at column ≥ 1 and the text before it ends
-///   (ignoring trailing whitespace) with `|`.
-/// - The cursor is inside an enclosing track selector.
-/// - The cursor is **not** inside an `@N fm` / `@N psg` block.
-/// - `scan_time_signature` returns `Some(...)` (i.e. measure lines
-///   aren't disabled via `#timesig no`).
-pub(crate) fn fill_measure_code_action(
-    uri: &Url,
-    doc_text: &str,
+/// `None` when:
+/// - Cursor is inside an `@N fm` / `@N psg` block (digit data, no
+///   rests applicable).
+/// - Cursor is outside any enclosing track selector (file header /
+///   meta region).
+/// - `#timesig no` is set (measure lines explicitly disabled).
+fn pre_check<'a>(
+    doc_text: &'a str,
     line_zero_based: u32,
     character: u32,
-) -> Option<CodeAction> {
+) -> Option<(TimeSignature, bool)> {
     let line = line_zero_based + 1;
     let col = character + 1;
     let model = LinesModel::from_text(doc_text);
@@ -59,21 +61,75 @@ pub(crate) fn fill_measure_code_action(
     if find_enclosing_track_selector(&model, line).is_none() {
         return None;
     }
+    let time_sig = scan_time_signature(doc_text)?;
 
     let line_content = model.get_line_content(line);
-    if !is_after_bar_line(line_content, col) {
+    let after_bar = is_after_bar_line(line_content, col);
+    Some((time_sig, after_bar))
+}
+
+/// Async entry point. Runs the pre-check, then spawns `ctrmml-cmd
+/// find-cursor-tick` to get the cursor's playback tick + song PPQN,
+/// and finally builds a `CodeAction` whose `WorkspaceEdit` inserts
+/// the fill text at the cursor.
+///
+/// Returns `None` for any pre-check failure or subprocess error
+/// (compilation failed, cursor doesn't map to a compiled event).
+pub(crate) async fn fill_measure_code_action(
+    cmd_path: &str,
+    uri: &Url,
+    doc_text: &str,
+    line_zero_based: u32,
+    character: u32,
+) -> Option<CodeAction> {
+    let (time_sig, after_bar) = pre_check(doc_text, line_zero_based, character)?;
+
+    // Spawn ctrmml-cmd to compute the cursor's compiled tick + ppqn.
+    // The CLI takes 0-based line/col (matching the WASM API), which
+    // is what we already have from LSP.
+    let path = uri_to_path(&uri.to_string());
+    let output = run_ctrmml_cmd(cmd_path, "find-cursor-tick", Some(doc_text), |cmd| {
+        cmd.arg("find-cursor-tick").arg("--stdin");
+        if let Some(p) = path.as_deref() {
+            cmd.arg("--path").arg(p);
+        }
+        cmd.arg("--line")
+            .arg(line_zero_based.to_string())
+            .arg("--col")
+            .arg(character.to_string());
+    })
+    .await
+    .ok()?;
+
+    if !output.status.success() {
+        // Compile failure or invalid input — silently skip rather
+        // than surfacing the error in the code-action menu.
+        let _ = output_message(&output);
         return None;
     }
 
-    let time_sig: TimeSignature = scan_time_signature(doc_text).unwrap_or(DEFAULT_TIME_SIGNATURE);
-    // cursor_tick = 0 modulo the measure (the `|` placed us on a
-    // boundary), after_bar_line = true asks for a full next measure.
-    let rests = generate_measure_rests(0, DEFAULT_PPQN, Some(time_sig), true);
-    if rests.is_empty() {
+    let response: CursorTickResponse = serde_json::from_slice(&output.stdout).ok()?;
+    if response.cursor_tick < 0 {
+        // The cursor doesn't map to any compiled event (e.g. inside
+        // a comment or an unreachable region).
         return None;
     }
-    // The conventional shape is "<rests> |" so the next bar marker is
-    // already in place for the user.
+
+    let rests = generate_measure_rests(
+        response.cursor_tick as u32,
+        response.ppqn,
+        Some(time_sig),
+        after_bar,
+    );
+    if rests.is_empty() {
+        // Already on a bar boundary and not "after-bar" — nothing to
+        // insert.
+        return None;
+    }
+
+    // Conventional shape: rests then a trailing `|` so the next bar
+    // marker is already in place. Same form for both the after-bar
+    // and mid-measure cases — only the action title differs.
     let insert_text = format!("{rests} |");
 
     let edit_position = Position {
@@ -90,11 +146,20 @@ pub(crate) fn fill_measure_code_action(
     let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
     changes.insert(uri.clone(), vec![text_edit]);
 
-    Some(CodeAction {
-        title: format!(
+    let title = if after_bar {
+        format!(
             "ctrmml: insert empty measure ({}/{})",
             time_sig.numerator, time_sig.denominator
-        ),
+        )
+    } else {
+        format!(
+            "ctrmml: fill measure with rests ({}/{})",
+            time_sig.numerator, time_sig.denominator
+        )
+    };
+
+    Some(CodeAction {
+        title,
         kind: Some(CodeActionKind::REFACTOR_REWRITE),
         edit: Some(WorkspaceEdit {
             changes: Some(changes),
@@ -109,67 +174,50 @@ pub(crate) fn fill_measure_code_action(
 mod tests {
     use super::*;
 
-    fn uri() -> Url {
-        Url::parse("file:///x.mml").unwrap()
-    }
+    // Pre-check tests don't need the subprocess so they live here.
+    // End-to-end tests with the subprocess require ctrmml-cmd on the
+    // host and live in integration tests / manual QA — they aren't
+    // hermetic enough to run on CI without the binary.
 
     #[test]
-    fn fires_after_bar_line_on_track_line() {
+    fn pre_check_passes_on_track_line() {
         let doc = "A o4 cdef |\n";
-        // cursor right after `|` (col 12, character 11 in 0-based)
-        let action = fill_measure_code_action(&uri(), doc, 0, 11).expect("action expected");
-        assert!(action.title.contains("4/4"));
-        let workspace_edit = action.edit.expect("workspace edit");
-        let edit = workspace_edit
-            .changes
-            .as_ref()
-            .and_then(|m| m.values().next())
-            .and_then(|edits| edits.first())
-            .expect("text edit");
-        assert_eq!(edit.new_text, "r1 |");
-        assert_eq!(edit.range.start, edit.range.end);
+        let (ts, after_bar) = pre_check(doc, 0, 11).expect("pre-check should pass");
+        assert_eq!(ts.numerator, 4);
+        assert_eq!(ts.denominator, 4);
+        assert!(after_bar);
     }
 
     #[test]
-    fn honours_explicit_time_signature() {
-        let doc = "#timesig 3/8\nA o4 cdef |\n";
-        let action = fill_measure_code_action(&uri(), doc, 1, 11).expect("action expected");
-        assert!(action.title.contains("3/8"));
-        let edit = action
-            .edit
-            .unwrap()
-            .changes
-            .unwrap()
-            .into_values()
-            .next()
-            .unwrap()
-            .pop()
-            .unwrap();
-        // 3/8 at ppqn=48 → 72 ticks per measure → "r4."
-        assert_eq!(edit.new_text, "r4. |");
-    }
-
-    #[test]
-    fn suppressed_when_no_bar_marker_before_cursor() {
+    fn pre_check_passes_mid_measure() {
         let doc = "A o4 cdef\n";
-        assert!(fill_measure_code_action(&uri(), doc, 0, 9).is_none());
+        let (_, after_bar) = pre_check(doc, 0, 9).expect("pre-check should pass");
+        assert!(!after_bar);
     }
 
     #[test]
-    fn suppressed_outside_track_selector() {
+    fn pre_check_rejects_outside_track() {
         let doc = "#title \"x\" |\n";
-        assert!(fill_measure_code_action(&uri(), doc, 0, 12).is_none());
+        assert!(pre_check(doc, 0, 12).is_none());
     }
 
     #[test]
-    fn suppressed_inside_fm_block() {
+    fn pre_check_rejects_inside_fm_block() {
         let doc = "A cdefg\n@1 fm\n\t31,0,12,7,0,28,0,0,5,0 |\n";
-        assert!(fill_measure_code_action(&uri(), doc, 2, 25).is_none());
+        assert!(pre_check(doc, 2, 25).is_none());
     }
 
     #[test]
-    fn suppressed_when_timesig_no() {
+    fn pre_check_rejects_timesig_no() {
         let doc = "#timesig no\nA cdef |\n";
-        assert!(fill_measure_code_action(&uri(), doc, 1, 7).is_none());
+        assert!(pre_check(doc, 1, 7).is_none());
+    }
+
+    #[test]
+    fn pre_check_picks_up_explicit_timesig() {
+        let doc = "#timesig 3/8\nA cdef |\n";
+        let (ts, _) = pre_check(doc, 1, 7).expect("pre-check should pass");
+        assert_eq!(ts.numerator, 3);
+        assert_eq!(ts.denominator, 8);
     }
 }

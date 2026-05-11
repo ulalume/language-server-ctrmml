@@ -384,16 +384,22 @@ impl LanguageServer for Backend {
                     }
                 }
             }
-            // Fill-measure fires on the cursor position (range.start)
-            // regardless of selection width; the trigger condition
-            // is "cursor immediately after a `|` on a track line".
-            if let Some(action) = fill_measure_code_action(
-                &params.text_document.uri,
-                &text,
-                params.range.start.line,
-                params.range.start.character,
-            ) {
-                actions.push(action);
+            // Fill-measure spawns a `ctrmml-cmd find-cursor-tick`
+            // subprocess to compute the cursor's playback tick;
+            // pre-checks inside the function gate that so the typical
+            // outside-track / inside-FM case skips the spawn.
+            if let Ok(cmd_path) = self.command_path().await {
+                if let Some(action) = fill_measure_code_action(
+                    &cmd_path,
+                    &params.text_document.uri,
+                    &text,
+                    params.range.start.line,
+                    params.range.start.character,
+                )
+                .await
+                {
+                    actions.push(action);
+                }
             }
         }
 
