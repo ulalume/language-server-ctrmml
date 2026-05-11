@@ -157,7 +157,7 @@ pub fn find_enclosing_track_selector_at(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::LinesModel;
+    use crate::string_model::LinesModel;
 
     // ---------- parse_leading_track_selector ---------------------------------
 

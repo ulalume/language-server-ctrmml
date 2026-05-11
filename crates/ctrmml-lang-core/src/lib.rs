@@ -17,13 +17,11 @@ pub mod chord;
 pub mod key_sig;
 pub mod octave_scan;
 pub mod psg_parser;
+pub mod string_model;
 pub mod text_scan;
 pub mod timesig;
 pub mod track_selector;
 pub mod transpose;
-
-#[cfg(test)]
-mod test_util;
 
 pub use chord::{
     accidental_char, chord_natural_semitones, render_chord, render_generic_chord,
@@ -31,7 +29,8 @@ pub use chord::{
     CHORDS_3, CHORDS_4, CHORD_LETTERS,
 };
 pub use key_sig::{default_key_sig, parse_key_sig, scale_for_name, scan_key_sig_at, KeySig};
-pub use octave_scan::{scan_channel_context_at, ChannelContext};
+pub use octave_scan::{scan_brace_state_at, scan_channel_context_at, ChannelContext};
+pub use string_model::LinesModel;
 pub use psg_parser::{
     compute_timeline, node_effective_length, node_start_frame, parse_psg_mml, serialize_psg_mml,
     total_duration, PsgEnvelope, PsgNode, TimePoint,

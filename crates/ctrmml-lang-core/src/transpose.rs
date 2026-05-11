@@ -678,7 +678,7 @@ fn parse_leading_u32(bytes: &[u8]) -> Option<(u32, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::LinesModel;
+    use crate::string_model::LinesModel;
 
     /// Apply `transpose_selection` to every occurrence of `[...]` in
     /// `input` in turn, returning the resulting text. The brackets mark

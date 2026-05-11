@@ -174,7 +174,7 @@ fn parse_leading_digits(bytes: &[u8]) -> Option<(i32, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::LinesModel;
+    use crate::string_model::LinesModel;
 
     /// Parse `"...|..."` where `|` marks the cursor, returning the
     /// stripped text plus 1-based (line, col).

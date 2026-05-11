@@ -267,7 +267,7 @@ fn collect_keysig_blocks(segment: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::LinesModel;
+    use crate::string_model::LinesModel;
 
     // ---------- scale_for_name -------------------------------------------------
 

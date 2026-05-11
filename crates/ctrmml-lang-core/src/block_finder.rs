@@ -269,7 +269,7 @@ pub fn find_psg_block_at(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::LinesModel;
+    use crate::string_model::LinesModel;
 
     // ---- match_header --------------------------------------------------------
 
