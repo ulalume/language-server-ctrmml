@@ -12,6 +12,7 @@
 
 pub mod chord;
 pub mod key_sig;
+pub mod text_scan;
 pub mod track_selector;
 
 pub use chord::{
@@ -20,6 +21,7 @@ pub use chord::{
     CHORDS_3, CHORDS_4, CHORD_LETTERS,
 };
 pub use key_sig::{default_key_sig, parse_key_sig, scale_for_name, scan_key_sig_at, KeySig};
+pub use text_scan::{is_in_comment, is_in_key_sig};
 pub use track_selector::{
     find_enclosing_track_selector, find_enclosing_track_selector_at,
     parse_leading_track_selector, LeadingTrackSelector, LeadingTrackSpan, LineReader,
