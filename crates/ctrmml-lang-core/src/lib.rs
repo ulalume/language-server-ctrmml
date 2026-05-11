@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod beat_fill;
 pub mod chord;
 pub mod key_sig;
 pub mod octave_scan;
@@ -28,6 +29,9 @@ pub use chord::{
 };
 pub use key_sig::{default_key_sig, parse_key_sig, scale_for_name, scan_key_sig_at, KeySig};
 pub use octave_scan::{scan_channel_context_at, ChannelContext};
+pub use beat_fill::{
+    generate_measure_rests, is_after_bar_line, measure_remainder_ticks, ticks_to_mml_rest,
+};
 pub use timesig::{
     parse_time_signature, scan_time_signature, TimeSignature, DEFAULT_TIME_SIGNATURE,
 };
