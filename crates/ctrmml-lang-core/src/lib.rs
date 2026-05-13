@@ -14,6 +14,7 @@ pub mod beat_fill;
 pub mod block_finder;
 pub mod brace_state;
 pub mod chord;
+pub mod docs;
 pub mod key_sig;
 pub mod octave_scan;
 pub mod psg_parser;

@@ -664,6 +664,16 @@ pub fn is_in_key_sig(line: &str, col: u32) -> bool {
     ctrmml_lang_core::is_in_key_sig(line, col as usize)
 }
 
+/// Return all completion / hover documentation tables as a single JSON
+/// blob. Entries have the shape `{ key, label, insert, detail, doc }`
+/// (string fields, empty when not applicable). See
+/// `ctrmml_lang_core::docs::AllDocs` for the full field list.
+#[wasm_bindgen]
+pub fn docs_json() -> String {
+    serde_json::to_string(&ctrmml_lang_core::docs::all_docs())
+        .expect("docs::all_docs serializes to JSON")
+}
+
 // ---------------------------------------------------------------------------
 // Native-target sanity tests
 // ---------------------------------------------------------------------------

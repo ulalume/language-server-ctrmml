@@ -25,15 +25,16 @@ pub(crate) fn meta_completion_items(
     docs::META_KEYWORDS
         .iter()
         .map(|kw| {
-            let insert = kw.strip_prefix('#').unwrap_or(kw);
-            let mut item = meta_item(kw);
+            let label = kw.label;
+            let insert = label.strip_prefix('#').unwrap_or(label);
+            let mut item = meta_item(label);
             let edit = tower_lsp::lsp_types::TextEdit {
                 range,
                 new_text: insert.to_string(),
             };
             item.text_edit = Some(tower_lsp::lsp_types::CompletionTextEdit::Edit(edit));
             item.insert_text = Some(insert.to_string());
-            item.filter_text = Some(kw.to_string());
+            item.filter_text = Some(label.to_string());
             item
         })
         .collect()
@@ -60,21 +61,21 @@ pub(crate) fn at_meta_completion_items(
 pub(crate) fn platform_items() -> Vec<CompletionItem> {
     docs::PLATFORM_VALUES
         .iter()
-        .map(|value| platform_item(value))
+        .map(|value| platform_item(value.label))
         .collect()
 }
 
 pub(crate) fn option_items() -> Vec<CompletionItem> {
     docs::OPTION_VALUES
         .iter()
-        .map(|value| option_item(value))
+        .map(|value| option_item(value.label))
         .collect()
 }
 
 pub(crate) fn instrument_items() -> Vec<CompletionItem> {
     docs::INSTRUMENT_TYPES
         .iter()
-        .map(|value| instrument_item(value))
+        .map(|value| instrument_item(value.label))
         .collect()
 }
 
