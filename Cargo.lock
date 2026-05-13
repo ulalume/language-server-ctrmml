@@ -195,18 +195,22 @@ dependencies = [
 [[package]]
 name = "ctrmml-lang-core"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "ctrmml-lang-wasm"
 version = "0.1.0"
 dependencies = [
  "ctrmml-lang-core",
+ "serde_json",
  "wasm-bindgen",
 ]
 
 [[package]]
 name = "ctrmml-lsp"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "ctrmml-lang-core",
  "dirs",
