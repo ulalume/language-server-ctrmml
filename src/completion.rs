@@ -224,13 +224,22 @@ pub(crate) fn fm_instrument_context(line: &str, col: usize) -> Option<FmCompleti
         return None;
     }
     let after_fm = &after_trimmed[2..];
-    if !after_fm.starts_with(' ') {
-        return None;
+    // Word-boundary check: `@1 fmx` shouldn't trigger FM file completion.
+    // Accept the cursor sitting immediately after `fm`, or after a
+    // whitespace separator; reject anything else.
+    if let Some(next) = after_fm.chars().next() {
+        if !next.is_whitespace() {
+            return None;
+        }
     }
 
     let gap = after_digits.len() - after_trimmed.len();
-    let fm_end_col = (leading_ws + 1 + digits_len + gap + 2 + 1) as u32;
-    let after_fm_space = &after_fm[1..];
+    // `fm_end_col` always points at the position right after `fm`
+    // (before any trailing space). Item builders prepend `" "` to the
+    // inserted patch body so the final layout reads `fm ; name`
+    // regardless of whether the user already typed the space.
+    let fm_end_col = (leading_ws + 1 + digits_len + gap + 2) as u32;
+    let after_fm_space = after_fm.trim_start();
 
     if let Some(slash_pos) = after_fm_space.find('/') {
         let file_key = after_fm_space[..slash_pos].to_string();
@@ -258,7 +267,17 @@ pub(crate) fn is_instrument_definition_context(line: &str, col: usize) -> bool {
         return false;
     }
     let after_digits = &rest[digits_len..];
-    after_digits == " "
+    if !after_digits.starts_with(' ') {
+        return false;
+    }
+    // Accept `@<N> `, `@<N> p`, `@<N> ps`, `@<N> psg`, `@<N> pcm`, …
+    // anywhere a known keyword shares the typed prefix. This keeps the
+    // dropdown alive while the user types the keyword, so vscode's
+    // client-side filter can do its work and an `is_incomplete: true`
+    // response can swap to FM-file picker when the user reaches `fm`.
+    let after_space = after_digits.trim_start();
+    let keywords = ["fm", "psg", "pcm", "2op"];
+    keywords.iter().any(|kw| kw.starts_with(after_space))
 }
 
 pub(crate) fn is_meta_keyword_context(line: &str, col: usize) -> bool {

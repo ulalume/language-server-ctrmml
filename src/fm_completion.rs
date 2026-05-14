@@ -326,7 +326,7 @@ fn build_flat_items(
                 },
                 text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                     range,
-                    new_text: p.mml.clone(),
+                    new_text: format!(" {}", p.mml),
                 })),
                 filter_text: Some(format!("{} {}", p.name, basename)),
                 sort_text: Some(p.name.clone()),
@@ -384,7 +384,7 @@ fn build_file_items(
                 },
                 text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                     range,
-                    new_text: single.mml.clone(),
+                    new_text: format!(" {}", single.mml),
                 })),
                 filter_text: Some(format!("{} {}", single.name, basename)),
                 sort_text: Some(basename.to_string()),
@@ -401,7 +401,7 @@ fn build_file_items(
                 kind: Some(CompletionItemKind::FILE),
                 text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                     range,
-                    new_text: format!("{basename}/"),
+                    new_text: format!(" {basename}/"),
                 })),
                 filter_text: Some(basename.to_string()),
                 sort_text: Some(basename.to_string()),
@@ -453,7 +453,7 @@ fn build_patch_items(
                 },
                 text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                     range,
-                    new_text: p.mml.clone(),
+                    new_text: format!(" {}", p.mml),
                 })),
                 filter_text: Some(format!("{}/{}", file_key, p.name)),
                 sort_text: Some(p.name.clone()),

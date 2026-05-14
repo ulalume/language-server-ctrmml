@@ -996,12 +996,11 @@ pub fn group_value_doc(label: &str) -> Option<&'static str> {
 }
 
 /// Snippet body for the "Default FM template" item the FM completer
-/// appends at the bottom of its file-suggestion list. The body starts
-/// with a `; name` comment so it lines up visually with patches that
-/// came from instrument files (which open with `; <patch name>` after
-/// the `@N fm` header).
+/// appends at the bottom of its file-suggestion list. Body starts with
+/// a leading space so it concatenates cleanly with the preceding `fm`
+/// keyword (`@N fm` + this snippet = `@N fm ; default …`).
 pub const FM_DEFAULT_TEMPLATE: &str =
-    "; ${1:default}\n; ALG FB\n    ${2:4}  ${3:0}\n;  AR  DR  SR  RR  SL  TL  KS  ML  DT SSG\n   ${4:31}   ${5:0}   ${6:0}   ${7:7}   ${8:0}   ${9:0}   ${10:0}   ${11:1}   ${12:0}   ${13:0}\n   ${14:31}   ${15:0}   ${16:0}   ${17:7}   ${18:0}   ${19:0}   ${20:0}   ${21:1}   ${22:0}   ${23:0}\n   ${24:31}   ${25:0}   ${26:0}   ${27:7}   ${28:0}   ${29:0}   ${30:0}   ${31:1}   ${32:0}   ${33:0}\n   ${34:31}   ${35:0}   ${36:0}   ${37:7}   ${38:0}   ${39:0}   ${40:0}   ${41:1}   ${42:0}   ${43:0}\n";
+    " ; ${1:default}\n; ALG  FB\n    ${2:3}   ${3:4}\n;  AR  DR  SR  RR  SL  TL  KS  ML  DT SSG\n   ${4:31}   ${5:0}   ${6:0}   ${7:5}   ${8:0}   ${9:48}   ${10:0}   ${11:1}   ${12:3}   ${13:0} ; OP1\n   ${14:31}   ${15:0}   ${16:0}   ${17:5}   ${18:0}   ${19:36}   ${20:0}   ${21:1}   ${22:3}   ${23:0} ; OP2\n   ${24:31}   ${25:0}   ${26:0}   ${27:5}   ${28:0}   ${29:24}   ${30:0}   ${31:1}   ${32:3}   ${33:0} ; OP3\n   ${34:31}   ${35:0}   ${36:0}   ${37:5}   ${38:0}   ${39:12}   ${40:0}   ${41:1}   ${42:4}   ${43:0} ; OP4\n";
 
 pub fn instrument_doc(label: &str) -> Option<&'static str> {
     lookup_doc(INSTRUMENT_TYPES, label)

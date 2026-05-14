@@ -315,7 +315,15 @@ impl LanguageServer for Backend {
         }
 
         if is_instrument_definition_context(&line, col) {
-            return Ok(Some(CompletionResponse::Array(instrument_items())));
+            // Mark incomplete so vscode re-queries when the user types
+            // a keyword character — once they reach `fm` we want the FM
+            // file picker to take over (fm_instrument_context runs first
+            // on the next query). Without this, vscode would keep
+            // filtering the cached keyword list locally.
+            return Ok(Some(CompletionResponse::List(CompletionList {
+                is_incomplete: true,
+                items: instrument_items(),
+            })));
         }
 
         if is_at_meta_context(&line, col) {

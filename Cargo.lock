@@ -211,7 +211,7 @@ dependencies = [
 
 [[package]]
 name = "ctrmml-lsp"
-version = "0.6.2"
+version = "0.6.3"
 dependencies = [
  "ctrmml-lang-core",
  "dirs",
