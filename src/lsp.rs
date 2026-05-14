@@ -27,7 +27,7 @@ use crate::completion::{
 };
 use crate::config::config_from_value;
 use crate::export::ExportFormat;
-use crate::hover::{fm_hover_text, hover_text, rate_offset_hover, two_op_hover_text};
+use ctrmml_lang_core::hover_at;
 use crate::lsp_commands::{
     code_actions, command_ids, transpose_code_action, CMD_EXPORT_VGM, CMD_EXPORT_WAV,
     CMD_MDSLINK_DIRECTORY, CMD_MDSLINK_FILE, CMD_MDSLINK_FROM_CONFIG, CMD_MDSLINK_MENU, CMD_PLAY,
@@ -148,51 +148,21 @@ impl LanguageServer for Backend {
             .cloned()
             .unwrap_or_default();
         let line = line_at(&text, position.line).unwrap_or_default();
-        let col = position.character as usize;
-        if is_in_comment(&line, col) {
-            return Ok(None);
-        }
 
-        if let Some(value) = two_op_hover_text(&text, position.line, col) {
+        // Generic hover (commands, key sigs, platform commands, FM/2op/PSG
+        // params, instrument definitions, …) lives in `ctrmml-lang-core` so
+        // web-ctrmml, vscode-ctrmml, and zed-ctrmml all share the same
+        // behaviour. It already short-circuits on comments.
+        if let Some(info) = hover_at(&text, position.line, position.character) {
             return Ok(Some(Hover {
                 contents: HoverContents::Markup(MarkupContent {
                     kind: MarkupKind::Markdown,
-                    value,
-                }),
-                range: None,
-            }));
-        }
-
-        if let Some(value) = fm_hover_text(&text, position.line, col) {
-            return Ok(Some(Hover {
-                contents: HoverContents::Markup(MarkupContent {
-                    kind: MarkupKind::Markdown,
-                    value,
-                }),
-                range: None,
-            }));
-        }
-
-        if let Some((value, start, end)) = rate_offset_hover(&line, col) {
-            return Ok(Some(Hover {
-                contents: HoverContents::Markup(MarkupContent {
-                    kind: MarkupKind::Markdown,
-                    value,
+                    value: info.markdown,
                 }),
                 range: Some(Range {
-                    start: Position::new(position.line, start as u32),
-                    end: Position::new(position.line, end as u32),
+                    start: Position::new(info.line, info.start),
+                    end: Position::new(info.line, info.end),
                 }),
-            }));
-        }
-
-        if let Some(value) = hover_text(&line, col) {
-            return Ok(Some(Hover {
-                contents: HoverContents::Markup(MarkupContent {
-                    kind: MarkupKind::Markdown,
-                    value,
-                }),
-                range: None,
             }));
         }
 

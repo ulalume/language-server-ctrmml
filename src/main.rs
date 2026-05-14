@@ -9,7 +9,6 @@ mod docs;
 mod export;
 mod fill_measure;
 mod fm_completion;
-mod hover;
 mod lsp;
 mod lsp_commands;
 mod mdslink;

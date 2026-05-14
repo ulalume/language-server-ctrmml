@@ -674,6 +674,36 @@ pub fn docs_json() -> String {
         .expect("docs::all_docs serializes to JSON")
 }
 
+/// Resolve a hover at `(line, col)` (zero-based) in `text`. Returns a JSON
+/// object `{ markdown, line, start, end }` (the column range is in byte
+/// offsets within the line, which equal char / UTF-16 offsets for ASCII
+/// MML), or the literal `"null"` when the cursor isn't on a documented
+/// construct.
+#[wasm_bindgen]
+pub fn hover_at_json(text: &str, line: u32, col: u32) -> String {
+    let wire = ctrmml_lang_core::hover_at(text, line, col).map(HoverInfoWire::from);
+    serde_json::to_string(&wire).expect("hover info serializes to JSON")
+}
+
+#[derive(serde::Serialize)]
+struct HoverInfoWire {
+    markdown: String,
+    line: u32,
+    start: u32,
+    end: u32,
+}
+
+impl From<ctrmml_lang_core::HoverInfo> for HoverInfoWire {
+    fn from(info: ctrmml_lang_core::HoverInfo) -> Self {
+        Self {
+            markdown: info.markdown,
+            line: info.line,
+            start: info.start,
+            end: info.end,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Native-target sanity tests
 // ---------------------------------------------------------------------------

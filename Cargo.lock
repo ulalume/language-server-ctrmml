@@ -204,6 +204,7 @@ name = "ctrmml-lang-wasm"
 version = "0.1.0"
 dependencies = [
  "ctrmml-lang-core",
+ "serde",
  "serde_json",
  "wasm-bindgen",
 ]

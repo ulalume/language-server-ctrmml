@@ -15,6 +15,7 @@ pub mod block_finder;
 pub mod brace_state;
 pub mod chord;
 pub mod docs;
+pub mod hover;
 pub mod key_sig;
 pub mod octave_scan;
 pub mod psg_parser;
@@ -46,6 +47,7 @@ pub use brace_state::BraceState;
 pub use timesig::{
     parse_time_signature, scan_time_signature, TimeSignature, DEFAULT_TIME_SIGNATURE,
 };
+pub use hover::{hover_at, HoverInfo};
 pub use text_scan::{is_in_comment, is_in_key_sig};
 pub use transpose::{transpose_selection, Direction, Selection, TransposeEdit};
 pub use track_selector::{

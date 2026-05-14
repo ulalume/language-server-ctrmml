@@ -246,25 +246,11 @@ pub const AT_META: &[DocEntry] = &[
         "Define an instrument table. Use this for FM, PSG, PCM, or 2op instruments. The body depends on the selected instrument type.",
     ),
     entry(
-        "@E<num>",
-        "@E<num>",
-        "E${1:num}",
-        "Envelope definition",
-        "Defines an envelope.",
-    ),
-    entry(
         "@M<num>",
         "@M<num>",
         "M${1:num}",
         "Pitch envelope",
         "Define a pitch envelope table. Use `M<num>` in a track to apply it; `M0` disables it.",
-    ),
-    entry(
-        "@P<num>",
-        "@P<num>",
-        "P${1:num}",
-        "Pan envelope",
-        "Defines a pan envelope.",
     ),
 ];
 
@@ -295,7 +281,7 @@ pub const COMMAND_COMPLETIONS: &[DocEntry] = &[
         "cdefgabh",
         "c",
         "Insert notes.",
-        "Insert notes. You can optionally add a duration after each note; otherwise the current `l` value is used.\n\nUse `+`, `-`, or `=` after the note letter to add a sharp, flat, or natural. In normal mode, `h` is the same pitch as `b` (B natural).\n\nExamples: `c4`, `f+8`, `b-16`, `h`, `c:12`.\n\nIn drum mode, `a`..`h` no longer mean pitches. They become 0..7 and call drum macro tracks from the current `D` base index.",
+        "Insert notes. You can optionally add a duration after each note; otherwise the current `l` value is used.\n\nUse `+`, `-`, or `=` after the note letter to add a sharp, flat, or natural. In normal mode, `h` is the same pitch as `b` (B natural).\n\nExamples: `c4`, `f+8`, `b-16`, `h`, `c:12`.\n\nIn drum mode, `a`..`h` no longer mean pitches. They become 0..7 and call drum macro tracks from the current `D` base index.\n\nA trailing `.` after a duration is a dotted note: it multiplies the duration by 1.5. Multiple dots stack (e.g. `c4..` is `c4` × 1.75).",
     ),
     entry(
         "r",
@@ -410,25 +396,11 @@ pub const COMMAND_COMPLETIONS: &[DocEntry] = &[
         "Set detune.",
     ),
     entry(
-        "E",
-        "E<0..255>",
-        "E${1:0..255}",
-        "Set envelope.",
-        "Set envelope. 0 to disable.",
-    ),
-    entry(
         "M",
         "M<0..255>",
         "M${1:0..255}",
         "Set pitch envelope.",
         "Set the pitch envelope number for this track. Use a table defined with `@M<num>`. `M0` disables the pitch envelope.",
-    ),
-    entry(
-        "P",
-        "P<0..255>",
-        "P${1:0..255}",
-        "Set pan envelope.",
-        "Set pan envelope or macro track. 0 to disable.",
     ),
     entry(
         "G",
@@ -1033,12 +1005,43 @@ pub fn command_doc(label: &str) -> Option<&'static str> {
     lookup_doc(COMMAND_COMPLETIONS, label)
 }
 
+/// Resolve a command entry, preferring the signed variant when `signed=true`.
+/// Several commands (`V`, `p`, `k`, `K`) ship two entries that share the same
+/// `key`: an unsigned form (`V<0..127>`) and a signed one (`V<-128..+127>`).
+/// When the call site saw an explicit `+/-` prefix on the operand it wants the
+/// signed variant.
+pub fn command_entry(key: &str, signed: bool) -> Option<(&'static str, &'static str)> {
+    let matches = COMMAND_COMPLETIONS.iter().filter(|e| e.key == key);
+    let mut first: Option<&DocEntry> = None;
+    let mut signed_match: Option<&DocEntry> = None;
+    for entry in matches {
+        if first.is_none() {
+            first = Some(entry);
+        }
+        if entry.label.contains("<-") {
+            signed_match = Some(entry);
+        }
+    }
+    let entry = if signed { signed_match.or(first) } else { first }?;
+    if entry.doc.is_empty() {
+        return None;
+    }
+    Some((entry.label, entry.doc))
+}
+
 pub fn at_meta_doc(label: &str) -> Option<&'static str> {
     lookup_doc_by_label(AT_META, label)
 }
 
 pub fn platform_command_doc(key: &str) -> Option<&'static str> {
     lookup_doc(PLATFORM_COMMANDS, key)
+}
+
+pub fn platform_command_label(key: &str) -> Option<&'static str> {
+    PLATFORM_COMMANDS
+        .iter()
+        .find(|e| e.key == key)
+        .map(|e| e.label)
 }
 
 pub fn fm_param_doc(key: &str) -> Option<(&'static str, &'static str)> {
