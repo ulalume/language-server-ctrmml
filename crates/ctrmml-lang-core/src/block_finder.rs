@@ -42,6 +42,7 @@ pub struct InstrumentBlock {
 pub enum InstrumentKind {
     Fm,
     Psg,
+    Pcm,
 }
 
 /// Single-line header match: returns `Some(instrument_number)` when the
@@ -72,6 +73,7 @@ fn match_header(line_trimmed: &str, kind: InstrumentKind) -> Option<u32> {
     let keyword: &[u8] = match kind {
         InstrumentKind::Fm => b"fm",
         InstrumentKind::Psg => b"psg",
+        InstrumentKind::Pcm => b"pcm",
     };
     let kbytes = trimmed_after.as_bytes();
     if kbytes.len() < keyword.len() {
@@ -262,7 +264,20 @@ pub fn find_psg_block_at(
         model,
         line_number,
         InstrumentKind::Psg,
-        &[InstrumentKind::Fm],
+        &[InstrumentKind::Fm, InstrumentKind::Pcm],
+    )
+}
+
+/// Find a PCM instrument block (`@N pcm`) at `line_number`.
+pub fn find_pcm_block_at(
+    model: &dyn LineReader,
+    line_number: u32,
+) -> Option<InstrumentBlock> {
+    find_block_at(
+        model,
+        line_number,
+        InstrumentKind::Pcm,
+        &[InstrumentKind::Fm, InstrumentKind::Psg],
     )
 }
 

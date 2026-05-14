@@ -28,12 +28,12 @@ use crate::completion::{
 };
 use crate::config::config_from_value;
 use crate::export::ExportFormat;
-use ctrmml_lang_core::{code_lens, hover_at};
+use ctrmml_lang_core::{build_preview_mml, code_lens, extract_instrument_block, hover_at, InstrumentType};
 use crate::lsp_commands::{
     code_actions, command_ids, transpose_code_action, CMD_EXPORT_VGM, CMD_EXPORT_WAV,
     CMD_MDSLINK_DIRECTORY, CMD_MDSLINK_FILE, CMD_MDSLINK_FROM_CONFIG, CMD_MDSLINK_MENU, CMD_PLAY,
-    CMD_PLAY_FROM_CURSOR, CMD_QUICKROM_DIRECTORY, CMD_QUICKROM_FILE, CMD_QUICKROM_FROM_CONFIG,
-    CMD_QUICKROM_MENU, CMD_STOP,
+    CMD_PLAY_FROM_CURSOR, CMD_PREVIEW_PATCH, CMD_QUICKROM_DIRECTORY, CMD_QUICKROM_FILE,
+    CMD_QUICKROM_FROM_CONFIG, CMD_QUICKROM_MENU, CMD_STOP,
 };
 use ctrmml_lang_core::transpose::Direction;
 use crate::mdslink::MdslinkRunResult;
@@ -615,6 +615,67 @@ impl LanguageServer for Backend {
                 .await
                 {
                     run_quickrom_command(self, command, uri).await;
+                }
+            }
+            CMD_PREVIEW_PATCH => {
+                // Args from the code-lens dispatch in `ctrmml-lang-core`:
+                //   [uri, line_str, type, channel, instrument_number_str]
+                // The LSP layer prepended the uri before forwarding; the
+                // lang-core side keeps the line as a string in LSP wire
+                // form (zero-based).
+                let uri = match self.resolve_uri_arg(&args).await {
+                    Ok(uri) => uri,
+                    Err(err) => {
+                        let _ = self.client.show_message(MessageType::ERROR, err).await;
+                        return Ok(None);
+                    }
+                };
+                // lang-core emits the line as a string; vscode-ctrmml may
+                // forward it as a number once it grows its own typed
+                // wrapper. Accept either shape.
+                let line = args
+                    .get(1)
+                    .and_then(|v| {
+                        v.as_u64()
+                            .or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))
+                    })
+                    .unwrap_or(0) as u32;
+                let type_str = args.get(2).and_then(|v| v.as_str()).unwrap_or("");
+                let channel = args.get(3).and_then(|v| v.as_str()).unwrap_or("");
+                let ty = match InstrumentType::parse(type_str) {
+                    Some(ty) => ty,
+                    None => {
+                        let _ = self
+                            .client
+                            .show_message(
+                                MessageType::ERROR,
+                                format!("previewPatch: unknown instrument type `{type_str}`"),
+                            )
+                            .await;
+                        return Ok(None);
+                    }
+                };
+                let doc_text = self.docs.read().await.get(&uri).cloned();
+                let Some(doc_text) = doc_text else {
+                    let _ = self
+                        .client
+                        .show_message(MessageType::ERROR, "previewPatch: document not in cache")
+                        .await;
+                    return Ok(None);
+                };
+                let Some(block) = extract_instrument_block(&doc_text, line, ty) else {
+                    let _ = self
+                        .client
+                        .show_message(
+                            MessageType::ERROR,
+                            format!("previewPatch: no @N {type_str} block at line {line}"),
+                        )
+                        .await;
+                    return Ok(None);
+                };
+                let preview = build_preview_mml(&doc_text, &block, channel);
+                if let Err(err) = self.start_playback_with_text(uri, preview, None).await {
+                    let _ = self.client.show_message(MessageType::ERROR, err).await;
                 }
             }
             _ => {}

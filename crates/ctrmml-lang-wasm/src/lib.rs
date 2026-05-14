@@ -713,6 +713,36 @@ pub fn code_lens_json(text: &str) -> String {
         .expect("code lens entries serialize to JSON")
 }
 
+/// Extract the `@N <type>` instrument block that covers `anchor_line`
+/// (0-based). `instrument_type` must be one of `"fm"` / `"psg"` /
+/// `"pcm"`. Returns a JSON object `{ instrument_number, instrument_type,
+/// mml_text, start_line, end_line }` or `"null"`.
+#[wasm_bindgen]
+pub fn extract_instrument_block_json(
+    text: &str,
+    anchor_line: u32,
+    instrument_type: &str,
+) -> String {
+    let ty = match ctrmml_lang_core::InstrumentType::parse(instrument_type) {
+        Some(ty) => ty,
+        None => return "null".to_string(),
+    };
+    let block = ctrmml_lang_core::extract_instrument_block(text, anchor_line, ty);
+    serde_json::to_string(&block).expect("block serializes to JSON")
+}
+
+/// Build a self-contained preview MML for `block` playing on `channel`.
+/// `block_json` is the JSON shape returned by
+/// `extract_instrument_block_json`.
+#[wasm_bindgen]
+pub fn build_preview_mml(text: &str, block_json: &str, channel: &str) -> String {
+    let block: ctrmml_lang_core::ExtractedBlock = match serde_json::from_str(block_json) {
+        Ok(b) => b,
+        Err(_) => return String::new(),
+    };
+    ctrmml_lang_core::build_preview_mml(text, &block, channel)
+}
+
 // ---------------------------------------------------------------------------
 // Native-target sanity tests
 // ---------------------------------------------------------------------------

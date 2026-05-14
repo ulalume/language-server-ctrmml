@@ -27,6 +27,11 @@ pub(crate) const CMD_QUICKROM_FILE: &str = "ctrmml.quickromFile";
 pub(crate) const CMD_QUICKROM_DIRECTORY: &str = "ctrmml.quickromDirectory";
 pub(crate) const CMD_QUICKROM_FROM_CONFIG: &str = "ctrmml.quickromFromConfig";
 pub(crate) const CMD_QUICKROM_MENU: &str = "ctrmml.quickromMenu";
+/// Code-lens preview command. The web editor wires the lens chip to the
+/// `mml.` namespace; vscode-ctrmml / zed-ctrmml forward clicks to the
+/// LSP which builds a preview MML from the selected `@N <type>` block
+/// and plays it via the existing playback infrastructure.
+pub(crate) const CMD_PREVIEW_PATCH: &str = "mml.previewPatch";
 
 pub(crate) const COMMANDS: &[CommandDef] = &[
     CommandDef {
@@ -80,6 +85,10 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
     CommandDef {
         id: CMD_QUICKROM_MENU,
         title: "ctrmml: quickrom...",
+    },
+    CommandDef {
+        id: CMD_PREVIEW_PATCH,
+        title: "ctrmml: preview instrument patch",
     },
 ];
 

@@ -17,6 +17,7 @@ pub mod chord;
 pub mod code_lens;
 pub mod docs;
 pub mod hover;
+pub mod instrument_preview;
 pub mod key_sig;
 pub mod octave_scan;
 pub mod psg_parser;
@@ -50,6 +51,9 @@ pub use timesig::{
 };
 pub use code_lens::{code_lens, CodeLens};
 pub use hover::{hover_at, HoverInfo};
+pub use instrument_preview::{
+    build_preview_mml, extract_instrument_block, ExtractedBlock, InstrumentType,
+};
 pub use text_scan::{is_in_comment, is_in_key_sig};
 pub use transpose::{transpose_selection, Direction, Selection, TransposeEdit};
 pub use track_selector::{

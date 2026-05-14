@@ -20,17 +20,30 @@ impl Backend {
         uri: String,
         start: Option<(u32, u32)>,
     ) -> std::result::Result<(), String> {
-        self.stop_playback().await;
-
-        let cmd_path = self.command_path().await?;
         let text = self
             .docs
             .read()
             .await
             .get(&uri)
             .cloned()
-            .or_else(|| read_file_text(&uri));
-        let text = text.ok_or_else(|| "failed to read mml text".to_string())?;
+            .or_else(|| read_file_text(&uri))
+            .ok_or_else(|| "failed to read mml text".to_string())?;
+        self.start_playback_with_text(uri, text, start).await
+    }
+
+    /// Same as [`start_playback`], but uses a caller-supplied MML body
+    /// instead of fetching the document text by URI. Used for the
+    /// `mml.previewPatch` code-lens command, which wants to play a
+    /// synthesized preview MML rather than the document on disk.
+    pub(crate) async fn start_playback_with_text(
+        &self,
+        uri: String,
+        text: String,
+        start: Option<(u32, u32)>,
+    ) -> std::result::Result<(), String> {
+        self.stop_playback().await;
+
+        let cmd_path = self.command_path().await?;
         let path = uri_to_path(&uri).ok_or_else(|| "invalid file uri".to_string())?;
         let mut child = spawn_ctrmml_cmd(&cmd_path, "play", &text, |cmd| {
             cmd.arg("play")
