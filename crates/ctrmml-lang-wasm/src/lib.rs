@@ -704,6 +704,15 @@ impl From<ctrmml_lang_core::HoverInfo> for HoverInfoWire {
     }
 }
 
+/// Enumerate code-lens entries for `text` as a JSON array. Each entry is
+/// `{ line, title, command_id, arguments }` where `command_id` is `null`
+/// for informational labels.
+#[wasm_bindgen]
+pub fn code_lens_json(text: &str) -> String {
+    serde_json::to_string(&ctrmml_lang_core::code_lens(text))
+        .expect("code lens entries serialize to JSON")
+}
+
 // ---------------------------------------------------------------------------
 // Native-target sanity tests
 // ---------------------------------------------------------------------------

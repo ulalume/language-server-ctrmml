@@ -2,7 +2,8 @@ use serde_json::Value;
 use tower_lsp::{
     jsonrpc::Result,
     lsp_types::{
-        CodeActionOrCommand, CodeActionParams, CodeActionProviderCapability, CompletionList,
+        CodeActionOrCommand, CodeActionParams, CodeActionProviderCapability, CodeLens,
+        CodeLensOptions, CodeLensParams, Command, CompletionList,
         CompletionOptions, CompletionParams, CompletionResponse, DidSaveTextDocumentParams,
         ExecuteCommandOptions,
         ExecuteCommandParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
@@ -27,7 +28,7 @@ use crate::completion::{
 };
 use crate::config::config_from_value;
 use crate::export::ExportFormat;
-use ctrmml_lang_core::hover_at;
+use ctrmml_lang_core::{code_lens, hover_at};
 use crate::lsp_commands::{
     code_actions, command_ids, transpose_code_action, CMD_EXPORT_VGM, CMD_EXPORT_WAV,
     CMD_MDSLINK_DIRECTORY, CMD_MDSLINK_FILE, CMD_MDSLINK_FROM_CONFIG, CMD_MDSLINK_MENU, CMD_PLAY,
@@ -105,6 +106,7 @@ impl LanguageServer for Backend {
                     ..ExecuteCommandOptions::default()
                 }),
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+                code_lens_provider: Some(CodeLensOptions { resolve_provider: Some(false) }),
                 ..ServerCapabilities::default()
             },
             ..InitializeResult::default()
@@ -331,6 +333,52 @@ impl LanguageServer for Backend {
             is_incomplete: true,
             items: command_items(),
         })))
+    }
+
+    async fn code_lens(&self, params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
+        let uri = params.text_document.uri.to_string();
+        if !is_mml_uri(&uri) {
+            return Ok(None);
+        }
+        let text = self
+            .docs
+            .read()
+            .await
+            .get(&uri)
+            .cloned()
+            .unwrap_or_default();
+        let mut out = Vec::new();
+        for lens in code_lens(&text) {
+            // The lens's anchor span is the entire line; clients are free
+            // to position the chip however they like.
+            let line = lens.line;
+            let range = Range {
+                start: Position::new(line, 0),
+                end: Position::new(line, 0),
+            };
+            let command = lens.command_id.map(|id| {
+                // Prepend the document URI so client-side command handlers
+                // know which file to operate on without extra context.
+                let mut args: Vec<Value> = Vec::with_capacity(lens.arguments.len() + 1);
+                args.push(Value::String(uri.clone()));
+                args.extend(lens.arguments.into_iter().map(Value::String));
+                Command {
+                    title: lens.title.clone(),
+                    command: id,
+                    arguments: Some(args),
+                }
+            });
+            out.push(CodeLens {
+                range,
+                command: command.or(Some(Command {
+                    title: lens.title,
+                    command: String::new(),
+                    arguments: None,
+                })),
+                data: None,
+            });
+        }
+        Ok(Some(out))
     }
 
     async fn code_action(
