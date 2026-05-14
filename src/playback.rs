@@ -2,6 +2,7 @@ use std::process::Stdio;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, Command as TokioCommand};
+use tokio::sync::watch;
 use tower_lsp::lsp_types::Diagnostic;
 
 use crate::backend::Backend;
@@ -13,13 +14,14 @@ use crate::utils::{read_file_text, uri_to_path};
 ///
 /// `hot_reload` distinguishes the main document playback (where
 /// `did_change` notifications should be forwarded to the running
-/// renderer) from preview playback (a synthesized MML that the user
-/// can't edit live). When `hot_reload` is true, `stdin` stays open and
-/// holds the writable end of ctrmml-cmd's framing protocol.
+/// renderer) from preview playback (a synthesized MML the user can't
+/// edit live). When hot-reload is on, `update_tx` is the latest-wins
+/// channel feeding a dedicated writer task that owns the child's
+/// stdin pipe.
 pub(crate) struct Playback {
     pub(crate) uri: String,
     pub(crate) child: tokio::process::Child,
-    pub(crate) stdin: Option<ChildStdin>,
+    pub(crate) update_tx: Option<watch::Sender<Option<String>>>,
     pub(crate) hot_reload: bool,
 }
 
@@ -92,10 +94,33 @@ impl Backend {
             .ok_or_else(|| format!("failed to capture {CTRMML_CMD_NAME} stdin"))?;
         write_initial(&mut stdin, &text, hot_reload).await?;
 
-        // For non-hot-reload runs the child wants EOF on stdin so it can
-        // proceed past the read; for hot-reload runs we hold the pipe
-        // open so later did_change events can land more frames.
-        let stdin_holder = if hot_reload { Some(stdin) } else { None };
+        // Hot-reload: spawn a dedicated writer task fed by a latest-wins
+        // `watch` channel. `did_change` only does an O(1) `Sender::send`,
+        // never blocks on the pipe, and many fast keystrokes naturally
+        // coalesce into one write (the writer sees only the latest body
+        // after each turn).
+        //
+        // Non-hot-reload: the child wants EOF on stdin so it can proceed
+        // past its initial-read; let `stdin` drop here.
+        let update_tx = if hot_reload {
+            let (tx, mut rx) = watch::channel::<Option<String>>(None);
+            tokio::spawn(async move {
+                while rx.changed().await.is_ok() {
+                    let body = rx.borrow_and_update().clone();
+                    if let Some(text) = body {
+                        if let Err(err) = write_update_frame(&mut stdin, &text).await {
+                            eprintln!("ctrmml-lsp: hot-reload write failed: {err}");
+                            break;
+                        }
+                    }
+                }
+                // Drop stdin on exit so ctrmml-cmd's reader thread sees EOF.
+            });
+            Some(tx)
+        } else {
+            drop(stdin);
+            None
+        };
 
         let stdout = child
             .stdout
@@ -113,7 +138,7 @@ impl Backend {
             *slot = Some(Playback {
                 uri: uri.clone(),
                 child,
-                stdin: stdin_holder,
+                update_tx,
                 hot_reload,
             });
         }
@@ -159,31 +184,20 @@ impl Backend {
         Ok(())
     }
 
-    /// Push an updated MML body to a running playback. No-op when no
-    /// playback is active, when the active session was started without
-    /// hot-reload (e.g. preview), or when the URI doesn't match the
-    /// one being played. Errors are swallowed so a transient pipe
-    /// write failure doesn't cascade into the LSP request handler — the
-    /// next did_change will retry, or the user can hit Stop.
+    /// Push an updated MML body to a running playback. O(1) — replaces
+    /// any pending body that hasn't reached the pipe yet so fast typing
+    /// doesn't queue stale frames. No-op for non-hot-reload sessions
+    /// (e.g. preview) or when the URI doesn't match.
     pub(crate) async fn push_playback_update(&self, uri: &str, text: &str) {
-        let mut slot = self.playback.lock().await;
-        let playback = match slot.as_mut() {
-            Some(p) => p,
-            None => return,
-        };
+        let slot = self.playback.lock().await;
+        let Some(playback) = slot.as_ref() else { return };
         if !playback.hot_reload || playback.uri != uri {
             return;
         }
-        let stdin = match playback.stdin.as_mut() {
-            Some(s) => s,
-            None => return,
-        };
-        if let Err(err) = write_update_frame(stdin, text).await {
-            eprintln!("ctrmml-lsp: hot-reload write failed: {err}");
-            // Drop the stdin handle so subsequent didChange events stop
-            // hammering a dead pipe; ctrmml-cmd will keep playing the
-            // last good version until the user hits Stop.
-            playback.stdin = None;
+        if let Some(tx) = playback.update_tx.as_ref() {
+            // A send error means the writer task exited (write failure
+            // earlier); subsequent edits silently no-op until Stop+Play.
+            let _ = tx.send(Some(text.to_string()));
         }
     }
 
@@ -194,9 +208,10 @@ impl Backend {
         }
         let mut slot = self.playback.lock().await;
         if let Some(mut playback) = slot.take() {
-            // Close stdin first — ctrmml-cmd's reader thread will see EOF
-            // and clean up before we send SIGKILL.
-            drop(playback.stdin.take());
+            // Drop the watch sender first so the writer task exits and
+            // releases stdin; ctrmml-cmd's reader thread sees EOF before
+            // we send SIGKILL.
+            drop(playback.update_tx.take());
             let _ = playback.child.kill().await;
             if let Ok(uri) = playback.uri.parse() {
                 let _ = self.client.publish_diagnostics(uri, Vec::new(), None).await;
