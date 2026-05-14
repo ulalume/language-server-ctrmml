@@ -743,6 +743,19 @@ pub fn build_preview_mml(text: &str, block_json: &str, channel: &str) -> String 
     ctrmml_lang_core::build_preview_mml(text, &block, channel)
 }
 
+/// Decide whether the keystroke at `(line, col)` (zero-based) typing
+/// `typed_char` should trigger a note preview. Returns a JSON object
+/// `{ midi, pulse_start, pulse_end, tempo, length, quantize, volume,
+/// noise_mode }` on hit, or `"null"` when no preview should fire.
+#[wasm_bindgen]
+pub fn preview_note_at_json(text: &str, line: u32, col: u32, typed_char: &str) -> String {
+    let Some(typed) = typed_char.chars().next() else {
+        return "null".to_string();
+    };
+    let hit = ctrmml_lang_core::preview_note_at(text, line, col, typed);
+    serde_json::to_string(&hit).expect("preview note serializes to JSON")
+}
+
 // ---------------------------------------------------------------------------
 // Native-target sanity tests
 // ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ pub mod hover;
 pub mod instrument_preview;
 pub mod key_sig;
 pub mod octave_scan;
+pub mod preview_note;
 pub mod psg_parser;
 pub mod string_model;
 pub mod text_scan;
@@ -54,6 +55,7 @@ pub use hover::{hover_at, HoverInfo};
 pub use instrument_preview::{
     build_preview_mml, extract_instrument_block, ExtractedBlock, InstrumentType,
 };
+pub use preview_note::{preview_note_at, PreviewNoteHit};
 pub use text_scan::{is_in_comment, is_in_key_sig};
 pub use transpose::{transpose_selection, Direction, Selection, TransposeEdit};
 pub use track_selector::{
