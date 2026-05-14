@@ -32,6 +32,9 @@ pub(crate) const CMD_QUICKROM_MENU: &str = "ctrmml.quickromMenu";
 /// LSP which builds a preview MML from the selected `@N <type>` block
 /// and plays it via the existing playback infrastructure.
 pub(crate) const CMD_PREVIEW_PATCH: &str = "mml.previewPatch";
+/// Code-lens save command — converts the `@N fm` block to a patch
+/// file format (DMP / INS / TFI / …) via `ym2612_convert`.
+pub(crate) const CMD_SAVE_PATCH: &str = "mml.savePatch";
 
 pub(crate) const COMMANDS: &[CommandDef] = &[
     CommandDef {
@@ -89,6 +92,10 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
     CommandDef {
         id: CMD_PREVIEW_PATCH,
         title: "ctrmml: preview instrument patch",
+    },
+    CommandDef {
+        id: CMD_SAVE_PATCH,
+        title: "ctrmml: save instrument patch",
     },
 ];
 

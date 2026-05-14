@@ -101,6 +101,56 @@ where
         .map_err(|e| format!("failed to run ym2612_convert {context}: {e}"))
 }
 
+/// Write `mml_text` to a temp `.mml` file and invoke
+/// `ym2612_convert convert <tmp> -o <target> [-f <format>]`.
+///
+/// `format_override` is the bare format name (`dmp`, `ins`, `tfi`, …).
+/// Pass `None` to let ym2612_convert infer the format from the target
+/// path's extension. The temp file is unconditionally cleaned up on
+/// return (success or failure).
+pub(crate) async fn convert_mml_to_file(
+    cmd_path: &str,
+    mml_text: &str,
+    target_path: &Path,
+    format_override: Option<&str>,
+) -> std::result::Result<(), String> {
+    let temp_dir = env::temp_dir();
+    let pid = std::process::id();
+    let ts = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp = temp_dir.join(format!("ctrmml-savepatch-{pid}-{ts}.mml"));
+    fs::write(&tmp, mml_text).map_err(|e| format!("failed to write temp mml: {e}"))?;
+
+    let tmp_arg = tmp.clone();
+    let target = target_path.to_owned();
+    let fmt = format_override.map(|s| s.to_string());
+    let result = run_ym2612_convert(cmd_path, "convert", move |cmd: &mut TokioCommand| {
+        cmd.arg("convert").arg(&tmp_arg).arg("-o").arg(&target);
+        if let Some(f) = fmt {
+            cmd.arg("-f").arg(f);
+        }
+    })
+    .await;
+    let _ = fs::remove_file(&tmp);
+
+    let output = result?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let detail = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        format!("exit {}", output.status)
+    };
+    Err(format!("ym2612_convert failed: {detail}"))
+}
+
 fn which_in_path(cmd: &str) -> Option<String> {
     let path_var = env::var_os("PATH")?;
     for entry in env::split_paths(&path_var) {

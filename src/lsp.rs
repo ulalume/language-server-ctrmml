@@ -33,8 +33,9 @@ use crate::lsp_commands::{
     code_actions, command_ids, transpose_code_action, CMD_EXPORT_VGM, CMD_EXPORT_WAV,
     CMD_MDSLINK_DIRECTORY, CMD_MDSLINK_FILE, CMD_MDSLINK_FROM_CONFIG, CMD_MDSLINK_MENU, CMD_PLAY,
     CMD_PLAY_FROM_CURSOR, CMD_PREVIEW_PATCH, CMD_QUICKROM_DIRECTORY, CMD_QUICKROM_FILE,
-    CMD_QUICKROM_FROM_CONFIG, CMD_QUICKROM_MENU, CMD_STOP,
+    CMD_QUICKROM_FROM_CONFIG, CMD_QUICKROM_MENU, CMD_SAVE_PATCH, CMD_STOP,
 };
+use crate::ym2612_convert::convert_mml_to_file;
 use ctrmml_lang_core::transpose::Direction;
 use crate::mdslink::MdslinkRunResult;
 use crate::mml::{is_in_comment, token_at};
@@ -676,6 +677,91 @@ impl LanguageServer for Backend {
                 let preview = build_preview_mml(&doc_text, &block, channel);
                 if let Err(err) = self.start_playback_with_text(uri, preview, None).await {
                     let _ = self.client.show_message(MessageType::ERROR, err).await;
+                }
+            }
+            CMD_SAVE_PATCH => {
+                // Args: [uri, line, type, target_path, format?]. The client
+                // shows the save dialog so it knows where the user wants
+                // the patch to land; the LSP then runs the conversion.
+                let uri = match self.resolve_uri_arg(&args).await {
+                    Ok(uri) => uri,
+                    Err(err) => {
+                        let _ = self.client.show_message(MessageType::ERROR, err).await;
+                        return Ok(None);
+                    }
+                };
+                let line = args
+                    .get(1)
+                    .and_then(|v| {
+                        v.as_u64()
+                            .or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))
+                    })
+                    .unwrap_or(0) as u32;
+                let type_str = args.get(2).and_then(|v| v.as_str()).unwrap_or("");
+                let target_str = args.get(3).and_then(|v| v.as_str()).unwrap_or("");
+                let format_override = args.get(4).and_then(|v| v.as_str());
+                if target_str.is_empty() {
+                    let _ = self
+                        .client
+                        .show_message(MessageType::ERROR, "savePatch: missing target path")
+                        .await;
+                    return Ok(None);
+                }
+                let ty = match InstrumentType::parse(type_str) {
+                    Some(ty) => ty,
+                    None => {
+                        let _ = self
+                            .client
+                            .show_message(
+                                MessageType::ERROR,
+                                format!("savePatch: unknown instrument type `{type_str}`"),
+                            )
+                            .await;
+                        return Ok(None);
+                    }
+                };
+                let doc_text = self.docs.read().await.get(&uri).cloned();
+                let Some(doc_text) = doc_text else {
+                    let _ = self
+                        .client
+                        .show_message(MessageType::ERROR, "savePatch: document not in cache")
+                        .await;
+                    return Ok(None);
+                };
+                let Some(block) = extract_instrument_block(&doc_text, line, ty) else {
+                    let _ = self
+                        .client
+                        .show_message(
+                            MessageType::ERROR,
+                            format!("savePatch: no @N {type_str} block at line {line}"),
+                        )
+                        .await;
+                    return Ok(None);
+                };
+                let cmd_path = match self.ym2612_convert_path().await {
+                    Ok(p) => p,
+                    Err(err) => {
+                        let _ = self.client.show_message(MessageType::ERROR, err).await;
+                        return Ok(None);
+                    }
+                };
+                let target = std::path::PathBuf::from(target_str);
+                match convert_mml_to_file(&cmd_path, &block.mml_text, &target, format_override)
+                    .await
+                {
+                    Ok(()) => {
+                        let display = target_str
+                            .rsplit(std::path::MAIN_SEPARATOR)
+                            .next()
+                            .unwrap_or(target_str);
+                        let _ = self
+                            .client
+                            .show_message(MessageType::INFO, format!("saved {display}"))
+                            .await;
+                    }
+                    Err(err) => {
+                        let _ = self.client.show_message(MessageType::ERROR, err).await;
+                    }
                 }
             }
             _ => {}
