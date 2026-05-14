@@ -89,14 +89,14 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         id: CMD_QUICKROM_MENU,
         title: "ctrmml: quickrom...",
     },
-    CommandDef {
-        id: CMD_PREVIEW_PATCH,
-        title: "ctrmml: preview instrument patch",
-    },
-    CommandDef {
-        id: CMD_SAVE_PATCH,
-        title: "ctrmml: save instrument patch",
-    },
+    // `mml.previewPatch` / `mml.savePatch` are not in this list on
+    // purpose. vscode-languageclient auto-registers a forwarder for
+    // every advertised command, which collides with the client-side
+    // handlers vscode-ctrmml installs (file dialogs, completion
+    // trigger) — and the synchronous throw on duplicate registration
+    // prevents the other lens commands from registering at all.
+    // The server still handles them via `execute_command` because the
+    // match is by name, not by capability.
 ];
 
 pub(crate) fn command_ids() -> Vec<String> {
