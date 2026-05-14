@@ -1073,6 +1073,12 @@ pub fn two_op_param_doc(index: usize) -> Option<(&'static str, &'static str)> {
         .map(|entry| (entry.label, entry.doc))
 }
 
+/// Title shown at the top of every track-selector hover bubble and the
+/// "Tracks" entry in the Help Panel. Decoupled from the actual letter
+/// the user is typing so the hover doesn't read `A — Select tracks…`
+/// — it lines up with the Help Panel's wording instead.
+pub const TRACK_HELP_LABEL: &str = "A..Z / *<num>";
+
 pub const TRACK_DOC_NUMERIC: &str = "Select track by number.\n\n\
 `A`..`Z` are shorthand for `*0`..`*25`.\n\n\
 On Mega Drive, `*0`..`*15` are the channel/dummy tracks.\n\
@@ -1123,6 +1129,7 @@ pub struct AllDocs {
     pub platform_commands: &'static [DocEntry],
     pub fm_params: &'static [DocEntry],
     pub two_op_params: &'static [DocEntry],
+    pub track_help_label: &'static str,
     pub track_doc_numeric: &'static str,
     pub track_doc_letters: &'static str,
     pub fm_default_template: &'static str,
@@ -1146,6 +1153,7 @@ pub fn all_docs() -> AllDocs {
         platform_commands: PLATFORM_COMMANDS,
         fm_params: FM_PARAM_DOCS,
         two_op_params: TWO_OP_PARAM_DOCS,
+        track_help_label: TRACK_HELP_LABEL,
         track_doc_numeric: TRACK_DOC_NUMERIC,
         track_doc_letters: TRACK_DOC_LETTERS,
         fm_default_template: FM_DEFAULT_TEMPLATE,

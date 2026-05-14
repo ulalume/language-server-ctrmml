@@ -70,7 +70,7 @@ pub fn hover_at(text: &str, line: u32, col: u32) -> Option<HoverInfo> {
             if let Some(doc) = docs::track_doc(tok.token) {
                 return Some(
                     Hit {
-                        markdown: format_hover(tok.token, doc),
+                        markdown: format_hover(docs::TRACK_HELP_LABEL, doc),
                         start: tok.start,
                         end: tok.end,
                     }
@@ -180,7 +180,7 @@ fn hover_hit_line(line: &str, col: usize) -> Option<Hit> {
     if is_track_token(line, start, token) {
         if let Some(doc) = docs::track_doc(token) {
             return Some(Hit {
-                markdown: format_hover(token, doc),
+                markdown: format_hover(docs::TRACK_HELP_LABEL, doc),
                 start,
                 end,
             });
@@ -1217,10 +1217,12 @@ mod tests {
 
     #[test]
     fn star_macro_works_mid_line() {
-        // "A *32 *33 | c" — the second `*33` is at bytes [6, 9).
+        // "A *32 *33 | c" — the second `*33` is at bytes [6, 9). Title is
+        // the canonical `A..Z / *<num>` label (not the literal token) so
+        // hover matches the Help Panel's wording.
         let info = hover_at("A *32 *33 | c", 0, 7).unwrap();
         assert_eq!(span(&info), (6, 9));
-        assert!(info.markdown.starts_with("`*33`"));
+        assert!(info.markdown.starts_with("`A..Z / *<num>`"));
     }
 
     #[test]
