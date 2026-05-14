@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use pathdiff::diff_paths;
 use tower_lsp::lsp_types::{
-    CompletionItem, CompletionItemKind, Documentation, Position, Range,
+    Command, CompletionItem, CompletionItemKind, Documentation, InsertTextFormat, Position, Range,
 };
 use walkdir::WalkDir;
 
@@ -73,10 +73,7 @@ pub(crate) fn option_items() -> Vec<CompletionItem> {
 }
 
 pub(crate) fn instrument_items() -> Vec<CompletionItem> {
-    docs::INSTRUMENT_TYPES
-        .iter()
-        .map(|value| instrument_item(value.label))
-        .collect()
+    docs::INSTRUMENT_TYPES.iter().map(instrument_item).collect()
 }
 
 pub(crate) fn rate_offset_items() -> Vec<CompletionItem> {
@@ -463,8 +460,28 @@ fn option_item(label: &str) -> CompletionItem {
     documented_item(label, CompletionItemKind::KEYWORD, docs::option_value_doc(label))
 }
 
-fn instrument_item(label: &str) -> CompletionItem {
-    documented_item(label, CompletionItemKind::TYPE_PARAMETER, docs::instrument_doc(label))
+fn instrument_item(entry: &docs::DocEntry) -> CompletionItem {
+    let mut item = documented_item(
+        entry.label,
+        CompletionItemKind::TYPE_PARAMETER,
+        docs::instrument_doc(entry.label),
+    );
+    if !entry.insert.is_empty() {
+        item.insert_text = Some(entry.insert.to_string());
+        if entry.insert.contains('$') {
+            item.insert_text_format = Some(InsertTextFormat::SNIPPET);
+        }
+    }
+    // `fm` / `pcm` re-trigger completion so the user immediately gets
+    // the file-picker list without having to type a space first.
+    if docs::INSTRUMENT_TYPES_TRIGGER_SUGGEST.contains(&entry.label) {
+        item.command = Some(Command {
+            title: "Suggest instrument files".to_string(),
+            command: "editor.action.triggerSuggest".to_string(),
+            arguments: None,
+        });
+    }
+    item
 }
 
 fn rate_offset_item(label: &str) -> CompletionItem {

@@ -4,8 +4,10 @@ use std::time::SystemTime;
 
 use tower_lsp::lsp_types::{
     Command, CompletionItem, CompletionItemKind, CompletionItemLabelDetails, CompletionTextEdit,
-    Documentation, InsertTextMode, Position, Range, TextEdit,
+    Documentation, InsertTextFormat, InsertTextMode, Position, Range, TextEdit,
 };
+
+use ctrmml_lang_core::docs::FM_DEFAULT_TEMPLATE;
 use walkdir::WalkDir;
 
 use crate::backend::Backend;
@@ -171,11 +173,14 @@ impl Backend {
         line_num: u32,
         col: u32,
     ) -> std::result::Result<Vec<CompletionItem>, String> {
-        let cmd_path = match self.ym2612_convert_path().await {
-            Ok(p) => p,
-            Err(_) => return Ok(Vec::new()),
-        };
         let hierarchy = *self.supports_hierarchy.read().await;
+        let cmd_path = self.ym2612_convert_path().await.ok();
+
+        // No `ym2612_convert` available → still emit the default template
+        // so the user can at least insert a fresh FM body.
+        let Some(cmd_path) = cmd_path else {
+            return Ok(build_items(&[], kind, line_num, col, hierarchy));
+        };
 
         // Check cache
         {
@@ -243,15 +248,42 @@ fn build_items(
 ) -> Vec<CompletionItem> {
     match kind {
         FmCompletionKind::SelectFile { fm_end_col } => {
-            if !hierarchy || unique_file_count(patches) <= 1 {
+            let mut items = if !hierarchy || unique_file_count(patches) <= 1 {
                 build_flat_items(patches, line_num, *fm_end_col, col)
             } else {
                 build_file_items(patches, line_num, *fm_end_col, col)
-            }
+            };
+            items.push(default_template_item(line_num, *fm_end_col, col));
+            items
         }
         FmCompletionKind::SelectPatch { file_key, fm_end_col } => {
             build_patch_items(patches, file_key, line_num, *fm_end_col, col)
         }
+    }
+}
+
+/// Bottom-of-list fallback when none of the workspace's instrument
+/// files fit — inserts the same FM template the `fm` keyword used to
+/// insert directly before we switched the keyword to re-trigger
+/// completion. `sort_text` is `"~default"` so it lands after every
+/// file-derived item (`~` sorts after any alphanumeric).
+fn default_template_item(line_num: u32, fm_end_col: u32, col: u32) -> CompletionItem {
+    let range = Range {
+        start: Position::new(line_num, fm_end_col),
+        end: Position::new(line_num, col),
+    };
+    CompletionItem {
+        label: "Default FM template".to_string(),
+        kind: Some(CompletionItemKind::SNIPPET),
+        detail: Some("template".to_string()),
+        text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+            range,
+            new_text: FM_DEFAULT_TEMPLATE.to_string(),
+        })),
+        insert_text_format: Some(InsertTextFormat::SNIPPET),
+        sort_text: Some("~default".to_string()),
+        filter_text: Some("default fm template".to_string()),
+        ..CompletionItem::default()
     }
 }
 

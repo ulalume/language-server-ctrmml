@@ -113,7 +113,12 @@ pub const META_KEYWORDS: &[DocEntry] = &[
 // popup after being inserted (e.g. `#platform ` opens the value picker)
 // or be suggested as instrument-definition completions.
 pub const META_KEYWORDS_TRIGGER_SUGGEST: &[&str] = &["#platform", "#option", "#group", "#timesig"];
-pub const INSTRUMENT_TYPES_TRIGGER_SUGGEST: &[&str] = &["pcm"];
+// Instrument keywords that should re-trigger completion after insertion
+// so the user immediately gets to pick an instrument file (or fall back
+// to the default template). `2op` is intentionally absent — there's no
+// per-file pool to choose from, so its snippet template fills in
+// directly.
+pub const INSTRUMENT_TYPES_TRIGGER_SUGGEST: &[&str] = &["fm", "pcm"];
 pub const AT_META_COMPLETION_LABELS: &[&str] = &["@<num>", "@M<num>"];
 
 // ---------------------------------------------------------------------------
@@ -217,7 +222,11 @@ pub const INSTRUMENT_TYPES: &[DocEntry] = &[
     entry(
         "fm",
         "fm",
-        "fm\n; ALG FB\n    ${1:4}  ${2:0}\n;  AR  DR  SR  RR  SL  TL  KS  ML  DT SSG\n   ${3:31}   ${4:0}   ${5:0}   ${6:7}   ${7:0}   ${8:0}   ${9:0}   ${10:1}   ${11:0}   ${12:0}\n   ${13:31}   ${14:0}   ${15:0}   ${16:7}   ${17:0}   ${18:0}   ${19:0}   ${20:1}   ${21:0}   ${22:0}\n   ${23:31}   ${24:0}   ${25:0}   ${26:7}   ${27:0}   ${28:0}   ${29:0}   ${30:1}   ${31:0}   ${32:0}\n   ${33:31}   ${34:0}   ${35:0}   ${36:7}   ${37:0}   ${38:0}   ${39:0}   ${40:1}   ${41:0}   ${42:0}\n",
+        // Accepting `fm` inserts just the keyword + space and re-triggers
+        // completion (see `INSTRUMENT_TYPES_TRIGGER_SUGGEST`). The user
+        // then picks an instrument file from the workspace, or falls
+        // back to the default-template entry the FM completer appends.
+        "fm ",
         "FM synthesis instrument",
         "FM instruments are defined with ALG (algorithm), FB (feedback), and four operators (OP1-OP4). Each operator has: AR (attack rate), DR (decay rate), SR (sustain rate), RR (release rate), SL (sustain level), TL (total level), KS (key scale), ML (multiplier), DT (detune), and SSG (SSG-EG).\n\n    @1 fm\n    ; ALG FB\n        3   0\n    ;  AR  DR  SR  RR  SL  TL  KS  ML  DT SSG\n       31   0  19   5   0  23   0   0   0   0 ; OP1\n       31   6   0   4   3  19   0   0   0   0 ; OP2\n       31  15   0   5   4  38   0   4   0   0 ; OP3\n       31  27   0  11   1   0   0   1   0   0 ; OP4\n\nTo enable AM for an operator, add 100 to the SSG-EG value.",
     ),
@@ -986,6 +995,14 @@ pub fn group_value_doc(label: &str) -> Option<&'static str> {
     lookup_doc(GROUP_VALUES, label)
 }
 
+/// Snippet body for the "Default FM template" item the FM completer
+/// appends at the bottom of its file-suggestion list. The body starts
+/// with a `; name` comment so it lines up visually with patches that
+/// came from instrument files (which open with `; <patch name>` after
+/// the `@N fm` header).
+pub const FM_DEFAULT_TEMPLATE: &str =
+    "; ${1:default}\n; ALG FB\n    ${2:4}  ${3:0}\n;  AR  DR  SR  RR  SL  TL  KS  ML  DT SSG\n   ${4:31}   ${5:0}   ${6:0}   ${7:7}   ${8:0}   ${9:0}   ${10:0}   ${11:1}   ${12:0}   ${13:0}\n   ${14:31}   ${15:0}   ${16:0}   ${17:7}   ${18:0}   ${19:0}   ${20:0}   ${21:1}   ${22:0}   ${23:0}\n   ${24:31}   ${25:0}   ${26:0}   ${27:7}   ${28:0}   ${29:0}   ${30:0}   ${31:1}   ${32:0}   ${33:0}\n   ${34:31}   ${35:0}   ${36:0}   ${37:7}   ${38:0}   ${39:0}   ${40:0}   ${41:1}   ${42:0}   ${43:0}\n";
+
 pub fn instrument_doc(label: &str) -> Option<&'static str> {
     lookup_doc(INSTRUMENT_TYPES, label)
 }
@@ -1109,6 +1126,7 @@ pub struct AllDocs {
     pub two_op_params: &'static [DocEntry],
     pub track_doc_numeric: &'static str,
     pub track_doc_letters: &'static str,
+    pub fm_default_template: &'static str,
 }
 
 pub fn all_docs() -> AllDocs {
@@ -1131,5 +1149,6 @@ pub fn all_docs() -> AllDocs {
         two_op_params: TWO_OP_PARAM_DOCS,
         track_doc_numeric: TRACK_DOC_NUMERIC,
         track_doc_letters: TRACK_DOC_LETTERS,
+        fm_default_template: FM_DEFAULT_TEMPLATE,
     }
 }
