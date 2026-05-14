@@ -91,25 +91,6 @@ where
         .map_err(|e| format!("failed to run ctrmml-cmd {context}: {e}"))
 }
 
-pub(crate) async fn spawn_ctrmml_cmd<F>(
-    cmd_path: &str,
-    context: &str,
-    stdin_text: &str,
-    configure: F,
-) -> std::result::Result<tokio::process::Child, String>
-where
-    F: FnOnce(&mut TokioCommand),
-{
-    let mut cmd = TokioCommand::new(cmd_path);
-    configure(&mut cmd);
-    cmd.stdin(Stdio::piped());
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("failed to spawn ctrmml-cmd {context}: {e}"))?;
-    write_stdin(&mut child, stdin_text).await?;
-    Ok(child)
-}
-
 pub(crate) fn output_message(output: &Output) -> Option<String> {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);

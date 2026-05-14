@@ -124,9 +124,17 @@ impl LanguageServer for Backend {
 
     async fn did_change(&self, params: tower_lsp::lsp_types::DidChangeTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
+        let mut latest_text: Option<String> = None;
         if let Some(change) = params.content_changes.into_iter().last() {
-            self.docs.write().await.insert(uri.clone(), change.text);
+            self.docs.write().await.insert(uri.clone(), change.text.clone());
             *self.last_doc.write().await = Some(uri.clone());
+            latest_text = Some(change.text);
+        }
+        // Forward the new text to `ctrmml-cmd` if it's currently playing
+        // this document — the running renderer will pick the changes up
+        // mid-playback via `relink_song` without restarting.
+        if let Some(text) = latest_text.as_ref() {
+            self.push_playback_update(&uri, text).await;
         }
         let _ = self.run_check(uri).await;
     }
