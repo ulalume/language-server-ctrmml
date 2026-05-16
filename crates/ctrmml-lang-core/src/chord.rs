@@ -365,6 +365,68 @@ pub fn render_stacked_chord(
     ))
 }
 
+/// Generic diatonic dyad: root letter + the letter `step` positions away.
+/// Letters only; accidentals follow the ambient key signature at playback
+/// (no override emitted, mirroring [`render_generic_chord`]).
+///
+/// `step` is `1..=6` for a 2nd through 7th. Returns `None` for an unknown
+/// root letter or out-of-range step.
+pub fn render_generic_diatonic_dyad(
+    root_letter_lower: char,
+    root_accidental: Option<RootAccidental>,
+    step: i32,
+) -> Option<String> {
+    if !(1..=6).contains(&step) {
+        return None;
+    }
+    let root_idx = root_index(root_letter_lower)?;
+    let upper_letter = CHORD_LETTERS[(root_idx + step as usize) % CHORD_LETTERS.len()];
+    let mut out = String::with_capacity(4);
+    out.push(root_letter_lower);
+    out.push_str(accidental_char(root_accidental));
+    out.push('/');
+    out.push(upper_letter);
+    Some(out)
+}
+
+/// Stacked variant of [`render_generic_diatonic_dyad`] using `>` / `<` to
+/// keep the upper tone above the root.
+pub fn render_stacked_generic_diatonic_dyad(
+    root_letter_lower: char,
+    root_accidental: Option<RootAccidental>,
+    step: i32,
+    key_sig: &KeySig,
+    channel_octaves: &[i32],
+    compensate: bool,
+) -> Option<String> {
+    if !(1..=6).contains(&step) {
+        return None;
+    }
+    let root_idx = root_index(root_letter_lower)?;
+    let upper_letter = CHORD_LETTERS[(root_idx + step as usize) % CHORD_LETTERS.len()];
+    let root_acc = match root_accidental {
+        Some(a) => a.as_i32(),
+        None => key_sig.get_or_zero(root_letter_lower) as i32,
+    };
+    let tones = [
+        StackedTone {
+            letter: root_letter_lower,
+            acc: root_acc,
+        },
+        StackedTone {
+            letter: upper_letter,
+            acc: key_sig.get_or_zero(upper_letter) as i32,
+        },
+    ];
+    Some(stack_tones(
+        &tones,
+        root_accidental,
+        key_sig,
+        channel_octaves,
+        compensate,
+    ))
+}
+
 /// Diatonic chord by letter only (no forced interval table), stacked
 /// bottom-up. Each tone's accidental comes from the ambient key signature.
 /// Mirrors [`render_generic_chord`] but uses `>` / `<` to keep each tone
@@ -452,6 +514,72 @@ mod tests {
             render_generic_chord('c', Some(RootAccidental::Sharp), ChordSize::Triad).as_deref(),
             Some("c+/e/g")
         );
+    }
+
+    // ----- renderGenericDiatonicDyad -----------------------------------------
+
+    #[test]
+    fn dyad_c_p5_is_c_over_g() {
+        assert_eq!(
+            render_generic_diatonic_dyad('c', None, 4).as_deref(),
+            Some("c/g")
+        );
+    }
+
+    #[test]
+    fn dyad_b_p5_wraps_to_b_over_f() {
+        assert_eq!(
+            render_generic_diatonic_dyad('b', None, 4).as_deref(),
+            Some("b/f")
+        );
+    }
+
+    #[test]
+    fn dyad_c_2nd_is_c_over_d() {
+        assert_eq!(
+            render_generic_diatonic_dyad('c', None, 1).as_deref(),
+            Some("c/d")
+        );
+    }
+
+    #[test]
+    fn dyad_preserves_root_accidental() {
+        assert_eq!(
+            render_generic_diatonic_dyad('c', Some(RootAccidental::Sharp), 4).as_deref(),
+            Some("c+/g")
+        );
+    }
+
+    #[test]
+    fn dyad_rejects_out_of_range_step() {
+        assert!(render_generic_diatonic_dyad('c', None, 0).is_none());
+        assert!(render_generic_diatonic_dyad('c', None, 7).is_none());
+    }
+
+    #[test]
+    fn stacked_dyad_c_p5_at_o4_is_c_over_g() {
+        assert_eq!(
+            render_stacked_generic_diatonic_dyad('c', None, 4, &ks(), &[4, 4], false).as_deref(),
+            Some("c/g")
+        );
+    }
+
+    #[test]
+    fn stacked_dyad_b_p5_at_o4_lifts_upper() {
+        // b4 to f needs a `>` so the upper tone stays above b4.
+        assert_eq!(
+            render_stacked_generic_diatonic_dyad('b', None, 4, &ks(), &[4, 4], false).as_deref(),
+            Some("b/>f")
+        );
+    }
+
+    #[test]
+    fn stacked_dyad_compensates_per_branch() {
+        // After lifting the upper f, compensate=true restores its channel
+        // octave with a trailing `<` so a plain note following the dyad
+        // keeps its original pitch.
+        let s = render_stacked_generic_diatonic_dyad('b', None, 4, &ks(), &[4, 4], true).unwrap();
+        assert_eq!(s, "b/>f<");
     }
 
     // ----- renderChord (named, key-sig aware) -------------------------------

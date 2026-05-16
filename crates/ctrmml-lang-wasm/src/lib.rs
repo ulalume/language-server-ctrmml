@@ -16,10 +16,13 @@
 
 use ctrmml_lang_core::{
     chord::{
-        render_chord as core_render_chord, render_generic_chord as core_render_generic_chord,
+        render_chord as core_render_chord,
+        render_generic_chord as core_render_generic_chord,
+        render_generic_diatonic_dyad as core_render_generic_diatonic_dyad,
         render_stacked_chord as core_render_stacked_chord,
-        render_stacked_generic_chord as core_render_stacked_generic_chord, ChordSize,
-        RootAccidental, CHORDS_3, CHORDS_4,
+        render_stacked_generic_chord as core_render_stacked_generic_chord,
+        render_stacked_generic_diatonic_dyad as core_render_stacked_generic_diatonic_dyad,
+        ChordSize, RootAccidental, CHORDS_3, CHORDS_4,
     },
     transpose::{transpose_selection, Direction, Selection},
     KeySig, LinesModel,
@@ -285,6 +288,41 @@ pub fn render_stacked_chord(
     let acc = decode_root_accidental(root_accidental);
     let ks = key_sig_from_slice(key_sig);
     core_render_stacked_chord(root, acc, def, &ks, channel_octaves, compensate)
+}
+
+/// Diatonic 2-note dyad: root letter + the letter `step` positions away.
+/// `step` is 1..=6 for 2nd through 7th. Letters only; accidentals come
+/// from the ambient key signature at playback.
+#[wasm_bindgen]
+pub fn render_generic_diatonic_dyad(
+    root: char,
+    root_accidental: i32,
+    step: u32,
+) -> Option<String> {
+    let acc = decode_root_accidental(root_accidental);
+    core_render_generic_diatonic_dyad(root, acc, step as i32)
+}
+
+/// Stacked variant of [`render_generic_diatonic_dyad`].
+#[wasm_bindgen]
+pub fn render_stacked_generic_diatonic_dyad(
+    root: char,
+    root_accidental: i32,
+    step: u32,
+    key_sig: &[i8],
+    channel_octaves: &[i32],
+    compensate: bool,
+) -> Option<String> {
+    let acc = decode_root_accidental(root_accidental);
+    let ks = key_sig_from_slice(key_sig);
+    core_render_stacked_generic_diatonic_dyad(
+        root,
+        acc,
+        step as i32,
+        &ks,
+        channel_octaves,
+        compensate,
+    )
 }
 
 /// Diatonic chord by letter only (no forced interval table), stacked

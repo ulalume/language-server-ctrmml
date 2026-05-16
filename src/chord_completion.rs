@@ -4,13 +4,13 @@
 //! must be on a track-content line (enclosing `A`/`B`/... selector),
 //! outside any FM/PSG instrument block, and the prefix must end with
 //! `{<letter>[+\-=]?` where the `{` is not the key-sig opener `_{`.
-//! 3-channel tracks (`ABC`) show only triads, 4-channel (`ABCD`) only
-//! sevenths; other counts show both.
+//! 2-channel tracks (`AB`) show only diatonic dyads, 3-channel (`ABC`)
+//! only triads, 4-channel (`ABCD`) only sevenths; other counts show all.
 
 use ctrmml_lang_core::{
     chord::{
-        render_chord, render_generic_chord, ChordDef, ChordSize, RootAccidental, CHORDS_3,
-        CHORDS_4,
+        render_chord, render_generic_chord, render_generic_diatonic_dyad, ChordDef, ChordSize,
+        RootAccidental, CHORDS_3, CHORDS_4,
     },
     find_enclosing_track_selector, find_fm_block_at, find_psg_block_at, is_in_key_sig,
     scan_key_sig_at, LinesModel,
@@ -121,8 +121,9 @@ pub(crate) fn chord_completion_items(
     let key_sig = scan_key_sig_at(&model, line_one_based, character + 1);
 
     let num_channels = selector.spans.len();
-    let allow3 = num_channels != 4;
-    let allow4 = num_channels != 3;
+    let allow2 = num_channels != 3 && num_channels != 4;
+    let allow3 = num_channels != 2 && num_channels != 4;
+    let allow4 = num_channels != 2 && num_channels != 3;
 
     let range = Range {
         start: Position::new(line_zero_based, ctx.letter_col),
@@ -168,7 +169,45 @@ pub(crate) fn chord_completion_items(
 
     let mut items: Vec<CompletionItem> = Vec::new();
 
-    // Generic items first so the simple `{c` case lands on a key-sig-aware
+    // Diatonic dyads come first for 2-channel selections so power-chord
+    // (`5`) lands as the preselected default. Order: 5, 2, 3, 4, 6, 7 —
+    // power chord up front, the rest in ascending interval number.
+    let dyads: &[(&str, i32, &str)] = &[
+        ("5", 4, "Diatonic 5th (power chord)"),
+        ("2", 1, "Diatonic 2nd"),
+        ("3", 2, "Diatonic 3rd"),
+        ("4", 3, "Diatonic 4th"),
+        ("6", 5, "Diatonic 6th"),
+        ("7", 6, "Diatonic 7th"),
+    ];
+    let add_dyad = |items: &mut Vec<CompletionItem>, name: &str, step: i32, detail: &str| {
+        if let Some(body) =
+            render_generic_diatonic_dyad(ctx.root_letter, ctx.root_accidental, step)
+        {
+            // Preselect `5` only when the selector is exactly 2 channels,
+            // so that 1/5+-channel selectors still default to the 3-note
+            // generic triad below.
+            let preselect = name == "5" && num_channels == 2;
+            let item = make_item(
+                format!("{root_upper}{name}"),
+                body,
+                format!("2-note dyad · {detail}"),
+                format!("{filter_prefix}{name}"),
+                preselect,
+                items.len(),
+                range,
+                close_suffix,
+            );
+            items.push(item);
+        }
+    };
+    if allow2 {
+        for (name, step, detail) in dyads {
+            add_dyad(&mut items, name, *step, detail);
+        }
+    }
+
+    // Generic items so the simple `{c` case lands on a key-sig-aware
     // diatonic triad/seventh rather than the first named definition.
     let add_generic = |items: &mut Vec<CompletionItem>, size: ChordSize, size_n: u32| {
         if let Some(body) = render_generic_chord(ctx.root_letter, ctx.root_accidental, size) {
@@ -274,13 +313,40 @@ mod tests {
     }
 
     #[test]
-    fn other_channel_counts_show_all() {
+    fn two_channels_filters_to_dyads() {
         let doc = "AB {c";
         let items = chord_completion_items(doc, 0, 5).expect("chord context");
+        // All six dyad labels present, power chord preselected.
+        for name in ["C5", "C2", "C3", "C4", "C6", "C7"] {
+            assert!(items.iter().any(|it| it.label == name), "missing {name}");
+        }
+        let c5 = items
+            .iter()
+            .find(|it| it.label == "C5")
+            .expect("missing C5");
+        assert_eq!(c5.preselect, Some(true));
+        // Triads/sevenths must be filtered out for 2-channel.
+        assert!(!items.iter().any(|it| it.label == "Chord (3 notes)"));
+        assert!(!items.iter().any(|it| it.label == "Chord (4 notes)"));
+        assert!(!items.iter().any(|it| it.label == "Cm"));
+        assert!(!items.iter().any(|it| it.label == "CM7"));
+    }
+
+    #[test]
+    fn other_channel_counts_show_all() {
+        // 1-channel selector (other counts: 1, 5+) shows dyads, triads,
+        // and sevenths together; default preselect stays on the 3-note
+        // generic so single-channel users land on the same chord they
+        // got before dyads existed.
+        let doc = "A {c";
+        let items = chord_completion_items(doc, 0, 4).expect("chord context");
         assert!(items.iter().any(|it| it.label == "Chord (3 notes)"));
         assert!(items.iter().any(|it| it.label == "Chord (4 notes)"));
+        assert!(items.iter().any(|it| it.label == "C5"));
         assert!(items.iter().any(|it| it.label == "Cm"));
         assert!(items.iter().any(|it| it.label == "CM7"));
+        let c5 = items.iter().find(|it| it.label == "C5").unwrap();
+        assert_eq!(c5.preselect, Some(false));
     }
 
     #[test]
