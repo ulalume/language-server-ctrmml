@@ -15,8 +15,10 @@ use crate::brace_state::BraceState;
 use crate::chord::chord_natural_semitones;
 use crate::key_sig::{parse_key_sig, scan_key_sig_at, KeySig};
 use crate::octave_scan::scan_brace_state_at;
-use crate::text_scan::{is_in_comment, is_in_key_sig};
-use crate::track_selector::{find_enclosing_track_selector, LineReader};
+use crate::text_scan::{is_in_comment, is_in_key_sig, is_in_string};
+use crate::track_selector::{
+    find_enclosing_track_selector, parse_leading_track_selector, LineReader,
+};
 
 // ---------------------------------------------------------------------------
 // Shared constants
@@ -232,6 +234,15 @@ pub fn transpose_selection(
     let col_offset = (selection.start_column as usize).saturating_sub(1);
     let bytes = sel_text.as_bytes();
 
+    // Per-line track classification: lines that don't start with a valid
+    // track selector (`#title`, `@N ...`, `;` comments, whitespace
+    // continuations, etc.) must be skipped entirely — otherwise letters
+    // in directive values like `#title Advanced` get misread as notes.
+    let line_is_track: Vec<bool> = full_lines
+        .iter()
+        .map(|l| parse_leading_track_selector(l).is_some())
+        .collect();
+
     // -- Phase 1: Lift -----------------------------------------------------
     let mut notes: Vec<NoteToken> = Vec::new();
     let mut octave_shifts: Vec<OctaveShiftToken> = Vec::new();
@@ -260,10 +271,24 @@ pub fn transpose_selection(
         };
         let full_line = full_lines.get(line_idx).map(String::as_str).unwrap_or("");
 
-        if is_in_comment(full_line, abs_col) {
+        // Non-track lines (`#title …`, `@N …`, instrument-body
+        // continuations, blank lines, etc.) and `;` line-comments are
+        // skipped wholesale — their text is not MML and must never
+        // feed the note detector.
+        if !line_is_track[line_idx] || is_in_comment(full_line, abs_col) {
             let remain = sel_lines[line_idx].len() - col_in_line;
             i += remain;
             col_in_line += remain;
+            continue;
+        }
+
+        // `"…"` (PCM sample paths) and `'…'` (platform commands like
+        // `'fm3 0001'`) are opaque strings — skip every byte the
+        // line-level scan flags as inside one. This also covers the
+        // case where the selection itself begins inside a string.
+        if is_in_string(full_line, abs_col) {
+            i += 1;
+            col_in_line += 1;
             continue;
         }
 
@@ -285,20 +310,6 @@ pub fn transpose_selection(
                 col_in_line += skip;
                 continue;
             }
-        }
-
-        if ch == b'"' {
-            i += 1;
-            col_in_line += 1;
-            while i < bytes.len() && bytes[i] != b'"' && bytes[i] != b'\n' {
-                i += 1;
-                col_in_line += 1;
-            }
-            if i < bytes.len() && bytes[i] == b'"' {
-                i += 1;
-                col_in_line += 1;
-            }
-            continue;
         }
 
         if (ch == b'o' || ch == b'O') && i + 1 < bytes.len() {
@@ -478,20 +489,74 @@ pub fn transpose_selection(
     let shift_set: HashSet<usize> = octave_shifts.iter().map(|s| s.offset).collect();
     let branch_end_by_offset: HashMap<usize, BranchEnd> = branch_ends.into_iter().collect();
 
-    let advance_lower_state = |j: &mut usize,
-                               until: usize,
-                               lower: &mut BraceState,
-                               replacements: &mut Vec<Replacement>| {
+    // Forward cursor for `advance_lower_state`. `j` only moves forward
+    // across the (potentially many) calls, so we can replay newline
+    // counting in lockstep instead of allocating `bytes.len()`-sized
+    // index/column tables up front.
+    let mut low_j: usize = 0;
+    let mut low_line: usize = 0;
+    let mut low_col_in_sel: usize = 0;
+
+    let mut advance_lower_state = |j: &mut usize,
+                                   until: usize,
+                                   lower: &mut BraceState,
+                                   replacements: &mut Vec<Replacement>| {
+        // Catch the cursor up to `*j` — between calls `*j` jumps past
+        // the bytes of the previous note (1–2 bytes typically).
+        while low_j < *j {
+            if bytes[low_j] == b'\n' {
+                low_line += 1;
+                low_col_in_sel = 0;
+            } else {
+                low_col_in_sel += 1;
+            }
+            low_j += 1;
+        }
         while *j < until {
             let c = bytes[*j];
-            if shift_set.contains(j) {
+            if c == b'\n' {
+                low_line += 1;
+                low_col_in_sel = 0;
+                low_j += 1;
+                *j += 1;
+                continue;
+            }
+            let abs_col = if low_line == 0 {
+                low_col_in_sel + col_offset
+            } else {
+                low_col_in_sel
+            };
+            let full_line = full_lines
+                .get(low_line)
+                .map(String::as_str)
+                .unwrap_or("");
+            // Mirror lift: non-track lines and `;` line-comments are
+            // skipped wholesale; `'…'`/`"…"` strings are skipped byte
+            // by byte (interleaved MML may follow on the same line).
+            if !line_is_track[low_line] || is_in_comment(full_line, abs_col) {
+                let line_end = bytes[*j..]
+                    .iter()
+                    .position(|&b| b == b'\n')
+                    .map_or(bytes.len(), |off| *j + off);
+                let advance = line_end - *j;
+                low_col_in_sel += advance;
+                low_j += advance;
+                *j = line_end;
+                continue;
+            }
+            if is_in_string(full_line, abs_col) || shift_set.contains(j) {
+                low_col_in_sel += 1;
+                low_j += 1;
                 *j += 1;
                 continue;
             }
             if (c == b'o' || c == b'O') && *j + 1 < bytes.len() {
                 if let Some((oct, len)) = parse_leading_u32(&bytes[*j + 1..]) {
                     lower.on_octave_set(oct as i32);
-                    *j += 1 + len;
+                    let total = 1 + len;
+                    low_col_in_sel += total;
+                    low_j += total;
+                    *j += total;
                     continue;
                 }
             }
@@ -505,6 +570,8 @@ pub fn transpose_selection(
                 apply_branch_end_comp(*j, &branch_end_by_offset, lower, replacements);
                 lower.on_close_brace();
             }
+            low_col_in_sel += 1;
+            low_j += 1;
             *j += 1;
         }
     };
@@ -981,6 +1048,149 @@ mod tests {
         assert_eq!(
             apply("ABC o6 {c/e/a} {e/a/[<c>]}", Direction::Up),
             "ABC o6 {c/e/a} {e/a/<c+>}"
+        );
+    }
+
+    // ---------- regression: '...' platform commands stay opaque --------------
+
+    #[test]
+    fn single_quoted_fm3_is_not_transposed() {
+        // `'fm3 0001'` is a platform-exclusive command; nothing inside the
+        // apostrophes should be touched. Reported by the web-ctrmml editor
+        // when Option+Down turned `'fm3 0001'` into `'em3 0001'`.
+        assert_eq!(
+            apply("A o4 [c 'fm3 0001' d]", Direction::Down),
+            "A o4 <b 'fm3 0001' >d-"
+        );
+    }
+
+    #[test]
+    fn single_quoted_carry_is_not_transposed() {
+        // `'carry'` exposes a different breakage pattern: the bare `a`
+        // would otherwise leak through the lookahead-only keyword guard.
+        assert_eq!(
+            apply("A o4 [c 'carry' d]", Direction::Up),
+            "A o4 c+ 'carry' d+"
+        );
+    }
+
+    #[test]
+    fn adjacent_single_quoted_runs() {
+        // Real-world MML places strings back-to-back without spaces.
+        assert_eq!(
+            apply("A o4 [c 'tl1 -2''tl3 -2' d]", Direction::Up),
+            "A o4 c+ 'tl1 -2''tl3 -2' d+"
+        );
+    }
+
+    #[test]
+    fn selection_begins_inside_single_quote() {
+        // Cursor lands mid-string: the line-level `is_in_string` scan
+        // re-seeds quote state so the `f`/`m` inside still gets skipped.
+        assert_eq!(
+            apply("A o4 c 'f[m3 0001'] d", Direction::Up),
+            "A o4 c 'fm3 0001' d"
+        );
+    }
+
+    #[test]
+    fn double_quoted_pcm_path_is_not_transposed() {
+        // `"…"` was already guarded but now goes through `is_in_string`;
+        // re-assert to lock in the equivalence.
+        assert_eq!(
+            apply("A o4 [@30 pcm \"a.wav\" c]", Direction::Up),
+            "A o4 @30 pcm \"a.wav\" c+"
+        );
+    }
+
+    // ---------- regression: non-track lines are skipped wholesale ------------
+
+    #[test]
+    fn title_directive_line_is_not_transposed() {
+        // Reported: selecting across `#title Advanced …` produced
+        // `#title Ad-van<b>e-d- …` because letters in the title were
+        // misread as notes.
+        let input = "[#title Advanced 06 - FM3 Four Operator Grid\nA o4 c d]";
+        let expected = "#title Advanced 06 - FM3 Four Operator Grid\nA o4 <b >d-";
+        assert_eq!(apply(input, Direction::Down), expected);
+    }
+
+    #[test]
+    fn full_header_block_with_no_track_returns_none() {
+        let model = LinesModel(vec![
+            "#title Foo Bar".into(),
+            "#composer Baz".into(),
+            "#date 2026-03-16".into(),
+        ]);
+        let edit = transpose_selection(
+            &model,
+            Selection {
+                start_line_number: 1,
+                start_column: 1,
+                end_line_number: 3,
+                end_column: 14,
+            },
+            Direction::Up,
+        );
+        assert!(edit.is_none());
+    }
+
+    #[test]
+    fn header_block_above_track_does_not_leak() {
+        // Selection spans header lines and a real track line below; only
+        // the track line's notes get transposed.
+        let input = concat!(
+            "[#title Advanced 06\n",
+            "#composer megamml\n",
+            "#date 2026-03-16\n",
+            "#comment Driving FM3 one operator at a time\n",
+            "#platform megadrive\n",
+            "A o4 c d e f]",
+        );
+        let expected = concat!(
+            "#title Advanced 06\n",
+            "#composer megamml\n",
+            "#date 2026-03-16\n",
+            "#comment Driving FM3 one operator at a time\n",
+            "#platform megadrive\n",
+            "A o4 c+ d+ f f+",
+        );
+        assert_eq!(apply(input, Direction::Up), expected);
+    }
+
+    #[test]
+    fn instrument_definition_line_is_not_transposed() {
+        // `@N ...` lines should also be skipped.
+        assert_eq!(
+            apply("[@1 fm 5 4 6 4\nA o4 c d]", Direction::Up),
+            "@1 fm 5 4 6 4\nA o4 c+ d+"
+        );
+    }
+
+    #[test]
+    fn whitespace_indented_continuation_line_is_skipped() {
+        // Instrument-body continuation lines start with whitespace and
+        // contain only numeric parameters — they have no track selector
+        // and must be skipped, otherwise letters in any comment-shaped
+        // trailing text could leak through.
+        let input = concat!(
+            "[@1 fm\n",
+            "  31 7 1 5 ; bass\n",
+            "A o4 c d]",
+        );
+        let expected = concat!(
+            "@1 fm\n",
+            "  31 7 1 5 ; bass\n",
+            "A o4 c+ d+",
+        );
+        assert_eq!(apply(input, Direction::Up), expected);
+    }
+
+    #[test]
+    fn comment_only_line_is_skipped() {
+        assert_eq!(
+            apply("[; comment with c d e f letters\nA o4 c d]", Direction::Down),
+            "; comment with c d e f letters\nA o4 <b >d-"
         );
     }
 }

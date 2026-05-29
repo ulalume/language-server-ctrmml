@@ -49,6 +49,46 @@ pub fn is_in_comment(line: &str, col: usize) -> bool {
     false
 }
 
+/// Returns `true` when the 0-based column `col` falls inside a `"..."` or
+/// `'...'` string literal on `line`. The delimiting quote bytes themselves
+/// also report `true` so callers can blanket-skip the whole string region.
+///
+/// Single quotes carry ctrmml's platform-exclusive commands
+/// (e.g. `'fm3 0001'`, `'pcmmode 2'`) and double quotes wrap PCM sample
+/// paths in `@N pcm "..."`. In both cases any embedded letters must not be
+/// interpreted as MML notes/commands.
+pub fn is_in_string(line: &str, col: usize) -> bool {
+    let bytes = line.as_bytes();
+    if col >= bytes.len() {
+        return false;
+    }
+    let mut in_double = false;
+    let mut in_single = false;
+    for (i, &ch) in bytes.iter().enumerate() {
+        match ch {
+            b'"' if !in_single => {
+                in_double = !in_double;
+                if i == col {
+                    return true;
+                }
+            }
+            b'\'' if !in_double => {
+                in_single = !in_single;
+                if i == col {
+                    return true;
+                }
+            }
+            b';' if !in_double && !in_single => return false,
+            _ => {
+                if i == col {
+                    return in_double || in_single;
+                }
+            }
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,5 +201,108 @@ mod tests {
         assert!(!is_in_comment("abc", 999));
         // With a `;`, columns past the line end still see the comment.
         assert!(is_in_comment("a;b", 999));
+    }
+
+    // ---------- is_in_string ---------------------------------------------------
+
+    #[test]
+    fn string_single_quote_run() {
+        // 'fm3 0011' at cols 0..=8. Both delimiters and interior bytes count.
+        let line = "'fm3 0011'";
+        for col in 0..=9 {
+            assert!(is_in_string(line, col), "col {col} should be in string");
+        }
+    }
+
+    #[test]
+    fn string_outside_single_quote_run() {
+        // "A 'fm3' c" — only the `'fm3'` run is inside.
+        let line = "A 'fm3' c";
+        assert!(!is_in_string(line, 0)); // 'A'
+        assert!(!is_in_string(line, 1)); // ' '
+        assert!(is_in_string(line, 2)); // opening '
+        assert!(is_in_string(line, 3)); // 'f'
+        assert!(is_in_string(line, 4)); // 'm'
+        assert!(is_in_string(line, 5)); // '3'
+        assert!(is_in_string(line, 6)); // closing '
+        assert!(!is_in_string(line, 7)); // ' '
+        assert!(!is_in_string(line, 8)); // 'c'
+    }
+
+    #[test]
+    fn string_double_quote_run() {
+        let line = "@30 pcm \"a.wav\"";
+        // Opening " at col 8, closing " at col 14.
+        for col in 0..=7 {
+            assert!(!is_in_string(line, col));
+        }
+        for col in 8..=14 {
+            assert!(is_in_string(line, col), "col {col} should be in string");
+        }
+    }
+
+    #[test]
+    fn string_single_inside_double_not_a_quote() {
+        // A `'` inside `"..."` does not toggle single-quote state.
+        let line = "\"a'b\" c";
+        for col in 0..=4 {
+            assert!(is_in_string(line, col), "col {col} should be in string");
+        }
+        assert!(!is_in_string(line, 5));
+        assert!(!is_in_string(line, 6));
+    }
+
+    #[test]
+    fn string_double_inside_single_not_a_quote() {
+        let line = "'a\"b' c";
+        for col in 0..=4 {
+            assert!(is_in_string(line, col), "col {col} should be in string");
+        }
+        assert!(!is_in_string(line, 5));
+        assert!(!is_in_string(line, 6));
+    }
+
+    #[test]
+    fn string_adjacent_single_quoted_runs() {
+        // 'tl1 -2''tl3 -2' — two back-to-back strings; everything from col 0
+        // through the closing of the second run is inside-or-on a quote.
+        let line = "'tl1 -2''tl3 -2'";
+        for col in 0..line.len() {
+            assert!(is_in_string(line, col), "col {col} should be in string");
+        }
+    }
+
+    #[test]
+    fn string_unterminated_run_keeps_us_inside() {
+        let line = "'fm3 0011 no close";
+        for col in 0..line.len() {
+            assert!(is_in_string(line, col), "col {col} should be in string");
+        }
+    }
+
+    #[test]
+    fn string_after_semicolon_not_in_string() {
+        // A `;` outside any string terminates string-tracking — anything
+        // after is comment, not string.
+        let line = "; 'fm3'";
+        for col in 0..line.len() {
+            assert!(!is_in_string(line, col), "col {col} should not be in string");
+        }
+    }
+
+    #[test]
+    fn string_semicolon_inside_quote_is_not_terminator() {
+        let line = "'; still string' x";
+        for col in 0..=15 {
+            assert!(is_in_string(line, col), "col {col} should be in string");
+        }
+        assert!(!is_in_string(line, 16));
+        assert!(!is_in_string(line, 17));
+    }
+
+    #[test]
+    fn string_col_past_end_returns_false() {
+        assert!(!is_in_string("abc", 999));
+        assert!(!is_in_string("'abc'", 999));
     }
 }
