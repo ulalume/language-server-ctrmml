@@ -7,6 +7,7 @@
 //!   note letters on top of the current signature. Example: `+cfg` sharpens
 //!   C/F/G; `-b` flats B; `=f` naturalises F.
 
+use crate::text_scan::floor_char_boundary;
 use crate::track_selector::{parse_leading_track_selector, LineReader};
 
 /// Accidental offset (in semitones) per natural letter (`'a'`..=`'g'`).
@@ -200,6 +201,9 @@ pub fn scan_key_sig_at(model: &dyn LineReader, line_number: u32, column: u32) ->
             Some(p) => p,
             None => end_raw,
         };
+        // `column` is a 1-based byte offset, but a caller may pass a UTF-16
+        // editor column; clamp so the `&str` slice can't split a codepoint.
+        let end = floor_char_boundary(line_text, end);
         let segment = &line_text[..end];
 
         if !done {

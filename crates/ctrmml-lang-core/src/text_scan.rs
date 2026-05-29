@@ -49,6 +49,23 @@ pub fn is_in_comment(line: &str, col: usize) -> bool {
     false
 }
 
+/// Largest char boundary `<= idx` in `s` (clamped to `s.len()`). Keeps
+/// `&s[..idx]` / `&s[idx..]` slicing panic-safe when a caller hands us a
+/// byte offset that lands inside a multi-byte codepoint — e.g. a UTF-16
+/// editor column mis-used as a UTF-8 byte offset against a non-ASCII line
+/// (`#title あ…`, comments, sample paths). `str::floor_char_boundary` is
+/// still unstable, so we roll our own.
+pub(crate) fn floor_char_boundary(s: &str, idx: usize) -> usize {
+    if idx >= s.len() {
+        return s.len();
+    }
+    let mut i = idx;
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
 /// Returns `true` when the 0-based column `col` falls inside a `"..."` or
 /// `'...'` string literal on `line`. The delimiting quote bytes themselves
 /// also report `true` so callers can blanket-skip the whole string region.

@@ -154,6 +154,42 @@ pub fn find_enclosing_track_selector_at(
     }
 }
 
+/// Returns `true` when 1-based `line_number` carries track MML — either it
+/// begins with a track selector, or it is an indented continuation of a
+/// line that does.
+///
+/// ctrmml lets a track span multiple lines: "It is also possible to write a
+/// new line without specifying tracks, in that case the previously specified
+/// channels will be used" (mml_ref, *Adding notes and commands*). Such
+/// continuation lines hold real notes and must participate in transposition,
+/// whereas indented `@N` instrument-body lines, `#` headers and `;` comment
+/// lines must not.
+///
+/// Unlike [`find_enclosing_track_selector_at`], which walks *past* `@`/`#`
+/// lines hunting for any earlier selector, this stops at the nearest
+/// *context head* — the first line at or above `line_number` whose first byte
+/// is not whitespace — and reports whether that head is a track selector.
+/// Blank / whitespace-only lines are transparent (a blank line between a
+/// track and its continuation does not break the run).
+pub fn line_carries_track_mml(model: &dyn LineReader, line_number: u32) -> bool {
+    let mut ln = line_number;
+    loop {
+        let content = model.get_line_content(ln);
+        match content.as_bytes().first().copied() {
+            // Context head: its kind decides the whole indented run.
+            Some(b) if b > b' ' => {
+                return parse_leading_track_selector(content).is_some();
+            }
+            // Whitespace-only or empty line: transparent, keep walking up.
+            _ => {}
+        }
+        if ln == 1 {
+            return false;
+        }
+        ln -= 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,5 +319,85 @@ mod tests {
             "@0 fm".into(),
         ]);
         assert!(find_enclosing_track_selector(&model, 3).is_none());
+    }
+
+    // ---------- line_carries_track_mml ---------------------------------------
+
+    #[test]
+    fn track_mml_selector_line_itself() {
+        let model = LinesModel(vec!["A o4 cdefg".into()]);
+        assert!(line_carries_track_mml(&model, 1));
+    }
+
+    #[test]
+    fn track_mml_indented_continuation_of_track() {
+        // The canonical mml_ref example: a whitespace-led line reuses the
+        // previous track's channels and carries real notes.
+        let model = LinesModel(vec![
+            "A       cdefgab".into(),
+            "        bagfedc".into(),
+        ]);
+        assert!(line_carries_track_mml(&model, 1));
+        assert!(line_carries_track_mml(&model, 2));
+    }
+
+    #[test]
+    fn track_mml_continuation_across_blank_line() {
+        // A blank line between a track and its continuation is transparent.
+        let model = LinesModel(vec![
+            "A o4 c d".into(),
+            "".into(),
+            "  e f g".into(),
+        ]);
+        assert!(line_carries_track_mml(&model, 3));
+    }
+
+    #[test]
+    fn not_track_mml_header_lines() {
+        let model = LinesModel(vec![
+            "#title Advanced 06".into(),
+            "#composer megamml".into(),
+        ]);
+        assert!(!line_carries_track_mml(&model, 1));
+        assert!(!line_carries_track_mml(&model, 2));
+    }
+
+    #[test]
+    fn not_track_mml_instrument_body_lines() {
+        // Indented numeric lines belong to the `@N fm` definition above them,
+        // NOT to any track — they must not be treated as MML.
+        let model = LinesModel(vec![
+            "@1 fm 4 0".into(),
+            "\t31 15 0 8 8 38 0 13 3 0".into(),
+            "\t27 16 4 2 0 10 0 1 7 0".into(),
+        ]);
+        assert!(!line_carries_track_mml(&model, 1));
+        assert!(!line_carries_track_mml(&model, 2));
+        assert!(!line_carries_track_mml(&model, 3));
+    }
+
+    #[test]
+    fn instrument_body_not_misattributed_to_earlier_track() {
+        // Even with a track selector earlier in the file, an instrument
+        // body's context head is the `@N` line, so it stays non-MML.
+        let model = LinesModel(vec![
+            "A o4 c d".into(),
+            "@1 fm 4 0".into(),
+            "\t31 15 0 8".into(),
+        ]);
+        assert!(line_carries_track_mml(&model, 1));
+        assert!(!line_carries_track_mml(&model, 2));
+        assert!(!line_carries_track_mml(&model, 3));
+    }
+
+    #[test]
+    fn not_track_mml_comment_and_blank_lines() {
+        let model = LinesModel(vec![
+            "; just a comment".into(),
+            "".into(),
+        ]);
+        assert!(!line_carries_track_mml(&model, 1));
+        // A blank line with no context head above is not track MML.
+        assert!(!line_carries_track_mml(&model, 2));
     }
 }

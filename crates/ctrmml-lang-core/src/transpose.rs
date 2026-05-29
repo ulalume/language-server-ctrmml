@@ -15,9 +15,9 @@ use crate::brace_state::BraceState;
 use crate::chord::chord_natural_semitones;
 use crate::key_sig::{parse_key_sig, scan_key_sig_at, KeySig};
 use crate::octave_scan::scan_brace_state_at;
-use crate::text_scan::{is_in_comment, is_in_key_sig, is_in_string};
+use crate::text_scan::{floor_char_boundary, is_in_comment, is_in_key_sig, is_in_string};
 use crate::track_selector::{
-    find_enclosing_track_selector, parse_leading_track_selector, LineReader,
+    find_enclosing_track_selector, line_carries_track_mml, LineReader,
 };
 
 // ---------------------------------------------------------------------------
@@ -217,13 +217,17 @@ pub fn transpose_selection(
     let mut sel_lines: Vec<String> = Vec::new();
     for ln in selection.start_line_number..=selection.end_line_number {
         let full = model.get_line_content(ln).to_string();
+        // Columns are 1-based UTF-8 byte offsets. Defensive: a caller that
+        // conflates a UTF-16 column (e.g. Monaco) with a byte offset could
+        // land mid-codepoint; clamp to a char boundary so `full[from..to]`
+        // never panics on non-ASCII lines (`#title あ…`, comments, paths).
         let from = if ln == selection.start_line_number {
-            (selection.start_column as usize).saturating_sub(1).min(full.len())
+            floor_char_boundary(&full, (selection.start_column as usize).saturating_sub(1))
         } else {
             0
         };
         let to = if ln == selection.end_line_number {
-            (selection.end_column as usize).saturating_sub(1).min(full.len())
+            floor_char_boundary(&full, (selection.end_column as usize).saturating_sub(1))
         } else {
             full.len()
         };
@@ -231,16 +235,26 @@ pub fn transpose_selection(
         full_lines.push(full);
     }
     let sel_text = sel_lines.join("\n");
-    let col_offset = (selection.start_column as usize).saturating_sub(1);
+    // Byte offset of the selection start within its full line. Matches the
+    // clamped `from` above so per-byte `abs_col` lookups into the full line
+    // (is_in_comment / is_in_string / is_in_key_sig) stay aligned.
+    let col_offset = full_lines
+        .first()
+        .map(|full| floor_char_boundary(full, (selection.start_column as usize).saturating_sub(1)))
+        .unwrap_or(0);
     let bytes = sel_text.as_bytes();
 
-    // Per-line track classification: lines that don't start with a valid
-    // track selector (`#title`, `@N ...`, `;` comments, whitespace
-    // continuations, etc.) must be skipped entirely — otherwise letters
-    // in directive values like `#title Advanced` get misread as notes.
-    let line_is_track: Vec<bool> = full_lines
-        .iter()
-        .map(|l| parse_leading_track_selector(l).is_some())
+    // Per-line track classification. Non-MML lines (`#title`, `@N`
+    // instrument definitions and their indented bodies, `;` comments) must
+    // be skipped entirely — otherwise letters in directive values like
+    // `#title Advanced` get misread as notes. Crucially this is NOT a plain
+    // "starts with a selector" test: a whitespace-indented continuation of
+    // a *track* carries real notes and must be transposed, while an equally
+    // indented `@N` instrument-body line must not. `line_carries_track_mml`
+    // resolves that by walking back to each line's context head.
+    let line_is_track: Vec<bool> = (selection.start_line_number
+        ..=selection.end_line_number)
+        .map(|ln| line_carries_track_mml(model, ln))
         .collect();
 
     // -- Phase 1: Lift -----------------------------------------------------
@@ -544,7 +558,13 @@ pub fn transpose_selection(
                 *j = line_end;
                 continue;
             }
-            if is_in_string(full_line, abs_col) || shift_set.contains(j) {
+            // `'…'`/`"…"` strings, `_{…}` key-sig blocks, and the original
+            // `>`/`<` shifts (already queued for removal) carry no brace or
+            // octave state for the lower walk — skip them, mirroring Lift.
+            if is_in_string(full_line, abs_col)
+                || is_in_key_sig(full_line, abs_col)
+                || shift_set.contains(j)
+            {
                 low_col_in_sel += 1;
                 low_j += 1;
                 *j += 1;
@@ -1168,11 +1188,11 @@ mod tests {
     }
 
     #[test]
-    fn whitespace_indented_continuation_line_is_skipped() {
-        // Instrument-body continuation lines start with whitespace and
-        // contain only numeric parameters — they have no track selector
-        // and must be skipped, otherwise letters in any comment-shaped
-        // trailing text could leak through.
+    fn instrument_body_continuation_line_is_skipped() {
+        // An indented continuation of an `@N` instrument definition holds
+        // patch parameters, not notes. Its context head is the `@1 fm`
+        // line, so it must be skipped even though it starts with whitespace
+        // (contrast `track_continuation_line_is_transposed`).
         let input = concat!(
             "[@1 fm\n",
             "  31 7 1 5 ; bass\n",
@@ -1187,10 +1207,117 @@ mod tests {
     }
 
     #[test]
+    fn mid_codepoint_column_does_not_panic() {
+        // Defensive: a column that lands inside a multi-byte char (e.g. a
+        // UTF-16 column mis-used as a byte offset against a Japanese title)
+        // must clamp to a char boundary instead of panicking on the slice.
+        let model = LinesModel(vec![
+            "#title あいう".into(), // bytes: '#title ' = 7, then 3 bytes each
+            "A o4 c d".into(),
+        ]);
+        for start_col in 8..=12u32 {
+            // Should never panic regardless of where the column lands.
+            let _ = transpose_selection(
+                &model,
+                Selection {
+                    start_line_number: 1,
+                    start_column: start_col,
+                    end_line_number: 2,
+                    end_column: 9,
+                },
+                Direction::Up,
+            );
+        }
+        // The header line is skipped, so only the track notes shift.
+        let edit = transpose_selection(
+            &model,
+            Selection {
+                start_line_number: 1,
+                start_column: 1,
+                end_line_number: 2,
+                end_column: 9,
+            },
+            Direction::Up,
+        )
+        .unwrap();
+        assert!(edit.text.contains("c+ d+"));
+        assert!(edit.text.contains("あいう"));
+    }
+
+    #[test]
     fn comment_only_line_is_skipped() {
         assert_eq!(
             apply("[; comment with c d e f letters\nA o4 c d]", Direction::Down),
             "; comment with c d e f letters\nA o4 <b >d-"
         );
+    }
+
+    // ---------- regression: whitespace-indented TRACK continuation lines ------
+    //
+    // ctrmml lets a track span multiple lines; an indented line with no
+    // selector reuses the previous track's channels and carries real notes.
+    // These must be transposed — the original non-track skip wrongly dropped
+    // them (reported: only the first line of a multi-line track shifted).
+
+    #[test]
+    fn track_continuation_line_is_transposed() {
+        // The canonical mml_ref example, whole region selected. Every note
+        // on BOTH lines shifts up a semitone (c→c+ … b→>c on line 1;
+        // b→c a→a+ g→g+ f→f+ e→f d→d+ c→c+ on the continuation line).
+        assert_eq!(
+            apply("[A o4 cdefgab\n        bagfedc]", Direction::Up),
+            "A o4 c+d+ff+g+a+>c\n        c<a+g+f+fd+c+"
+        );
+    }
+
+    #[test]
+    fn track_continuation_only_selection_is_transposed() {
+        // Selection covers ONLY the continuation line; the enclosing track
+        // selector (and its octave) is reconstructed from the line above.
+        assert_eq!(
+            apply("A o4 cdefgab\n        [bagfedc]", Direction::Up),
+            "A o4 cdefgab\n        >c<a+g+f+fd+c+"
+        );
+    }
+
+    #[test]
+    fn track_continuation_across_blank_line_is_transposed() {
+        // A blank line between the track head and its continuation is
+        // transparent — the continuation is still track A.
+        assert_eq!(
+            apply("[A o4 c d\n\n  e f]", Direction::Up),
+            "A o4 c+ d+\n\n  f f+"
+        );
+    }
+
+    #[test]
+    fn keysig_block_mid_selection_does_not_perturb_octave_state() {
+        // A `_{…}` key-sig block between notes must not feed brace/octave
+        // state into either Lift or Lower. With key sig `+f`, an `f` spells
+        // as `f+` (no accidental needed), so transposing the surrounding
+        // notes up must leave the key sig untouched and the octave glyphs
+        // correct on both sides of it.
+        assert_eq!(
+            apply("A o4 [b _{+f} b]", Direction::Up),
+            "A o4 >c _{+f} c<"
+        );
+    }
+
+    #[test]
+    fn instrument_body_between_tracks_does_not_capture_following_track() {
+        // `@N` body lines stay non-MML; the later track's notes still shift.
+        let input = concat!(
+            "[A o4 c\n",
+            "@1 fm 4 0\n",
+            "\t31 15 0 8\n",
+            "A o4 d]",
+        );
+        let expected = concat!(
+            "A o4 c+\n",
+            "@1 fm 4 0\n",
+            "\t31 15 0 8\n",
+            "A o4 d+",
+        );
+        assert_eq!(apply(input, Direction::Up), expected);
     }
 }
