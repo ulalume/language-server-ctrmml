@@ -3,29 +3,24 @@ use tower_lsp::{
     jsonrpc::Result,
     lsp_types::{
         CodeActionOrCommand, CodeActionParams, CodeActionProviderCapability, CodeLens,
-        CodeLensOptions, CodeLensParams, Command, CompletionList, CompletionOptions,
-        CompletionParams, CompletionResponse, DidSaveTextDocumentParams, ExecuteCommandOptions,
-        ExecuteCommandParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
-        HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, Location,
-        MarkupContent, MarkupKind, MessageActionItem, MessageType, OneOf, Position, Range,
-        SaveOptions, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
-        TextDocumentSyncOptions, TextDocumentSyncSaveOptions,
+        CodeLensOptions, CodeLensParams, Command, CompletionItem, CompletionItemKind,
+        CompletionItemLabelDetails, CompletionList, CompletionOptions, CompletionParams,
+        CompletionResponse, CompletionTextEdit, DidSaveTextDocumentParams, Documentation,
+        ExecuteCommandOptions, ExecuteCommandParams, GotoDefinitionParams, GotoDefinitionResponse,
+        Hover, HoverContents, HoverParams, HoverProviderCapability, InitializeParams,
+        InitializeResult, InsertTextFormat, InsertTextMode, Location, MarkupContent, MarkupKind,
+        MessageActionItem, MessageType, OneOf, Position, Range, SaveOptions, ServerCapabilities,
+        TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+        TextDocumentSyncSaveOptions, TextEdit,
     },
     LanguageServer,
 };
 
 use crate::backend::Backend;
-use crate::chord_completion::chord_completion_items;
-use crate::completion::{
-    at_meta_completion_items, command_items, complete_pcm_paths, fm_instrument_context,
-    instrument_items, is_at_meta_context, is_instrument_definition_context,
-    is_meta_keyword_context, is_meta_value_context, is_platform_command_context,
-    is_rate_offset_context, meta_completion_items, option_items, platform_command_items,
-    platform_items, rate_offset_items,
-};
-use crate::config::config_from_value;
+use crate::completion::scan_pcm_paths;
+use crate::config::{completion_settings_from_value, config_from_value};
 use crate::export::ExportFormat;
-use crate::fill_measure::fill_measure_code_action;
+use crate::fill_measure::{fetch_cursor_tick, fill_measure_code_action};
 use crate::lsp_commands::{
     code_actions, command_ids, transpose_code_action, CMD_EXPORT_VGM, CMD_EXPORT_WAV,
     CMD_MDSLINK_DIRECTORY, CMD_MDSLINK_FILE, CMD_MDSLINK_FROM_CONFIG, CMD_MDSLINK_MENU, CMD_PLAY,
@@ -37,6 +32,10 @@ use crate::note_hover::note_hover_text;
 use crate::quickrom::QuickromRunResult;
 use crate::utils::{is_mml_uri, line_at};
 use crate::ym2612_convert::convert_mml_to_file;
+use ctrmml_lang_core::completion::{
+    completion_plan, completion_resolve, CompletionPlan, CoreCommand, CoreCompletionList, CoreItem,
+    CoreItemKind, DataPayload, DataRequest, EditRange, InsertFormat, Pos,
+};
 use ctrmml_lang_core::transpose::Direction;
 use ctrmml_lang_core::{
     build_preview_mml, code_lens, extract_instrument_block, hover_at, is_in_comment, token_at,
@@ -46,6 +45,16 @@ use ctrmml_lang_core::{
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        let supports_completion_as_is = params
+            .capabilities
+            .text_document
+            .as_ref()
+            .and_then(|text_document| text_document.completion.as_ref())
+            .and_then(|completion| completion.completion_item.as_ref())
+            .and_then(|item| item.insert_text_mode_support.as_ref())
+            .is_some_and(|support| support.value_set.contains(&InsertTextMode::AS_IS));
+        *self.supports_completion_as_is.write().await = supports_completion_as_is;
+
         let mut roots = Vec::new();
         if let Some(folders) = params.workspace_folders {
             for folder in folders {
@@ -60,17 +69,26 @@ impl LanguageServer for Backend {
         }
         *self.roots.write().await = roots;
 
+        let mut completion_settings = Default::default();
+        let mut hierarchy_explicit = false;
         if let Some(options) = params.initialization_options {
             if let Some(config) = config_from_value(&options) {
                 *self.config.write().await = config;
             }
+            (completion_settings, hierarchy_explicit) = completion_settings_from_value(&options);
         }
 
         if let Some(info) = &params.client_info {
             let name = info.name.to_lowercase();
-            *self.supports_hierarchy.write().await =
-                name.contains("visual studio code") || name.contains("vscode");
+            let is_vscode = name.contains("visual studio code") || name.contains("vscode");
+            *self.supports_hierarchy.write().await = is_vscode;
+            // Compatibility until native extensions send completion settings:
+            // client-name sniffing may fill only an omitted hierarchy flag.
+            if !hierarchy_explicit {
+                completion_settings.fm_picker_hierarchy = is_vscode;
+            }
         }
+        *self.completion_settings.write().await = completion_settings;
 
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
@@ -99,6 +117,7 @@ impl LanguageServer for Backend {
                         "+".into(),
                         "-".into(),
                         "=".into(),
+                        "|".into(),
                     ]),
                     ..CompletionOptions::default()
                 }),
@@ -256,7 +275,8 @@ impl LanguageServer for Backend {
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
-        let uri = params.text_document_position.text_document.uri.to_string();
+        let document_uri = params.text_document_position.text_document.uri;
+        let uri = document_uri.to_string();
         let position = params.text_document_position.position;
         let text = self
             .docs
@@ -265,89 +285,48 @@ impl LanguageServer for Backend {
             .get(&uri)
             .cloned()
             .unwrap_or_default();
-
-        let line = line_at(&text, position.line).unwrap_or_default();
-        let col = position.character as usize;
-        if is_in_comment(&line, col) {
-            return Ok(None);
-        }
-
-        if is_platform_command_context(&line, col) {
-            let items = platform_command_items(&line, col, position.line);
-            return Ok(Some(CompletionResponse::Array(items)));
-        }
-
         let roots = self.roots.read().await.clone();
-        if let Some(items) = complete_pcm_paths(&line, col, &uri, &roots, position.line) {
-            return Ok(Some(CompletionResponse::Array(items)));
-        }
+        let settings = self.completion_settings.read().await.clone();
+        let pos = Pos {
+            line: position.line,
+            character: position.character,
+        };
+        let trigger = params
+            .context
+            .and_then(|context| context.trigger_character)
+            .and_then(single_trigger_character);
 
-        if is_meta_value_context(&line, col, "#platform") {
-            return Ok(Some(CompletionResponse::Array(platform_items())));
-        }
-
-        if is_meta_value_context(&line, col, "#option") {
-            return Ok(Some(CompletionResponse::Array(option_items())));
-        }
-
-        if is_meta_keyword_context(&line, col) {
-            let items = meta_completion_items(&line, col, position.line);
-            return Ok(Some(CompletionResponse::Array(items)));
-        }
-
-        if line.trim_start().starts_with('#') {
-            return Ok(None);
-        }
-
-        if let Some(fm_kind) = fm_instrument_context(&line, col) {
-            if let Ok(items) = self
-                .complete_fm_instruments(&uri, &roots, &fm_kind, position.line, position.character)
-                .await
-            {
-                if !items.is_empty() {
-                    return Ok(Some(CompletionResponse::Array(items)));
-                }
+        let list = match completion_plan(&text, pos, trigger, &settings) {
+            CompletionPlan::Done(list) => list,
+            CompletionPlan::NeedsData(request) => {
+                let payload = match request {
+                    DataRequest::PcmPaths => DataPayload::PcmPaths(scan_pcm_paths(&uri, &roots)),
+                    DataRequest::PcmFiles => DataPayload::PcmFiles(scan_pcm_paths(&uri, &roots)),
+                    DataRequest::FmPatches { .. } => {
+                        DataPayload::FmPatches(self.fetch_fm_patches(&uri, &roots).await)
+                    }
+                    DataRequest::CursorTick => {
+                        let timing = match self.command_path().await {
+                            Ok(command_path) => {
+                                fetch_cursor_tick(
+                                    &command_path,
+                                    &document_uri,
+                                    &text,
+                                    position.line,
+                                    position.character,
+                                )
+                                .await
+                            }
+                            Err(_) => None,
+                        };
+                        DataPayload::CursorTick(timing)
+                    }
+                };
+                completion_resolve(&text, pos, trigger, &settings, payload)
             }
-        }
-
-        if is_rate_offset_context(&line, col) {
-            return Ok(Some(CompletionResponse::Array(rate_offset_items())));
-        }
-
-        if is_instrument_definition_context(&line, col) {
-            // Mark incomplete so vscode re-queries when the user types
-            // a keyword character — once they reach `fm` we want the FM
-            // file picker to take over (fm_instrument_context runs first
-            // on the next query). Without this, vscode would keep
-            // filtering the cached keyword list locally.
-            return Ok(Some(CompletionResponse::List(CompletionList {
-                is_incomplete: true,
-                items: instrument_items(),
-            })));
-        }
-
-        if is_at_meta_context(&line, col) {
-            let items = at_meta_completion_items(&line, col, position.line);
-            return Ok(Some(CompletionResponse::Array(items)));
-        }
-
-        if line.trim_start().starts_with('@') {
-            return Ok(None);
-        }
-
-        if let Some(items) = chord_completion_items(&text, position.line, position.character) {
-            return Ok(Some(CompletionResponse::Array(items)));
-        }
-        // Mark the command fallback incomplete so editors re-query on each
-        // keystroke instead of filtering this list locally. Without this,
-        // typing `{c` would keep showing the cached `C<ticks>` command from
-        // when the user first hit `{` (the chord context wasn't satisfied
-        // yet) — and `{a` would show nothing at all, since no command starts
-        // with `a`. Matches web-ctrmml's `incomplete: true` (mml-completions.ts).
-        Ok(Some(CompletionResponse::List(CompletionList {
-            is_incomplete: true,
-            items: command_items(),
-        })))
+        };
+        let supports_as_is = *self.supports_completion_as_is.read().await;
+        Ok(Some(core_completion_response(list, supports_as_is)))
     }
 
     async fn code_lens(&self, params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
@@ -788,6 +767,90 @@ impl LanguageServer for Backend {
     }
 }
 
+fn single_trigger_character(value: String) -> Option<char> {
+    let mut chars = value.chars();
+    let character = chars.next()?;
+    chars.next().is_none().then_some(character)
+}
+
+fn core_completion_response(list: CoreCompletionList, supports_as_is: bool) -> CompletionResponse {
+    CompletionResponse::List(CompletionList {
+        is_incomplete: list.is_incomplete,
+        items: list
+            .items
+            .into_iter()
+            .map(|item| core_completion_item(item, supports_as_is))
+            .collect(),
+    })
+}
+
+fn core_completion_item(item: CoreItem, supports_as_is: bool) -> CompletionItem {
+    let edit = TextEdit {
+        range: core_edit_range(item.edit_range),
+        new_text: item.insert.text.clone(),
+    };
+    let additional_text_edits = (!item.additional_edits.is_empty()).then(|| {
+        item.additional_edits
+            .into_iter()
+            .map(|edit| TextEdit {
+                range: core_edit_range(edit.range),
+                new_text: edit.new_text,
+            })
+            .collect()
+    });
+
+    CompletionItem {
+        label: item.label,
+        label_details: item
+            .label_description
+            .map(|description| CompletionItemLabelDetails {
+                detail: None,
+                description: Some(description),
+            }),
+        kind: Some(core_completion_kind(item.kind)),
+        detail: item.detail,
+        documentation: item.documentation.map(Documentation::String),
+        insert_text: Some(item.insert.text),
+        insert_text_format: (item.insert.format == InsertFormat::Snippet)
+            .then_some(InsertTextFormat::SNIPPET),
+        insert_text_mode: (item.insert.as_is && supports_as_is).then_some(InsertTextMode::AS_IS),
+        text_edit: Some(CompletionTextEdit::Edit(edit)),
+        additional_text_edits,
+        filter_text: item.filter_text,
+        sort_text: item.sort_text,
+        preselect: Some(item.preselect),
+        command: item.command.map(|command| match command {
+            CoreCommand::TriggerSuggest => Command {
+                title: "Trigger suggest".to_string(),
+                command: "editor.action.triggerSuggest".to_string(),
+                arguments: None,
+            },
+        }),
+        ..CompletionItem::default()
+    }
+}
+
+fn core_completion_kind(kind: CoreItemKind) -> CompletionItemKind {
+    match kind {
+        CoreItemKind::Function => CompletionItemKind::FUNCTION,
+        CoreItemKind::Keyword => CompletionItemKind::KEYWORD,
+        CoreItemKind::Value => CompletionItemKind::VALUE,
+        CoreItemKind::Property => CompletionItemKind::PROPERTY,
+        CoreItemKind::TypeParameter => CompletionItemKind::TYPE_PARAMETER,
+        CoreItemKind::Struct => CompletionItemKind::STRUCT,
+        CoreItemKind::File => CompletionItemKind::FILE,
+        CoreItemKind::Snippet => CompletionItemKind::SNIPPET,
+        CoreItemKind::Text => CompletionItemKind::TEXT,
+    }
+}
+
+fn core_edit_range(range: EditRange) -> Range {
+    Range {
+        start: Position::new(range.start.line, range.start.character),
+        end: Position::new(range.end.line, range.end.character),
+    }
+}
+
 async fn select_menu_command(
     backend: &Backend,
     menu_name: &str,
@@ -1083,4 +1146,147 @@ fn find_track_definition(text: &str, target: &str) -> Option<Range> {
         return Some(range);
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use ctrmml_lang_core::completion::{CoreTextEdit, InsertSpec};
+
+    use super::*;
+
+    fn core_item(kind: CoreItemKind) -> CoreItem {
+        CoreItem {
+            label: "item".to_string(),
+            label_description: None,
+            kind,
+            detail: None,
+            documentation: None,
+            insert: InsertSpec {
+                text: "value".to_string(),
+                format: InsertFormat::PlainText,
+                as_is: false,
+            },
+            filter_text: None,
+            sort_text: None,
+            preselect: false,
+            edit_range: EditRange::new(Pos::default(), Pos::default()),
+            additional_edits: Vec::new(),
+            command: None,
+        }
+    }
+
+    #[test]
+    fn completion_kind_mapping_covers_core_contract() {
+        let cases = [
+            (CoreItemKind::Function, CompletionItemKind::FUNCTION),
+            (CoreItemKind::Keyword, CompletionItemKind::KEYWORD),
+            (CoreItemKind::Value, CompletionItemKind::VALUE),
+            (CoreItemKind::Property, CompletionItemKind::PROPERTY),
+            (
+                CoreItemKind::TypeParameter,
+                CompletionItemKind::TYPE_PARAMETER,
+            ),
+            (CoreItemKind::Struct, CompletionItemKind::STRUCT),
+            (CoreItemKind::File, CompletionItemKind::FILE),
+            (CoreItemKind::Snippet, CompletionItemKind::SNIPPET),
+            (CoreItemKind::Text, CompletionItemKind::TEXT),
+        ];
+        for (core, lsp) in cases {
+            assert_eq!(core_completion_kind(core), lsp);
+        }
+    }
+
+    #[test]
+    fn completion_item_maps_all_transport_fields() {
+        let mut item = core_item(CoreItemKind::Snippet);
+        item.label_description = Some("inline detail".to_string());
+        item.detail = Some("detail".to_string());
+        item.documentation = Some("literal *plain* text".to_string());
+        item.insert = InsertSpec {
+            text: "  ${1:value}".to_string(),
+            format: InsertFormat::Snippet,
+            as_is: true,
+        };
+        item.filter_text = Some("filter".to_string());
+        item.sort_text = Some("001".to_string());
+        item.preselect = true;
+        item.edit_range = EditRange::new(
+            Pos {
+                line: 2,
+                character: 3,
+            },
+            Pos {
+                line: 2,
+                character: 7,
+            },
+        );
+        item.additional_edits.push(CoreTextEdit {
+            range: EditRange::new(
+                Pos {
+                    line: 3,
+                    character: 0,
+                },
+                Pos {
+                    line: 4,
+                    character: 0,
+                },
+            ),
+            new_text: String::new(),
+        });
+        item.command = Some(CoreCommand::TriggerSuggest);
+
+        let mapped = core_completion_item(item, true);
+        assert_eq!(mapped.kind, Some(CompletionItemKind::SNIPPET));
+        assert_eq!(mapped.insert_text_format, Some(InsertTextFormat::SNIPPET));
+        assert_eq!(mapped.insert_text_mode, Some(InsertTextMode::AS_IS));
+        assert_eq!(mapped.preselect, Some(true));
+        assert_eq!(
+            mapped.documentation,
+            Some(Documentation::String("literal *plain* text".to_string()))
+        );
+        assert_eq!(
+            mapped.label_details.and_then(|details| details.description),
+            Some("inline detail".to_string())
+        );
+        assert_eq!(
+            mapped.additional_text_edits.expect("additional edit").len(),
+            1
+        );
+        assert_eq!(
+            mapped.command.expect("trigger command").command,
+            "editor.action.triggerSuggest"
+        );
+        let CompletionTextEdit::Edit(edit) = mapped.text_edit.expect("primary edit") else {
+            panic!("expected simple text edit");
+        };
+        assert_eq!(edit.range.start, Position::new(2, 3));
+        assert_eq!(edit.range.end, Position::new(2, 7));
+        assert_eq!(edit.new_text, "  ${1:value}");
+    }
+
+    #[test]
+    fn completion_item_omits_unsupported_as_is_and_plain_format() {
+        let mut item = core_item(CoreItemKind::Text);
+        item.insert.as_is = true;
+        let mapped = core_completion_item(item, false);
+        assert_eq!(mapped.insert_text_format, None);
+        assert_eq!(mapped.insert_text_mode, None);
+        assert_eq!(mapped.additional_text_edits, None);
+    }
+
+    #[test]
+    fn completion_response_preserves_incomplete_flag() {
+        let response = core_completion_response(
+            CoreCompletionList {
+                items: vec![core_item(CoreItemKind::Text)],
+                is_incomplete: true,
+            },
+            false,
+        );
+        let CompletionResponse::List(list) = response else {
+            panic!("expected completion list");
+        };
+        assert!(list.is_incomplete);
+        assert_eq!(list.items.len(), 1);
+    }
 }
