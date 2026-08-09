@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+use ctrmml_lang_core::is_at_number;
 use pathdiff::diff_paths;
 use tower_lsp::lsp_types::{
     Command, CompletionItem, CompletionItemKind, Documentation, InsertTextFormat, Position, Range,
@@ -8,7 +9,6 @@ use tower_lsp::lsp_types::{
 use walkdir::WalkDir;
 
 use crate::docs;
-use crate::mml::is_at_number;
 use crate::utils::{is_wav, uri_to_dir};
 
 pub(crate) fn meta_completion_items(

@@ -1,6 +1,6 @@
 [package]
 name = "ctrmml-lang-core"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "Pure MML language semantics — chord, transpose, key signature, octave, time signature. WASM-compatible, no I/O."
 license = "MIT OR Apache-2.0"

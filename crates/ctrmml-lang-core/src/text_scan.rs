@@ -106,6 +106,160 @@ pub fn is_in_string(line: &str, col: usize) -> bool {
     false
 }
 
+/// Returns the token touching column `col` on `line`, along with its
+/// `[start, end)` byte-offset span. Ported verbatim from the root LSP
+/// crate's `mml::token_at` (formerly `src/mml/mod.rs`) — walks left from
+/// a whitespace-adjusted `col` to the nearest non-whitespace byte, then
+/// expands to the full run of [`is_token_char`] bytes around it. `^` and
+/// `&` are always treated as single-character tokens (tie/slur
+/// commands), regardless of their neighbors.
+///
+/// Note: this is a distinct implementation from the private,
+/// whitespace-delimited `token_at` in `hover.rs` — the two were not
+/// unified when this helper was absorbed into core; see that module for
+/// details.
+pub fn token_at(line: &str, col: usize) -> Option<(&str, usize, usize)> {
+    let bytes = line.as_bytes();
+    if bytes.is_empty() {
+        return None;
+    }
+    let mut idx = col.min(line.len().saturating_sub(1));
+    while idx > 0 && bytes[idx].is_ascii_whitespace() {
+        idx -= 1;
+    }
+
+    // The byte immediately left of trailing ASCII whitespace can be a UTF-8
+    // continuation byte. Normalize it before inspecting or slicing the token.
+    idx = floor_char_boundary(line, idx);
+
+    let ch = line[idx..].chars().next()?;
+    if ch == '^' || ch == '&' {
+        return Some((&line[idx..idx + 1], idx, idx + 1));
+    }
+
+    let mut start = idx;
+    while start > 0 && is_token_char(bytes[start - 1] as char) {
+        start -= 1;
+    }
+    let mut end = idx + ch.len_utf8();
+    while end < line.len() && is_token_char(bytes[end] as char) {
+        end += 1;
+    }
+    if start == end {
+        return None;
+    }
+    Some((&line[start..end], start, end))
+}
+
+/// Splits `input` on whitespace outside double-quoted runs.
+///
+/// Quote characters remain part of their token, and an unterminated quoted
+/// run consumes through the end of the input. This is used for PCM instrument
+/// declarations whose sample paths may themselves contain whitespace.
+pub fn tokenize_outside_double_quotes(input: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    for ch in input.chars() {
+        if ch == '"' {
+            current.push(ch);
+            in_quotes = !in_quotes;
+        } else if ch.is_whitespace() && !in_quotes {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(ch);
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+/// Returns `true` when `token` is an `@<digits>` instrument reference
+/// (e.g. `@12`). Ported verbatim from the root LSP crate's
+/// `mml::is_at_number`.
+///
+/// Note: `hover.rs` has its own private, differently-implemented
+/// `is_at_number` (byte-slice based rather than `Chars`-based); the two
+/// were not unified when this helper was absorbed into core.
+pub fn is_at_number(token: &str) -> bool {
+    let mut chars = token.chars();
+    if chars.next() != Some('@') {
+        return false;
+    }
+    let rest: String = chars.collect();
+    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+}
+
+/// Returns the `(left, right)` byte offsets of the `'...'` run enclosing
+/// `col`, if any — both offsets point at the quote bytes themselves.
+/// Ported verbatim from the root LSP crate's `mml::single_quote_bounds`.
+///
+/// Note: `hover.rs` has its own private, differently-implemented
+/// `single_quote_bounds`; the two were not unified when this helper was
+/// absorbed into core.
+pub fn single_quote_bounds(line: &str, col: usize) -> Option<(usize, usize)> {
+    let bytes = line.as_bytes();
+    let mut left = col.min(line.len().saturating_sub(1));
+    while left > 0 && bytes[left] != b'\'' {
+        left = left.saturating_sub(1);
+    }
+    if bytes[left] != b'\'' {
+        return None;
+    }
+
+    let mut right = col.min(line.len().saturating_sub(1));
+    while right < line.len() && bytes[right] != b'\'' {
+        right += 1;
+    }
+    if right >= line.len() || bytes[right] != b'\'' {
+        return None;
+    }
+    if left >= right {
+        return None;
+    }
+    Some((left, right))
+}
+
+/// Returns the `(left, right)` byte offsets of the `"..."` run enclosing
+/// `col`, if any — both offsets point at the quote bytes themselves.
+/// Ported verbatim from the root LSP crate's `mml::double_quote_bounds`.
+///
+/// Note: `hover.rs` has its own private, differently-implemented
+/// `double_quote_bounds`; the two were not unified when this helper was
+/// absorbed into core.
+pub fn double_quote_bounds(line: &str, col: usize) -> Option<(usize, usize)> {
+    let bytes = line.as_bytes();
+    let mut left = col.min(line.len().saturating_sub(1));
+    while left > 0 && bytes[left] != b'"' {
+        left = left.saturating_sub(1);
+    }
+    if bytes[left] != b'"' {
+        return None;
+    }
+
+    let mut right = col.min(line.len().saturating_sub(1));
+    while right < line.len() && bytes[right] != b'"' {
+        right += 1;
+    }
+    if right >= line.len() || bytes[right] != b'"' {
+        return None;
+    }
+    if left >= right {
+        return None;
+    }
+    Some((left, right))
+}
+
+/// Byte classifier backing [`token_at`]'s run expansion. Ported verbatim
+/// from the root LSP crate's `mml` module.
+fn is_token_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '#' | '@' | '_' | '=' | '*' | '-' | '+' | '{' | '}')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,7 +457,10 @@ mod tests {
         // after is comment, not string.
         let line = "; 'fm3'";
         for col in 0..line.len() {
-            assert!(!is_in_string(line, col), "col {col} should not be in string");
+            assert!(
+                !is_in_string(line, col),
+                "col {col} should not be in string"
+            );
         }
     }
 
@@ -321,5 +478,143 @@ mod tests {
     fn string_col_past_end_returns_false() {
         assert!(!is_in_string("abc", 999));
         assert!(!is_in_string("'abc'", 999));
+    }
+
+    // ---------- is_in_comment regression: root-crate absorption -----------
+
+    #[test]
+    fn is_in_comment_regression_semicolon_inside_single_quote_string() {
+        // Regression pin for the root-crate `is_in_comment` divergence:
+        // `src/lsp.rs`'s `goto_definition` and `completion` handlers used
+        // to call a duplicate `is_in_comment` in `src/mml/mod.rs` that
+        // only tracked `"..."` strings, so a `;` inside a `'...'`
+        // platform-command string (e.g. `'mode 1'`) was misread as the
+        // start of a line comment. Both call sites now use this core
+        // implementation, which tracks `'...'` too.
+        let line = "'; a' ; b";
+        // Column 2 sits just after the `;` at index 1, which is inside
+        // the `'...'` run — must NOT read as a comment start.
+        assert!(!is_in_comment(line, 2));
+        // Column 7 sits just after the real `;` at index 6, outside any
+        // string — must read as a comment start.
+        assert!(is_in_comment(line, 7));
+    }
+
+    // ---------- token_at ----------------------------------------------------
+    //
+    // Ported from the root LSP crate's `mml::token_at`. Distinct from the
+    // private, whitespace-delimited `token_at` in `hover.rs` — see the
+    // doc comment on `token_at` above.
+
+    #[test]
+    fn token_at_expands_over_special_token_chars() {
+        // `@12` is one token: `@` and digits are both `is_token_char`.
+        let line = "@12 cde";
+        assert_eq!(token_at(line, 1), Some(("@12", 0, 3)));
+        assert_eq!(token_at(line, 0), Some(("@12", 0, 3)));
+    }
+
+    #[test]
+    fn token_at_caret_and_ampersand_are_standalone() {
+        // `^` (tie) and `&` (slur) are always single-character tokens,
+        // even when directly touching alphanumeric neighbors.
+        let line = "c^d";
+        assert_eq!(token_at(line, 1), Some(("^", 1, 2)));
+        let line2 = "c&d";
+        assert_eq!(token_at(line2, 1), Some(("&", 1, 2)));
+    }
+
+    #[test]
+    fn token_at_skips_left_over_whitespace() {
+        // Cursor sitting in trailing whitespace resolves to the nearest
+        // token to its left, not an empty span.
+        let line = "cde  fgh";
+        assert_eq!(token_at(line, 4), Some(("cde", 0, 3)));
+    }
+
+    #[test]
+    fn token_at_trailing_whitespace_is_safe_after_multibyte_scalars() {
+        for (line, expected) in [
+            ("A あ ", ("あ", 2, 5)),
+            ("A 😀 ", ("😀", 2, 6)),
+            ("A 𝄞 ", ("𝄞", 2, 6)),
+            ("A c4 あ\t", ("あ", 5, 8)),
+        ] {
+            assert_eq!(token_at(line, line.len()), Some(expected), "{line:?}");
+        }
+    }
+
+    #[test]
+    fn token_at_empty_line_is_none() {
+        assert_eq!(token_at("", 0), None);
+    }
+
+    // ---------- tokenize_outside_double_quotes -----------------------------
+
+    #[test]
+    fn quote_aware_tokenizer_keeps_whitespace_inside_paths() {
+        assert_eq!(
+            tokenize_outside_double_quotes("@1 pcm \"drums and bass/kick.wav\" rate=8000"),
+            ["@1", "pcm", "\"drums and bass/kick.wav\"", "rate=8000"]
+        );
+    }
+
+    #[test]
+    fn quote_aware_tokenizer_accepts_tabs_and_unterminated_quotes() {
+        assert_eq!(
+            tokenize_outside_double_quotes("@1\tpcm\t\"ドラム kick.wav"),
+            ["@1", "pcm", "\"ドラム kick.wav"]
+        );
+    }
+
+    // ---------- is_at_number -------------------------------------------------
+    //
+    // Ported from the root LSP crate's `mml::is_at_number`. Distinct from
+    // the private `is_at_number` in `hover.rs` — see the doc comment on
+    // `is_at_number` above.
+
+    #[test]
+    fn is_at_number_accepts_at_followed_by_digits() {
+        assert!(is_at_number("@12"));
+        assert!(is_at_number("@0"));
+    }
+
+    #[test]
+    fn is_at_number_rejects_bare_at_and_non_digits() {
+        assert!(!is_at_number("@"));
+        assert!(!is_at_number("@1a"));
+        assert!(!is_at_number("12"));
+    }
+
+    // ---------- single_quote_bounds / double_quote_bounds --------------------
+    //
+    // Ported from the root LSP crate's `mml::single_quote_bounds` /
+    // `mml::double_quote_bounds`. Distinct from the private, differently
+    // implemented `single_quote_bounds` / `double_quote_bounds` in
+    // `hover.rs` — see the doc comments above.
+
+    #[test]
+    fn single_quote_bounds_finds_enclosing_run() {
+        let line = "'abc'";
+        assert_eq!(single_quote_bounds(line, 2), Some((0, 4)));
+    }
+
+    #[test]
+    fn single_quote_bounds_none_outside_any_run() {
+        let line = "a 'bc' d";
+        assert_eq!(single_quote_bounds(line, 0), None);
+    }
+
+    #[test]
+    fn double_quote_bounds_finds_enclosing_run() {
+        let line = "@1 pcm \"a.wav\"";
+        // `"a.wav"` spans bytes [7, 13].
+        assert_eq!(double_quote_bounds(line, 9), Some((7, 13)));
+    }
+
+    #[test]
+    fn double_quote_bounds_none_outside_any_run() {
+        let line = "@1 pcm \"a.wav\"";
+        assert_eq!(double_quote_bounds(line, 0), None);
     }
 }

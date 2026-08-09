@@ -3,9 +3,8 @@ use tower_lsp::{
     jsonrpc::Result,
     lsp_types::{
         CodeActionOrCommand, CodeActionParams, CodeActionProviderCapability, CodeLens,
-        CodeLensOptions, CodeLensParams, Command, CompletionList,
-        CompletionOptions, CompletionParams, CompletionResponse, DidSaveTextDocumentParams,
-        ExecuteCommandOptions,
+        CodeLensOptions, CodeLensParams, Command, CompletionList, CompletionOptions,
+        CompletionParams, CompletionResponse, DidSaveTextDocumentParams, ExecuteCommandOptions,
         ExecuteCommandParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
         HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, Location,
         MarkupContent, MarkupKind, MessageActionItem, MessageType, OneOf, Position, Range,
@@ -17,8 +16,6 @@ use tower_lsp::{
 
 use crate::backend::Backend;
 use crate::chord_completion::chord_completion_items;
-use crate::fill_measure::fill_measure_code_action;
-use crate::note_hover::note_hover_text;
 use crate::completion::{
     at_meta_completion_items, command_items, complete_pcm_paths, fm_instrument_context,
     instrument_items, is_at_meta_context, is_instrument_definition_context,
@@ -28,19 +25,23 @@ use crate::completion::{
 };
 use crate::config::config_from_value;
 use crate::export::ExportFormat;
-use ctrmml_lang_core::{build_preview_mml, code_lens, extract_instrument_block, hover_at, InstrumentType};
+use crate::fill_measure::fill_measure_code_action;
 use crate::lsp_commands::{
     code_actions, command_ids, transpose_code_action, CMD_EXPORT_VGM, CMD_EXPORT_WAV,
     CMD_MDSLINK_DIRECTORY, CMD_MDSLINK_FILE, CMD_MDSLINK_FROM_CONFIG, CMD_MDSLINK_MENU, CMD_PLAY,
     CMD_PLAY_FROM_CURSOR, CMD_PREVIEW_PATCH, CMD_QUICKROM_DIRECTORY, CMD_QUICKROM_FILE,
     CMD_QUICKROM_FROM_CONFIG, CMD_QUICKROM_MENU, CMD_SAVE_PATCH, CMD_STOP,
 };
-use crate::ym2612_convert::convert_mml_to_file;
-use ctrmml_lang_core::transpose::Direction;
 use crate::mdslink::MdslinkRunResult;
-use crate::mml::{is_in_comment, token_at};
+use crate::note_hover::note_hover_text;
 use crate::quickrom::QuickromRunResult;
 use crate::utils::{is_mml_uri, line_at};
+use crate::ym2612_convert::convert_mml_to_file;
+use ctrmml_lang_core::transpose::Direction;
+use ctrmml_lang_core::{
+    build_preview_mml, code_lens, extract_instrument_block, hover_at, is_in_comment, token_at,
+    InstrumentType,
+};
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
@@ -107,7 +108,9 @@ impl LanguageServer for Backend {
                     ..ExecuteCommandOptions::default()
                 }),
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
-                code_lens_provider: Some(CodeLensOptions { resolve_provider: Some(false) }),
+                code_lens_provider: Some(CodeLensOptions {
+                    resolve_provider: Some(false),
+                }),
                 ..ServerCapabilities::default()
             },
             ..InitializeResult::default()
@@ -126,7 +129,10 @@ impl LanguageServer for Backend {
         let uri = params.text_document.uri.to_string();
         let mut latest_text: Option<String> = None;
         if let Some(change) = params.content_changes.into_iter().last() {
-            self.docs.write().await.insert(uri.clone(), change.text.clone());
+            self.docs
+                .write()
+                .await
+                .insert(uri.clone(), change.text.clone());
             *self.last_doc.write().await = Some(uri.clone());
             latest_text = Some(change.text);
         }
@@ -295,13 +301,7 @@ impl LanguageServer for Backend {
 
         if let Some(fm_kind) = fm_instrument_context(&line, col) {
             if let Ok(items) = self
-                .complete_fm_instruments(
-                    &uri,
-                    &roots,
-                    &fm_kind,
-                    position.line,
-                    position.character,
-                )
+                .complete_fm_instruments(&uri, &roots, &fm_kind, position.line, position.character)
                 .await
             {
                 if !items.is_empty() {
@@ -335,9 +335,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
 
-        if let Some(items) =
-            chord_completion_items(&text, position.line, position.character)
-        {
+        if let Some(items) = chord_completion_items(&text, position.line, position.character) {
             return Ok(Some(CompletionResponse::Array(items)));
         }
         // Mark the command fallback incomplete so editors re-query on each

@@ -56,7 +56,10 @@ pub use instrument_preview::{
     build_preview_mml, extract_instrument_block, ExtractedBlock, InstrumentType,
 };
 pub use preview_note::{preview_note_at, PreviewNoteHit};
-pub use text_scan::{is_in_comment, is_in_key_sig};
+pub use text_scan::{
+    double_quote_bounds, is_at_number, is_in_comment, is_in_key_sig, single_quote_bounds, token_at,
+    tokenize_outside_double_quotes,
+};
 pub use transpose::{transpose_selection, Direction, Selection, TransposeEdit};
 pub use track_selector::{
     find_enclosing_track_selector, find_enclosing_track_selector_at,

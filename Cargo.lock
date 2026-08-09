@@ -194,14 +194,14 @@ dependencies = [
 
 [[package]]
 name = "ctrmml-lang-core"
-version = "0.1.0"
+version = "0.6.8"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "ctrmml-lang-wasm"
-version = "0.1.0"
+version = "0.6.8"
 dependencies = [
  "ctrmml-lang-core",
  "serde",
@@ -211,7 +211,7 @@ dependencies = [
 
 [[package]]
 name = "ctrmml-lsp"
-version = "0.6.4"
+version = "0.6.8"
 dependencies = [
  "ctrmml-lang-core",
  "dirs",
@@ -785,14 +785,6 @@ dependencies = [
  "serde_json",
  "serde_repr",
  "url",
-]
-
-[[package]]
-name = "lsp-wasm-spike"
-version = "0.0.0"
-dependencies = [
- "tokio",
- "tower-lsp",
 ]
 
 [[package]]

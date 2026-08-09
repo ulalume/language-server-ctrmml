@@ -9,7 +9,27 @@ permissions:
   contents: write
 
 jobs:
+  verify-version:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify tag matches package version
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#v}"
+          VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "ctrmml-lsp") | .version')
+          if [ "${VERSION}" != "${TAG}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match ctrmml-lsp package version ${VERSION}"
+            exit 1
+          fi
+
   build:
+    needs: verify-version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

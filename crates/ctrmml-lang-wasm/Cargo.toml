@@ -1,6 +1,6 @@
 [package]
 name = "ctrmml-lang-wasm"
-version = "0.1.0"
+version.workspace = true
 edition = "2021"
 description = "wasm-bindgen wrapper exposing ctrmml-lang-core to JavaScript / TypeScript callers (web-ctrmml)."
 license = "MIT OR Apache-2.0"

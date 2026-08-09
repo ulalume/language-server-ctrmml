@@ -2,12 +2,14 @@
 members = [
     "crates/ctrmml-lang-core",
     "crates/ctrmml-lang-wasm",
-    "crates/lsp-wasm-spike",
 ]
+
+[workspace.package]
+version = "0.6.8"
 
 [package]
 name = "ctrmml-lsp"
-version = "0.6.4"
+version.workspace = true
 edition = "2021"
 
 [dependencies]
