@@ -7,12 +7,13 @@ use tower_lsp::lsp_types::{
     Documentation, InsertTextFormat, InsertTextMode, Position, Range, TextEdit,
 };
 
+use ctrmml_lang_core::completion::FmPatchData;
 use ctrmml_lang_core::docs::FM_DEFAULT_TEMPLATE;
 use walkdir::WalkDir;
 
 use crate::backend::Backend;
-use crate::completion::FmCompletionKind;
-use crate::utils::{is_fm_instrument, uri_to_dir};
+use crate::completion::{completion_base_dir, completion_search_roots, FmCompletionKind};
+use crate::utils::is_fm_instrument;
 use crate::ym2612_convert::{run_ym2612_convert, InfoResponse};
 
 const CACHE_TTL_SECS: u64 = 60;
@@ -48,17 +49,9 @@ impl FmInstrumentCache {
 }
 
 fn scan_instrument_files(uri: &str, roots: &[PathBuf]) -> Vec<PathBuf> {
-    let mut search_roots = Vec::new();
-    if let Some(base_dir) = uri_to_dir(uri) {
-        search_roots.push(base_dir);
-    }
-    search_roots.extend(roots.iter().cloned());
-    let mut seen = HashSet::new();
-    search_roots.retain(|path| seen.insert(path.clone()));
-
     let mut files = Vec::new();
     let mut seen_files = HashSet::new();
-    for root in search_roots {
+    for root in completion_search_roots(uri, roots) {
         for entry in WalkDir::new(&root).into_iter().filter_map(|e| e.ok()) {
             if !entry.file_type().is_file() {
                 continue;
@@ -159,6 +152,39 @@ async fn run_info(cmd_path: &str, files: &[PathBuf]) -> Option<InfoResponse> {
 }
 
 impl Backend {
+    pub(crate) async fn fetch_fm_patches(&self, uri: &str, roots: &[PathBuf]) -> Vec<FmPatchData> {
+        let Some(base_dir) = completion_base_dir(uri, roots) else {
+            return Vec::new();
+        };
+        let cmd_path = match self.ym2612_convert_path().await {
+            Ok(path) => path,
+            Err(_) => return Vec::new(),
+        };
+        let scan_roots = completion_search_roots(uri, roots);
+
+        {
+            let cache = self.fm_instrument_cache.lock().await;
+            if let Some(cached) = cache.as_ref() {
+                if cached.is_valid(&scan_roots, &cmd_path) {
+                    return patches_for_core(&cached.entries, &base_dir);
+                }
+            }
+        }
+
+        let files = scan_instrument_files(uri, roots);
+        let patches = parse_instruments(&cmd_path, &files).await;
+        let result = patches_for_core(&patches, &base_dir);
+
+        let mut cache = self.fm_instrument_cache.lock().await;
+        *cache = Some(FmInstrumentCache {
+            entries: patches,
+            last_scan: SystemTime::now(),
+            roots: scan_roots,
+            cmd_path,
+        });
+        result
+    }
+
     pub(crate) async fn complete_fm_instruments(
         &self,
         uri: &str,
@@ -176,11 +202,13 @@ impl Backend {
             return Ok(build_items(&[], kind, line_num, col, hierarchy));
         };
 
+        let scan_roots = completion_search_roots(uri, roots);
+
         // Check cache
         {
             let cache = self.fm_instrument_cache.lock().await;
             if let Some(cached) = cache.as_ref() {
-                if cached.is_valid(roots, &cmd_path) {
+                if cached.is_valid(&scan_roots, &cmd_path) {
                     return Ok(build_items(&cached.entries, kind, line_num, col, hierarchy));
                 }
             }
@@ -198,13 +226,34 @@ impl Backend {
             *cache = Some(FmInstrumentCache {
                 entries: patches,
                 last_scan: SystemTime::now(),
-                roots: roots.to_vec(),
+                roots: scan_roots,
                 cmd_path,
             });
         }
 
         Ok(items)
     }
+}
+
+fn patches_for_core(patches: &[CachedPatch], base_dir: &std::path::Path) -> Vec<FmPatchData> {
+    patches
+        .iter()
+        .filter_map(|patch| {
+            let file = std::path::Path::new(&patch.file);
+            let rel_path = diff_path_from_base(file, base_dir)?;
+            Some(FmPatchData {
+                rel_path,
+                name: (!patch.name.trim().is_empty()).then(|| patch.name.clone()),
+                mml: patch.mml.clone(),
+                has_macros: patch.has_macros,
+            })
+        })
+        .collect()
+}
+
+fn diff_path_from_base(path: &std::path::Path, base_dir: &std::path::Path) -> Option<String> {
+    pathdiff::diff_paths(path, base_dir)
+        .map(|relative| relative.to_string_lossy().replace('\\', "/"))
 }
 
 fn file_basename(path: &str) -> &str {
@@ -469,6 +518,14 @@ fn build_patch_items(
 mod tests {
     use super::*;
 
+    fn temp_test_dir(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("ctrmml-c5-{label}-{}-{unique}", std::process::id()))
+    }
+
     fn patch(file: &str, name: &str, has_macros: bool, mml: &str) -> CachedPatch {
         CachedPatch {
             file: file.to_string(),
@@ -516,6 +573,37 @@ mod tests {
     fn path_basename_matches_file_basename() {
         let p = PathBuf::from("patches/lead/Lead.dmp");
         assert_eq!(path_basename(&p), "Lead.dmp");
+    }
+
+    #[test]
+    fn scan_instrument_files_keeps_supported_extensions() {
+        let root = temp_test_dir("fm-scan");
+        std::fs::create_dir_all(root.join("nested")).expect("create test directory");
+        std::fs::write(root.join("nested/lead.dmp"), b"patch").expect("write dmp");
+        std::fs::write(root.join("nested/ignore.txt"), b"nope").expect("write txt");
+
+        let files = scan_instrument_files("not-a-uri", std::slice::from_ref(&root));
+        assert_eq!(files, vec![root.join("nested/lead.dmp")]);
+
+        std::fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[test]
+    fn cached_patches_convert_to_relative_core_contract() {
+        let base = PathBuf::from("/project/song");
+        let patches = vec![
+            patch("/project/song/patches/lead.dmp", "Lead", true, " 1,2,3 "),
+            patch("/project/shared/bass.fui", "", false, " 4,5,6 "),
+        ];
+
+        let core = patches_for_core(&patches, &base);
+        assert_eq!(core.len(), 2);
+        assert_eq!(core[0].rel_path, "patches/lead.dmp");
+        assert_eq!(core[0].name.as_deref(), Some("Lead"));
+        assert_eq!(core[0].mml, " 1,2,3 ");
+        assert!(core[0].has_macros);
+        assert_eq!(core[1].rel_path, "../shared/bass.fui");
+        assert_eq!(core[1].name, None);
     }
 
     // ---------- unique_file_count -------------------------------------------

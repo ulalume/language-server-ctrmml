@@ -15,9 +15,9 @@
 use std::collections::HashMap;
 
 use ctrmml_lang_core::{
-    find_enclosing_track_selector, find_fm_block_at, find_psg_block_at,
-    generate_measure_rests, is_after_bar_line, scan_time_signature,
-    track_selector::LineReader, LinesModel, TimeSignature,
+    find_enclosing_track_selector, find_fm_block_at, find_psg_block_at, generate_measure_rests,
+    is_after_bar_line, scan_time_signature, track_selector::LineReader, CursorTickData, LinesModel,
+    TimeSignature,
 };
 use serde::Deserialize;
 use tower_lsp::lsp_types::{
@@ -32,6 +32,44 @@ use crate::utils::uri_to_path;
 struct CursorTickResponse {
     cursor_tick: i32,
     ppqn: u32,
+}
+
+/// Ask `ctrmml-cmd` for the compiled tick and PPQN at an LSP position.
+/// Compilation failures and positions without an event are ordinary absence.
+pub(crate) async fn fetch_cursor_tick(
+    cmd_path: &str,
+    uri: &Url,
+    doc_text: &str,
+    line_zero_based: u32,
+    character: u32,
+) -> Option<CursorTickData> {
+    let path = uri_to_path(&uri.to_string());
+    let output = run_ctrmml_cmd(cmd_path, "find-cursor-tick", Some(doc_text), |cmd| {
+        cmd.arg("find-cursor-tick").arg("--stdin");
+        if let Some(p) = path.as_deref() {
+            cmd.arg("--path").arg(p);
+        }
+        cmd.arg("--line")
+            .arg(line_zero_based.to_string())
+            .arg("--col")
+            .arg(character.to_string());
+    })
+    .await
+    .ok()?;
+
+    if !output.status.success() {
+        let _ = output_message(&output);
+        return None;
+    }
+
+    let response: CursorTickResponse = serde_json::from_slice(&output.stdout).ok()?;
+    if response.cursor_tick < 0 {
+        return None;
+    }
+    Some(CursorTickData {
+        tick: response.cursor_tick as u32,
+        ppqn: response.ppqn,
+    })
 }
 
 /// Cheap synchronous pre-check: returns `Some((line_content, after_bar))`
@@ -84,43 +122,9 @@ pub(crate) async fn fill_measure_code_action(
 ) -> Option<CodeAction> {
     let (time_sig, after_bar) = pre_check(doc_text, line_zero_based, character)?;
 
-    // Spawn ctrmml-cmd to compute the cursor's compiled tick + ppqn.
-    // The CLI takes 0-based line/col (matching the WASM API), which
-    // is what we already have from LSP.
-    let path = uri_to_path(&uri.to_string());
-    let output = run_ctrmml_cmd(cmd_path, "find-cursor-tick", Some(doc_text), |cmd| {
-        cmd.arg("find-cursor-tick").arg("--stdin");
-        if let Some(p) = path.as_deref() {
-            cmd.arg("--path").arg(p);
-        }
-        cmd.arg("--line")
-            .arg(line_zero_based.to_string())
-            .arg("--col")
-            .arg(character.to_string());
-    })
-    .await
-    .ok()?;
+    let timing = fetch_cursor_tick(cmd_path, uri, doc_text, line_zero_based, character).await?;
 
-    if !output.status.success() {
-        // Compile failure or invalid input — silently skip rather
-        // than surfacing the error in the code-action menu.
-        let _ = output_message(&output);
-        return None;
-    }
-
-    let response: CursorTickResponse = serde_json::from_slice(&output.stdout).ok()?;
-    if response.cursor_tick < 0 {
-        // The cursor doesn't map to any compiled event (e.g. inside
-        // a comment or an unreachable region).
-        return None;
-    }
-
-    let rests = generate_measure_rests(
-        response.cursor_tick as u32,
-        response.ppqn,
-        Some(time_sig),
-        after_bar,
-    );
+    let rests = generate_measure_rests(timing.tick, timing.ppqn, Some(time_sig), after_bar);
     if rests.is_empty() {
         // Already on a bar boundary and not "after-bar" — nothing to
         // insert.
