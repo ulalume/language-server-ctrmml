@@ -167,7 +167,9 @@ mod tests {
         let preview = build_preview_mml(text, &block, "A");
         assert!(preview.starts_with("#platform megadrive\n"));
         assert!(preview.contains("@1 fm\n\t1 1 1 1"));
-        assert!(preview.trim_end().ends_with("A @1 o4 l8 c r d r e r f r g r a r b r >c r"));
+        assert!(preview
+            .trim_end()
+            .ends_with("A @1 o4 l8 c r d r e r f r g r a r b r >c r"));
     }
 
     #[test]

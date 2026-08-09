@@ -95,12 +95,9 @@ pub fn preview_note_at(text: &str, line: u32, col: u32, typed: char) -> Option<P
     // octave shifts (`<` / `>`) or arithmetic that we don't preview.
     let pulse_col = col_zero;
     let (semitone_letter, accidental_override, pulse_start, pulse_end) = match typed_lower {
-        'c' | 'd' | 'e' | 'f' | 'g' | 'a' | 'b' | 'h' => (
-            typed_lower,
-            None,
-            pulse_col as u32,
-            pulse_col as u32 + 1,
-        ),
+        'c' | 'd' | 'e' | 'f' | 'g' | 'a' | 'b' | 'h' => {
+            (typed_lower, None, pulse_col as u32, pulse_col as u32 + 1)
+        }
         '+' | '-' => {
             // Look at the previous character on the line. If it's a
             // note letter, override that note's key-sig accidental.
@@ -242,11 +239,18 @@ fn scan_context(model: &LinesModel, line: u32, col: u32) -> Context {
     }
 
     let enclosing = find_enclosing_track_selector_at(model, line);
-    let num_channels = enclosing.as_ref().map(|(s, _)| s.spans.len()).unwrap_or(1).max(1);
+    let num_channels = enclosing
+        .as_ref()
+        .map(|(s, _)| s.spans.len())
+        .unwrap_or(1)
+        .max(1);
     let track_line = enclosing.as_ref().map(|(_, ln)| *ln);
     let state: BraceState = scan_brace_state_at(model, line, col, num_channels, track_line);
     let octaves = state.channel_octave();
-    let active = state.active_channel().unwrap_or(0).min(octaves.len().saturating_sub(1));
+    let active = state
+        .active_channel()
+        .unwrap_or(0)
+        .min(octaves.len().saturating_sub(1));
     let octave = octaves.get(active).copied().unwrap_or(DEFAULT_OCTAVE);
 
     let key_sig = scan_key_sig_at(model, line, col);
@@ -256,8 +260,16 @@ fn scan_context(model: &LinesModel, line: u32, col: u32) -> Context {
     }
 
     Context {
-        tempo: if tempo >= 0 { tempo as u32 } else { DEFAULT_TEMPO },
-        length: if length >= 0 { length as u32 } else { DEFAULT_LENGTH },
+        tempo: if tempo >= 0 {
+            tempo as u32
+        } else {
+            DEFAULT_TEMPO
+        },
+        length: if length >= 0 {
+            length as u32
+        } else {
+            DEFAULT_LENGTH
+        },
         quantize: if quantize >= 1 {
             (quantize as u32).min(8)
         } else {
@@ -290,7 +302,10 @@ fn scan_noise_mode(segment: &str) -> Option<u8> {
             idx += 1;
             continue;
         }
-        let close = bytes[idx + 1..].iter().position(|b| *b == b'\'').map(|p| idx + 1 + p);
+        let close = bytes[idx + 1..]
+            .iter()
+            .position(|b| *b == b'\'')
+            .map(|p| idx + 1 + p);
         let Some(close) = close else {
             break;
         };

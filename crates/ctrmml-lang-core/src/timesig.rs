@@ -124,7 +124,10 @@ mod tests {
 
     #[test]
     fn returns_default_when_no_timesig_line() {
-        assert_eq!(scan_time_signature("A o4 cdefg"), Some(DEFAULT_TIME_SIGNATURE));
+        assert_eq!(
+            scan_time_signature("A o4 cdefg"),
+            Some(DEFAULT_TIME_SIGNATURE)
+        );
     }
 
     #[test]

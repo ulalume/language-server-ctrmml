@@ -333,10 +333,7 @@ mod tests {
     fn track_mml_indented_continuation_of_track() {
         // The canonical mml_ref example: a whitespace-led line reuses the
         // previous track's channels and carries real notes.
-        let model = LinesModel(vec![
-            "A       cdefgab".into(),
-            "        bagfedc".into(),
-        ]);
+        let model = LinesModel(vec!["A       cdefgab".into(), "        bagfedc".into()]);
         assert!(line_carries_track_mml(&model, 1));
         assert!(line_carries_track_mml(&model, 2));
     }
@@ -344,11 +341,7 @@ mod tests {
     #[test]
     fn track_mml_continuation_across_blank_line() {
         // A blank line between a track and its continuation is transparent.
-        let model = LinesModel(vec![
-            "A o4 c d".into(),
-            "".into(),
-            "  e f g".into(),
-        ]);
+        let model = LinesModel(vec!["A o4 c d".into(), "".into(), "  e f g".into()]);
         assert!(line_carries_track_mml(&model, 3));
     }
 
@@ -392,10 +385,7 @@ mod tests {
 
     #[test]
     fn not_track_mml_comment_and_blank_lines() {
-        let model = LinesModel(vec![
-            "; just a comment".into(),
-            "".into(),
-        ]);
+        let model = LinesModel(vec!["; just a comment".into(), "".into()]);
         assert!(!line_carries_track_mml(&model, 1));
         // A blank line with no context head above is not track MML.
         assert!(!line_carries_track_mml(&model, 2));

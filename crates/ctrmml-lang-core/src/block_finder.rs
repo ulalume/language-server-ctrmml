@@ -243,10 +243,7 @@ pub fn find_block_at(
 }
 
 /// Find an FM instrument block (`@N fm`) at `line_number`.
-pub fn find_fm_block_at(
-    model: &dyn LineReader,
-    line_number: u32,
-) -> Option<InstrumentBlock> {
+pub fn find_fm_block_at(model: &dyn LineReader, line_number: u32) -> Option<InstrumentBlock> {
     find_block_at(
         model,
         line_number,
@@ -256,10 +253,7 @@ pub fn find_fm_block_at(
 }
 
 /// Find a PSG instrument block (`@N psg`) at `line_number`.
-pub fn find_psg_block_at(
-    model: &dyn LineReader,
-    line_number: u32,
-) -> Option<InstrumentBlock> {
+pub fn find_psg_block_at(model: &dyn LineReader, line_number: u32) -> Option<InstrumentBlock> {
     find_block_at(
         model,
         line_number,
@@ -269,10 +263,7 @@ pub fn find_psg_block_at(
 }
 
 /// Find a PCM instrument block (`@N pcm`) at `line_number`.
-pub fn find_pcm_block_at(
-    model: &dyn LineReader,
-    line_number: u32,
-) -> Option<InstrumentBlock> {
+pub fn find_pcm_block_at(model: &dyn LineReader, line_number: u32) -> Option<InstrumentBlock> {
     find_block_at(
         model,
         line_number,
@@ -386,11 +377,7 @@ mod tests {
     #[test]
     fn stops_at_other_instrument_kind() {
         // PSG block immediately above; FM lookup must not span across it.
-        let model = LinesModel::new([
-            "@9 psg",
-            "\t15>10:5",
-            "\t31,0,12,7,0,28,0,0,5,0",
-        ]);
+        let model = LinesModel::new(["@9 psg", "\t15>10:5", "\t31,0,12,7,0,28,0,0,5,0"]);
         assert!(find_fm_block_at(&model, 3).is_none());
     }
 

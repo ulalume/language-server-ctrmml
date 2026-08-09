@@ -84,11 +84,11 @@ const PREVIEW_TYPES: [PreviewType; 3] = [PreviewType::Fm, PreviewType::Psg, Prev
 // independent emission is future work — at the moment ctrmml only targets
 // MD/MDSDRV so a fixed table is fine.
 const CHANNEL_DESCRIPTIONS: &[&str] = &[
-    "FM1", "FM2", "FM3", "FM4", "FM5", "FM6",  // A..F
-    "PSG1", "PSG2", "PSG3",                    // G..I
-    "Noise",                                   // J
-    "PCM2", "PCM3",                            // K..L
-    "Dummy", "Dummy", "Dummy", "Dummy",        // M..P
+    "FM1", "FM2", "FM3", "FM4", "FM5", "FM6", // A..F
+    "PSG1", "PSG2", "PSG3",  // G..I
+    "Noise", // J
+    "PCM2", "PCM3", // K..L
+    "Dummy", "Dummy", "Dummy", "Dummy", // M..P
 ];
 
 /// Enumerate code lenses for `text`.
@@ -275,7 +275,9 @@ mod tests {
         let text = "@2 psg 15 14 13\n";
         let lenses = code_lens(text);
         assert_eq!(lenses.len(), 4);
-        assert!(lenses.iter().all(|l| l.command_id.as_deref() == Some("mml.previewPatch")));
+        assert!(lenses
+            .iter()
+            .all(|l| l.command_id.as_deref() == Some("mml.previewPatch")));
         let titles: Vec<&str> = lenses.iter().map(|l| l.title.as_str()).collect();
         assert_eq!(
             titles,

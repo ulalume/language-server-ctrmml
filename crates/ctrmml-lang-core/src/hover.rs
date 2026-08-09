@@ -322,9 +322,7 @@ fn command_at(token: &str, offset: usize) -> Option<CommandHit> {
             let mut end = idx + 1;
             let mut accidental_index: Option<usize> = None;
 
-            if end < bytes.len()
-                && matches!(bytes[end] as char, '+' | '-' | '=')
-            {
+            if end < bytes.len() && matches!(bytes[end] as char, '+' | '-' | '=') {
                 accidental_index = Some(end);
                 end += 1;
             }
@@ -570,9 +568,7 @@ fn quote_bounds(line: &str, col: usize, quote: u8) -> Option<(usize, usize)> {
 
 fn is_at_number(token: &str) -> bool {
     let bytes = token.as_bytes();
-    bytes.first() == Some(&b'@')
-        && bytes.len() > 1
-        && bytes[1..].iter().all(|b| b.is_ascii_digit())
+    bytes.first() == Some(&b'@') && bytes.len() > 1 && bytes[1..].iter().all(|b| b.is_ascii_digit())
 }
 
 fn is_at_meta_token(token: &str) -> bool {
@@ -604,7 +600,10 @@ fn at_meta_lookup(token: &str) -> Option<(&'static str, &'static str)> {
     docs::at_meta_doc(label).map(|doc| (label, doc))
 }
 
-fn at_meta_in_token(token: &str, offset: usize) -> Option<(&'static str, &'static str, usize, usize)> {
+fn at_meta_in_token(
+    token: &str,
+    offset: usize,
+) -> Option<(&'static str, &'static str, usize, usize)> {
     let prefix = token.get(..=offset)?;
     let at_pos = prefix.rfind('@')?;
     let rest = &token[at_pos..];
@@ -761,9 +760,7 @@ fn is_definition_line(line: &str, keyword: &str) -> bool {
         return false;
     }
     let after = &rest[keyword.len()..];
-    after.is_empty()
-        || after.starts_with(|c: char| c.is_whitespace())
-        || after.starts_with(';')
+    after.is_empty() || after.starts_with(|c: char| c.is_whitespace()) || after.starts_with(';')
 }
 
 fn is_numeric_param_line(line: &str, parse_end: usize) -> bool {
@@ -814,7 +811,9 @@ fn find_instrument_anchor(text: &str, line_idx: usize, keyword: &str) -> Option<
                         continue;
                     }
                     if let Some(after) = next.strip_prefix(keyword) {
-                        if after.is_empty() || after.starts_with(|c: char| c.is_whitespace() || c == ';') {
+                        if after.is_empty()
+                            || after.starts_with(|c: char| c.is_whitespace() || c == ';')
+                        {
                             return Some(idx);
                         }
                     }

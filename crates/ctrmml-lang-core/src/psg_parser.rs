@@ -535,10 +535,34 @@ mod tests {
         let env = parse_psg_mml("@1 psg 15:2 10:3").unwrap();
         let pts = compute_timeline(&env);
         assert_eq!(pts.len(), 4);
-        assert_eq!(pts[0], TimePoint { frame: 0, volume: 15 });
-        assert_eq!(pts[1], TimePoint { frame: 2, volume: 15 });
-        assert_eq!(pts[2], TimePoint { frame: 2, volume: 10 });
-        assert_eq!(pts[3], TimePoint { frame: 5, volume: 10 });
+        assert_eq!(
+            pts[0],
+            TimePoint {
+                frame: 0,
+                volume: 15
+            }
+        );
+        assert_eq!(
+            pts[1],
+            TimePoint {
+                frame: 2,
+                volume: 15
+            }
+        );
+        assert_eq!(
+            pts[2],
+            TimePoint {
+                frame: 2,
+                volume: 10
+            }
+        );
+        assert_eq!(
+            pts[3],
+            TimePoint {
+                frame: 5,
+                volume: 10
+            }
+        );
     }
 
     #[test]

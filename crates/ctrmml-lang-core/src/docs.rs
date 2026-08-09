@@ -142,15 +142,13 @@ pub const PLATFORM_VALUES: &[DocEntry] = &[
     ),
 ];
 
-pub const OPTION_VALUES: &[DocEntry] = &[
-    entry(
-        "noextpitch",
-        "noextpitch",
-        "noextpitch",
-        "Disable extended pitch envelopes",
-        "Disable extended pitch envelopes for compatibility with older MML files.",
-    ),
-];
+pub const OPTION_VALUES: &[DocEntry] = &[entry(
+    "noextpitch",
+    "noextpitch",
+    "noextpitch",
+    "Disable extended pitch envelopes",
+    "Disable extended pitch envelopes for compatibility with older MML files.",
+)];
 
 pub const TIMESIG_VALUES: &[DocEntry] = &[
     entry(
@@ -973,10 +971,13 @@ pub fn command_completion_label(key: &str) -> Option<&'static str> {
 }
 
 pub fn meta_doc(label: &str) -> Option<&'static str> {
-    META_KEYWORDS
-        .iter()
-        .find(|e| e.key == label)
-        .map(|e| if e.doc.is_empty() { e.detail } else { e.doc })
+    META_KEYWORDS.iter().find(|e| e.key == label).map(|e| {
+        if e.doc.is_empty() {
+            e.detail
+        } else {
+            e.doc
+        }
+    })
 }
 
 pub fn platform_value_doc(label: &str) -> Option<&'static str> {
@@ -1011,10 +1012,7 @@ pub fn rate_offset_doc(label: &str) -> Option<&'static str> {
 }
 
 pub fn rate_offset_label(label: &str) -> Option<&'static str> {
-    RATE_OFFSET
-        .iter()
-        .find(|e| e.key == label)
-        .map(|e| e.label)
+    RATE_OFFSET.iter().find(|e| e.key == label).map(|e| e.label)
 }
 
 pub fn command_doc(label: &str) -> Option<&'static str> {
@@ -1038,7 +1036,11 @@ pub fn command_entry(key: &str, signed: bool) -> Option<(&'static str, &'static 
             signed_match = Some(entry);
         }
     }
-    let entry = if signed { signed_match.or(first) } else { first }?;
+    let entry = if signed {
+        signed_match.or(first)
+    } else {
+        first
+    }?;
     if entry.doc.is_empty() {
         return None;
     }
@@ -1096,9 +1098,7 @@ Channel mapping:\n\
 - Usually `MNOP`; `I` and `L` may also be used";
 
 fn is_numeric_track_label(label: &str) -> bool {
-    label.starts_with('*')
-        && label.len() > 1
-        && label[1..].chars().all(|c| c.is_ascii_digit())
+    label.starts_with('*') && label.len() > 1 && label[1..].chars().all(|c| c.is_ascii_digit())
 }
 
 pub fn track_doc(label: &str) -> Option<&'static str> {

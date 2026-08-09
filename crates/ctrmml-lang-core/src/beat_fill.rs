@@ -111,11 +111,7 @@ pub fn ticks_to_mml_rest(ticks: u32, ppqn: u32) -> String {
 /// cursor sits exactly on a measure boundary.
 ///
 /// `ticks_per_measure = ppqn * numerator * 4 / denominator`.
-pub fn measure_remainder_ticks(
-    cursor_tick: u32,
-    ppqn: u32,
-    time_sig: TimeSignature,
-) -> u32 {
+pub fn measure_remainder_ticks(cursor_tick: u32, ppqn: u32, time_sig: TimeSignature) -> u32 {
     let tpm = ppqn * time_sig.numerator * 4 / time_sig.denominator;
     let pos = cursor_tick % tpm;
     if pos == 0 {
@@ -213,10 +209,7 @@ mod tests {
 
     #[test]
     fn remainder_zero_on_bar_boundary() {
-        assert_eq!(
-            measure_remainder_ticks(0, PPQN, DEFAULT_TIME_SIGNATURE),
-            0
-        );
+        assert_eq!(measure_remainder_ticks(0, PPQN, DEFAULT_TIME_SIGNATURE), 0);
         // One full 4/4 measure later.
         let tpm = PPQN * 4;
         assert_eq!(

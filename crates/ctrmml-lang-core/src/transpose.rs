@@ -16,9 +16,7 @@ use crate::chord::chord_natural_semitones;
 use crate::key_sig::{parse_key_sig, scan_key_sig_at, KeySig};
 use crate::octave_scan::scan_brace_state_at;
 use crate::text_scan::{floor_char_boundary, is_in_comment, is_in_key_sig, is_in_string};
-use crate::track_selector::{
-    find_enclosing_track_selector, line_carries_track_mml, LineReader,
-};
+use crate::track_selector::{find_enclosing_track_selector, line_carries_track_mml, LineReader};
 
 // ---------------------------------------------------------------------------
 // Shared constants
@@ -127,9 +125,7 @@ fn spell_semitone(semi: i32, key_sig: &KeySig, direction: Direction) -> (char, &
 
     // 2. Natural pitch matches but key sig shifts it away → use `=`.
     for &letter in &NOTE_LETTERS {
-        if chord_natural_semitones(letter).unwrap() == semi
-            && key_sig.get_or_zero(letter) != 0
-        {
+        if chord_natural_semitones(letter).unwrap() == semi && key_sig.get_or_zero(letter) != 0 {
             return (letter, "=");
         }
     }
@@ -252,8 +248,7 @@ pub fn transpose_selection(
     // a *track* carries real notes and must be transposed, while an equally
     // indented `@N` instrument-body line must not. `line_carries_track_mml`
     // resolves that by walking back to each line's context head.
-    let line_is_track: Vec<bool> = (selection.start_line_number
-        ..=selection.end_line_number)
+    let line_is_track: Vec<bool> = (selection.start_line_number..=selection.end_line_number)
         .map(|ln| line_carries_track_mml(model, ln))
         .collect();
 
@@ -388,8 +383,7 @@ pub fn transpose_selection(
         // Note detection. Guards mirror transpose.ts:374-401 precisely.
         let lower = ch.to_ascii_lowercase();
         let prev_ch = if i > 0 { bytes[i - 1] } else { 0 };
-        let preceded_by_non_note =
-            is_ascii_letter(prev_ch) && !is_note_letter_byte(prev_ch);
+        let preceded_by_non_note = is_ascii_letter(prev_ch) && !is_note_letter_byte(prev_ch);
         let mut inside_keyword = false;
         if preceded_by_non_note {
             let prev2 = if i > 1 { bytes[i - 2] } else { 0 };
@@ -456,8 +450,7 @@ pub fn transpose_selection(
             }
             let effective_acc = explicit_acc.unwrap_or_else(|| key_sig.get_or_zero(letter) as i32);
             let oct = state.current_octave();
-            let midi =
-                (oct - 1) * 12 + chord_natural_semitones(letter).unwrap() + effective_acc;
+            let midi = (oct - 1) * 12 + chord_natural_semitones(letter).unwrap() + effective_acc;
             notes.push(NoteToken {
                 offset: note_start,
                 length: i - note_start,
@@ -511,90 +504,88 @@ pub fn transpose_selection(
     let mut low_line: usize = 0;
     let mut low_col_in_sel: usize = 0;
 
-    let mut advance_lower_state = |j: &mut usize,
-                                   until: usize,
-                                   lower: &mut BraceState,
-                                   replacements: &mut Vec<Replacement>| {
-        // Catch the cursor up to `*j` — between calls `*j` jumps past
-        // the bytes of the previous note (1–2 bytes typically).
-        while low_j < *j {
-            if bytes[low_j] == b'\n' {
-                low_line += 1;
-                low_col_in_sel = 0;
-            } else {
-                low_col_in_sel += 1;
-            }
-            low_j += 1;
-        }
-        while *j < until {
-            let c = bytes[*j];
-            if c == b'\n' {
-                low_line += 1;
-                low_col_in_sel = 0;
+    let mut advance_lower_state =
+        |j: &mut usize,
+         until: usize,
+         lower: &mut BraceState,
+         replacements: &mut Vec<Replacement>| {
+            // Catch the cursor up to `*j` — between calls `*j` jumps past
+            // the bytes of the previous note (1–2 bytes typically).
+            while low_j < *j {
+                if bytes[low_j] == b'\n' {
+                    low_line += 1;
+                    low_col_in_sel = 0;
+                } else {
+                    low_col_in_sel += 1;
+                }
                 low_j += 1;
-                *j += 1;
-                continue;
             }
-            let abs_col = if low_line == 0 {
-                low_col_in_sel + col_offset
-            } else {
-                low_col_in_sel
-            };
-            let full_line = full_lines
-                .get(low_line)
-                .map(String::as_str)
-                .unwrap_or("");
-            // Mirror lift: non-track lines and `;` line-comments are
-            // skipped wholesale; `'…'`/`"…"` strings are skipped byte
-            // by byte (interleaved MML may follow on the same line).
-            if !line_is_track[low_line] || is_in_comment(full_line, abs_col) {
-                let line_end = bytes[*j..]
-                    .iter()
-                    .position(|&b| b == b'\n')
-                    .map_or(bytes.len(), |off| *j + off);
-                let advance = line_end - *j;
-                low_col_in_sel += advance;
-                low_j += advance;
-                *j = line_end;
-                continue;
-            }
-            // `'…'`/`"…"` strings, `_{…}` key-sig blocks, and the original
-            // `>`/`<` shifts (already queued for removal) carry no brace or
-            // octave state for the lower walk — skip them, mirroring Lift.
-            if is_in_string(full_line, abs_col)
-                || is_in_key_sig(full_line, abs_col)
-                || shift_set.contains(j)
-            {
-                low_col_in_sel += 1;
-                low_j += 1;
-                *j += 1;
-                continue;
-            }
-            if (c == b'o' || c == b'O') && *j + 1 < bytes.len() {
-                if let Some((oct, len)) = parse_leading_u32(&bytes[*j + 1..]) {
-                    lower.on_octave_set(oct as i32);
-                    let total = 1 + len;
-                    low_col_in_sel += total;
-                    low_j += total;
-                    *j += total;
+            while *j < until {
+                let c = bytes[*j];
+                if c == b'\n' {
+                    low_line += 1;
+                    low_col_in_sel = 0;
+                    low_j += 1;
+                    *j += 1;
                     continue;
                 }
+                let abs_col = if low_line == 0 {
+                    low_col_in_sel + col_offset
+                } else {
+                    low_col_in_sel
+                };
+                let full_line = full_lines.get(low_line).map(String::as_str).unwrap_or("");
+                // Mirror lift: non-track lines and `;` line-comments are
+                // skipped wholesale; `'…'`/`"…"` strings are skipped byte
+                // by byte (interleaved MML may follow on the same line).
+                if !line_is_track[low_line] || is_in_comment(full_line, abs_col) {
+                    let line_end = bytes[*j..]
+                        .iter()
+                        .position(|&b| b == b'\n')
+                        .map_or(bytes.len(), |off| *j + off);
+                    let advance = line_end - *j;
+                    low_col_in_sel += advance;
+                    low_j += advance;
+                    *j = line_end;
+                    continue;
+                }
+                // `'…'`/`"…"` strings, `_{…}` key-sig blocks, and the original
+                // `>`/`<` shifts (already queued for removal) carry no brace or
+                // octave state for the lower walk — skip them, mirroring Lift.
+                if is_in_string(full_line, abs_col)
+                    || is_in_key_sig(full_line, abs_col)
+                    || shift_set.contains(j)
+                {
+                    low_col_in_sel += 1;
+                    low_j += 1;
+                    *j += 1;
+                    continue;
+                }
+                if (c == b'o' || c == b'O') && *j + 1 < bytes.len() {
+                    if let Some((oct, len)) = parse_leading_u32(&bytes[*j + 1..]) {
+                        lower.on_octave_set(oct as i32);
+                        let total = 1 + len;
+                        low_col_in_sel += total;
+                        low_j += total;
+                        *j += total;
+                        continue;
+                    }
+                }
+                if c == b'{' {
+                    let prev = if *j > 0 { bytes[*j - 1] } else { 0 };
+                    lower.on_open_brace(prev);
+                } else if c == b'/' && lower.brace_depth() > 0 {
+                    apply_branch_end_comp(*j, &branch_end_by_offset, lower, replacements);
+                    lower.on_slash();
+                } else if c == b'}' && lower.brace_depth() > 0 {
+                    apply_branch_end_comp(*j, &branch_end_by_offset, lower, replacements);
+                    lower.on_close_brace();
+                }
+                low_col_in_sel += 1;
+                low_j += 1;
+                *j += 1;
             }
-            if c == b'{' {
-                let prev = if *j > 0 { bytes[*j - 1] } else { 0 };
-                lower.on_open_brace(prev);
-            } else if c == b'/' && lower.brace_depth() > 0 {
-                apply_branch_end_comp(*j, &branch_end_by_offset, lower, replacements);
-                lower.on_slash();
-            } else if c == b'}' && lower.brace_depth() > 0 {
-                apply_branch_end_comp(*j, &branch_end_by_offset, lower, replacements);
-                lower.on_close_brace();
-            }
-            low_col_in_sel += 1;
-            low_j += 1;
-            *j += 1;
-        }
-    };
+        };
 
     let mut last_note_rep: Option<usize> = None;
     for note in &notes {
@@ -710,9 +701,7 @@ fn apply_branch_end_comp(
 fn compute_end_drift(lift_end: &BraceState, lower: &BraceState) -> i32 {
     match (lift_end.active_channel(), lower.active_channel()) {
         (None, None) => lift_end.shared_octave() - lower.shared_octave(),
-        (Some(a), Some(b)) if a == b => {
-            lift_end.channel_octave()[a] - lower.channel_octave()[a]
-        }
+        (Some(a), Some(b)) if a == b => lift_end.channel_octave()[a] - lower.channel_octave()[a],
         _ => 0,
     }
 }
@@ -853,10 +842,7 @@ mod tests {
 
     #[test]
     fn consecutive_notes_all_shift() {
-        assert_eq!(
-            apply("A o4 [c c c] d", Direction::Up),
-            "A o4 c+ c+ c+ d"
-        );
+        assert_eq!(apply("A o4 [c c c] d", Direction::Up), "A o4 c+ c+ c+ d");
     }
 
     // ---------- octave-cross compensation ------------------------------------
@@ -868,37 +854,25 @@ mod tests {
 
     #[test]
     fn b_sharp_up_inside_braces() {
-        assert_eq!(
-            apply("A o4 {[b+]} {c}", Direction::Up),
-            "A o4 {>c+<} {c}"
-        );
+        assert_eq!(apply("A o4 {[b+]} {c}", Direction::Up), "A o4 {>c+<} {c}");
     }
 
     #[test]
     fn selection_with_embedded_gt_restored_as_suffix() {
-        assert_eq!(
-            apply("A o4 {[b>]} {c}", Direction::Down),
-            "A o4 {b->} {c}"
-        );
+        assert_eq!(apply("A o4 {[b>]} {c}", Direction::Down), "A o4 {b->} {c}");
     }
 
     #[test]
     fn per_branch_compensation_in_multi_channel_chord() {
         assert_eq!(
-            apply(
-                "ABC o4 l8 {e/g/b} [{g/b/>d<}] {f/a/>c}",
-                Direction::Up
-            ),
+            apply("ABC o4 l8 {e/g/b} [{g/b/>d<}] {f/a/>c}", Direction::Up),
             "ABC o4 l8 {e/g/b} {g+/>c</>d+<} {f/a/>c}"
         );
     }
 
     #[test]
     fn non_crossing_shift_no_compensation() {
-        assert_eq!(
-            apply("A o4 [c d e] f", Direction::Up),
-            "A o4 c+ d+ f f"
-        );
+        assert_eq!(apply("A o4 [c d e] f", Direction::Up), "A o4 c+ d+ f f");
     }
 
     // ---------- keyword guards -----------------------------------------------
@@ -993,10 +967,7 @@ mod tests {
     #[test]
     fn selection_begins_at_closing_brace() {
         assert_eq!(
-            apply(
-                "ABC o6 {c/e/a} {e/a/>c<[} {e/g/b}]",
-                Direction::Up
-            ),
+            apply("ABC o6 {c/e/a} {e/a/>c<[} {e/g/b}]", Direction::Up),
             "ABC o6 {c/e/a} {e/a/>c<} {f/g+/>c<}"
         );
     }
@@ -1039,10 +1010,7 @@ mod tests {
 
     #[test]
     fn explicit_octave_before_brace_propagates() {
-        assert_eq!(
-            apply("ABC o3 [{c/e/g}]", Direction::Up),
-            "ABC o3 {c+/f/g+}"
-        );
+        assert_eq!(apply("ABC o3 [{c/e/g}]", Direction::Up), "ABC o3 {c+/f/g+}");
     }
 
     #[test]
@@ -1193,16 +1161,8 @@ mod tests {
         // patch parameters, not notes. Its context head is the `@1 fm`
         // line, so it must be skipped even though it starts with whitespace
         // (contrast `track_continuation_line_is_transposed`).
-        let input = concat!(
-            "[@1 fm\n",
-            "  31 7 1 5 ; bass\n",
-            "A o4 c d]",
-        );
-        let expected = concat!(
-            "@1 fm\n",
-            "  31 7 1 5 ; bass\n",
-            "A o4 c+ d+",
-        );
+        let input = concat!("[@1 fm\n", "  31 7 1 5 ; bass\n", "A o4 c d]",);
+        let expected = concat!("@1 fm\n", "  31 7 1 5 ; bass\n", "A o4 c+ d+",);
         assert_eq!(apply(input, Direction::Up), expected);
     }
 
@@ -1247,7 +1207,10 @@ mod tests {
     #[test]
     fn comment_only_line_is_skipped() {
         assert_eq!(
-            apply("[; comment with c d e f letters\nA o4 c d]", Direction::Down),
+            apply(
+                "[; comment with c d e f letters\nA o4 c d]",
+                Direction::Down
+            ),
             "; comment with c d e f letters\nA o4 <b >d-"
         );
     }
@@ -1297,27 +1260,14 @@ mod tests {
         // as `f+` (no accidental needed), so transposing the surrounding
         // notes up must leave the key sig untouched and the octave glyphs
         // correct on both sides of it.
-        assert_eq!(
-            apply("A o4 [b _{+f} b]", Direction::Up),
-            "A o4 >c _{+f} c<"
-        );
+        assert_eq!(apply("A o4 [b _{+f} b]", Direction::Up), "A o4 >c _{+f} c<");
     }
 
     #[test]
     fn instrument_body_between_tracks_does_not_capture_following_track() {
         // `@N` body lines stay non-MML; the later track's notes still shift.
-        let input = concat!(
-            "[A o4 c\n",
-            "@1 fm 4 0\n",
-            "\t31 15 0 8\n",
-            "A o4 d]",
-        );
-        let expected = concat!(
-            "A o4 c+\n",
-            "@1 fm 4 0\n",
-            "\t31 15 0 8\n",
-            "A o4 d+",
-        );
+        let input = concat!("[A o4 c\n", "@1 fm 4 0\n", "\t31 15 0 8\n", "A o4 d]",);
+        let expected = concat!("A o4 c+\n", "@1 fm 4 0\n", "\t31 15 0 8\n", "A o4 d+",);
         assert_eq!(apply(input, Direction::Up), expected);
     }
 }

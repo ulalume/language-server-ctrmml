@@ -25,9 +25,7 @@ impl KeySig {
     /// Empty key signature — every letter implicit zero.
     #[inline]
     pub const fn new() -> Self {
-        Self {
-            offsets: [None; 7],
-        }
+        Self { offsets: [None; 7] }
     }
 
     /// Look up the explicit accidental for `letter` (`'a'`..=`'g'`).
@@ -197,7 +195,10 @@ pub fn scan_key_sig_at(model: &dyn LineReader, line_number: u32, column: u32) ->
             line_text.len()
         };
         // Strip comments: only scan up to the first ';'.
-        let end = match line_text.as_bytes()[..end_raw].iter().position(|&b| b == b';') {
+        let end = match line_text.as_bytes()[..end_raw]
+            .iter()
+            .position(|&b| b == b';')
+        {
             Some(p) => p,
             None => end_raw,
         };
@@ -436,10 +437,7 @@ mod tests {
     fn scan_scale_name_blocks_earlier_modifiers() {
         // Earlier line sets +c; later block resets to F major. Effective at
         // end is F major (no c-sharp).
-        let model = LinesModel(vec![
-            "A _{+c} cdefg".into(),
-            "  _{F} cdefg".into(),
-        ]);
+        let model = LinesModel(vec!["A _{+c} cdefg".into(), "  _{F} cdefg".into()]);
         let sig = scan_key_sig_at(&model, 2, 20);
         assert_eq!(sig.get_or_zero('c'), 0);
         assert_eq!(sig.get_or_zero('b'), -1);
@@ -447,10 +445,7 @@ mod tests {
 
     #[test]
     fn scan_modifiers_stack_across_lines() {
-        let model = LinesModel(vec![
-            "A _{+c} cdefg".into(),
-            "  _{-b} cdefg".into(),
-        ]);
+        let model = LinesModel(vec!["A _{+c} cdefg".into(), "  _{-b} cdefg".into()]);
         let sig = scan_key_sig_at(&model, 2, 20);
         assert_eq!(sig.get_or_zero('c'), 1);
         assert_eq!(sig.get_or_zero('b'), -1);
@@ -459,10 +454,7 @@ mod tests {
     #[test]
     fn scan_stops_at_track_boundary() {
         // The +c is in a different track; we shouldn't pick it up.
-        let model = LinesModel(vec![
-            "A _{+c} cdefg".into(),
-            "B cdefg".into(),
-        ]);
+        let model = LinesModel(vec!["A _{+c} cdefg".into(), "B cdefg".into()]);
         let sig = scan_key_sig_at(&model, 2, 8);
         assert_eq!(sig.get_or_zero('c'), 0);
     }
