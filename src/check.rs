@@ -6,7 +6,6 @@ use crate::diagnostics::{diagnostic_for_check, diagnostics_for_check_report, Che
 use crate::utils::{is_mml_uri, read_file_text, uri_to_path};
 
 impl Backend {
-
     pub(crate) async fn run_check(&self, uri: String) -> std::result::Result<(), String> {
         if !is_mml_uri(&uri) {
             return Ok(());
@@ -39,9 +38,7 @@ impl Backend {
             .await?
         };
 
-        let text = text
-            .or_else(|| read_file_text(&uri))
-            .unwrap_or_default();
+        let text = text.or_else(|| read_file_text(&uri)).unwrap_or_default();
         let diagnostics = if let Some(report) = parse_check_report(&output) {
             diagnostics_for_check_report(&text, &report)
         } else if !output.status.success() {
@@ -68,7 +65,10 @@ impl Backend {
         };
 
         if let Ok(uri) = uri.parse() {
-            let _ = self.client.publish_diagnostics(uri, diagnostics, None).await;
+            let _ = self
+                .client
+                .publish_diagnostics(uri, diagnostics, None)
+                .await;
         }
 
         Ok(())

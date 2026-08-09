@@ -47,7 +47,9 @@ impl Backend {
         let seq_output = base_dir.join("mdsseq.bin");
         let pcm_output = base_dir.join("mdspcm.bin");
 
-        let outputs = self.run_mdslink(vec![input_path], seq_output, pcm_output).await?;
+        let outputs = self
+            .run_mdslink(vec![input_path], seq_output, pcm_output)
+            .await?;
         Ok(MdslinkRunResult {
             outputs,
             warning: None,
@@ -85,9 +87,9 @@ impl Backend {
         };
         let resolved = read_mdslink_config(&config_path)?;
 
-        let outputs =
-            self.run_mdslink(resolved.inputs, resolved.seq_output, resolved.pcm_output)
-                .await?;
+        let outputs = self
+            .run_mdslink(resolved.inputs, resolved.seq_output, resolved.pcm_output)
+            .await?;
         Ok(MdslinkRunResult {
             outputs,
             warning: None,
@@ -135,10 +137,7 @@ impl Backend {
         }
 
         if inputs.is_empty() {
-            return Err(format!(
-                "no .mml or .mds files found in {}",
-                dir.display()
-            ));
+            return Err(format!("no .mml or .mds files found in {}", dir.display()));
         }
 
         inputs.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
@@ -252,7 +251,9 @@ fn find_workspace_root(start_dir: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
 }
 
 fn canonicalize_or_current(path: &Path) -> Option<PathBuf> {
-    path.canonicalize().ok().or_else(|| Some(path.to_path_buf()))
+    path.canonicalize()
+        .ok()
+        .or_else(|| Some(path.to_path_buf()))
 }
 
 fn read_mdslink_config(config_path: &Path) -> std::result::Result<MdslinkResolved, String> {

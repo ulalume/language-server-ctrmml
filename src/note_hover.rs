@@ -80,8 +80,7 @@ pub(crate) fn note_hover_text(
     character: u32,
     line_content: &str,
 ) -> Option<(String, usize, usize)> {
-    let (letter, explicit_acc, start, end) =
-        note_at(line_content, character as usize)?;
+    let (letter, explicit_acc, start, end) = note_at(line_content, character as usize)?;
 
     let line = line_zero_based + 1;
     let col = character + 1;

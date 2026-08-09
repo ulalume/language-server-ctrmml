@@ -4,6 +4,8 @@ use serde_json::Value;
 use tokio::sync::{Mutex, RwLock};
 use tower_lsp::Client;
 
+use ctrmml_lang_core::completion::CompletionSettings;
+
 use crate::config::Config;
 use crate::ctrmml_cmd::resolve_command_path;
 use crate::fm_completion::FmInstrumentCache;
@@ -21,7 +23,8 @@ pub(crate) struct Backend {
     pub(crate) playback: Arc<Mutex<Option<Playback>>>,
     pub(crate) playback_seq: Arc<Mutex<u64>>,
     pub(crate) last_doc: Arc<RwLock<Option<String>>>,
-    pub(crate) supports_hierarchy: Arc<RwLock<bool>>,
+    pub(crate) completion_settings: Arc<RwLock<CompletionSettings>>,
+    pub(crate) supports_completion_as_is: Arc<RwLock<bool>>,
 }
 
 struct CommandPathCache {
@@ -42,7 +45,8 @@ impl Backend {
             playback: Arc::new(Mutex::new(None)),
             playback_seq: Arc::new(Mutex::new(0)),
             last_doc: Arc::new(RwLock::new(None)),
-            supports_hierarchy: Arc::new(RwLock::new(false)),
+            completion_settings: Arc::new(RwLock::new(CompletionSettings::default())),
+            supports_completion_as_is: Arc::new(RwLock::new(false)),
         }
     }
 

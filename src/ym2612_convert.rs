@@ -1,7 +1,5 @@
 use std::{
-    env,
-    fs,
-    io,
+    env, fs, io,
     path::{Path, PathBuf},
     process::{Output, Stdio},
     time::{Duration, SystemTime},
@@ -257,12 +255,8 @@ fn find_cached_binary() -> Option<PathBuf> {
     best.map(|(_, path)| path)
 }
 
-async fn fetch_latest_release(
-    client: &HttpClient,
-) -> std::result::Result<GithubRelease, String> {
-    let url = format!(
-        "https://api.github.com/repos/{YM2612_CONVERT_REPO}/releases/latest"
-    );
+async fn fetch_latest_release(client: &HttpClient) -> std::result::Result<GithubRelease, String> {
+    let url = format!("https://api.github.com/repos/{YM2612_CONVERT_REPO}/releases/latest");
     let release = client
         .get(url)
         .send()
@@ -307,33 +301,29 @@ fn platform_asset_parts() -> std::result::Result<(String, String, String), Strin
 }
 
 fn extract_zip(archive_path: &Path, out_dir: &Path) -> std::result::Result<(), String> {
-    let file =
-        fs::File::open(archive_path).map_err(|e| format!("failed to open zip: {e}"))?;
+    let file = fs::File::open(archive_path).map_err(|e| format!("failed to open zip: {e}"))?;
     let mut zip = ZipArchive::new(file).map_err(|e| format!("invalid zip: {e}"))?;
     for i in 0..zip.len() {
-        let mut entry =
-            zip.by_index(i).map_err(|e| format!("zip read failed: {e}"))?;
+        let mut entry = zip
+            .by_index(i)
+            .map_err(|e| format!("zip read failed: {e}"))?;
         let out_path = out_dir.join(entry.name());
         if entry.is_dir() {
-            fs::create_dir_all(&out_path)
-                .map_err(|e| format!("failed to create dir: {e}"))?;
+            fs::create_dir_all(&out_path).map_err(|e| format!("failed to create dir: {e}"))?;
         } else {
             if let Some(parent) = out_path.parent() {
-                fs::create_dir_all(parent)
-                    .map_err(|e| format!("failed to create dir: {e}"))?;
+                fs::create_dir_all(parent).map_err(|e| format!("failed to create dir: {e}"))?;
             }
             let mut out =
                 fs::File::create(&out_path).map_err(|e| format!("failed to create file: {e}"))?;
-            io::copy(&mut entry, &mut out)
-                .map_err(|e| format!("failed to extract file: {e}"))?;
+            io::copy(&mut entry, &mut out).map_err(|e| format!("failed to extract file: {e}"))?;
         }
     }
     Ok(())
 }
 
 fn extract_targz(archive_path: &Path, out_dir: &Path) -> std::result::Result<(), String> {
-    let file =
-        fs::File::open(archive_path).map_err(|e| format!("failed to open tar.gz: {e}"))?;
+    let file = fs::File::open(archive_path).map_err(|e| format!("failed to open tar.gz: {e}"))?;
     let decoder = GzDecoder::new(file);
     let mut archive = Archive::new(decoder);
     archive
@@ -349,8 +339,7 @@ fn make_executable(path: &Path) -> std::result::Result<(), String> {
         .map_err(|e| format!("failed to read permissions: {e}"))?
         .permissions();
     perms.set_mode(0o755);
-    fs::set_permissions(path, perms)
-        .map_err(|e| format!("failed to set permissions: {e}"))?;
+    fs::set_permissions(path, perms).map_err(|e| format!("failed to set permissions: {e}"))?;
     Ok(())
 }
 
@@ -394,11 +383,7 @@ async fn download_ym2612_convert() -> std::result::Result<Option<PathBuf>, Strin
         arch = arch,
         ext = ext,
     );
-    let asset = match release
-        .assets
-        .iter()
-        .find(|asset| asset.name == asset_name)
-    {
+    let asset = match release.assets.iter().find(|asset| asset.name == asset_name) {
         Some(asset) => asset,
         None => {
             if let Some(path) = cached_path.as_ref() {
@@ -416,8 +401,7 @@ async fn download_ym2612_convert() -> std::result::Result<Option<PathBuf>, Strin
         return Ok(Some(bin_path));
     }
 
-    fs::create_dir_all(&version_dir)
-        .map_err(|e| format!("failed to create cache dir: {e}"))?;
+    fs::create_dir_all(&version_dir).map_err(|e| format!("failed to create cache dir: {e}"))?;
 
     let tmp_path = version_dir.join(format!("download.{ext}"));
     let bytes = match client

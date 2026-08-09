@@ -135,7 +135,6 @@ fn diagnostic_for_check_message(
     })
 }
 
-
 pub(crate) fn diagnostic_for_check(text: &str, output: &str) -> Option<Diagnostic> {
     let (line_idx, col_idx, message) = output
         .lines()
@@ -156,7 +155,11 @@ pub(crate) fn diagnostic_for_check(text: &str, output: &str) -> Option<Diagnosti
     if col > line_len {
         col = line_len;
     }
-    let end = if line_len == 0 { col } else { (col + 1).min(line_len) };
+    let end = if line_len == 0 {
+        col
+    } else {
+        (col + 1).min(line_len)
+    };
     Some(Diagnostic {
         range: Range {
             start: Position::new(line_idx, col),
@@ -199,7 +202,11 @@ fn parse_error_line(line: &str) -> Option<(u32, u32, String)> {
         if let Some(stripped) = message.strip_suffix("(ctrmml-check)") {
             message = stripped.trim_end().to_string();
         }
-        return Some((line_num.saturating_sub(1), col_num.saturating_sub(1), message));
+        return Some((
+            line_num.saturating_sub(1),
+            col_num.saturating_sub(1),
+            message,
+        ));
     }
 
     None

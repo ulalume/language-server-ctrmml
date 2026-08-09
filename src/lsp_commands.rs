@@ -187,7 +187,11 @@ pub(crate) fn code_actions(uri: &str, start: Position) -> Vec<CodeAction> {
             CMD_QUICKROM_MENU,
             vec![json!(uri)],
         ),
-        command_action(command_title(CMD_MDSLINK_MENU), CMD_MDSLINK_MENU, vec![json!(uri)]),
+        command_action(
+            command_title(CMD_MDSLINK_MENU),
+            CMD_MDSLINK_MENU,
+            vec![json!(uri)],
+        ),
     ]
 }
 
