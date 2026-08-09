@@ -1,4 +1,5 @@
-use serde_json::Value;
+use serde::de::DeserializeOwned;
+use serde_json::{Map, Value};
 
 use ctrmml_lang_core::completion::CompletionSettings;
 
@@ -33,11 +34,87 @@ pub(crate) fn config_from_value(value: &Value) -> Option<Config> {
 /// supplied; initialize uses it to limit the temporary vscode compatibility
 /// fallback to that one setting.
 pub(crate) fn completion_settings_from_value(value: &Value) -> (CompletionSettings, bool) {
-    let hierarchy_explicit = value
-        .as_object()
-        .is_some_and(|options| options.contains_key("fm_picker_hierarchy"));
-    let settings = serde_json::from_value(value.clone()).unwrap_or_default();
+    completion_settings_from_value_with_warning(value, |field, error| {
+        eprintln!("invalid completion setting `{field}`: {error}; using default");
+    })
+}
+
+fn completion_settings_from_value_with_warning(
+    value: &Value,
+    mut warning: impl FnMut(&str, &serde_json::Error),
+) -> (CompletionSettings, bool) {
+    let options = value.as_object();
+    let defaults = CompletionSettings::default();
+    let hierarchy_explicit = options.is_some_and(|options| {
+        options.contains_key("fm_picker_hierarchy") || options.contains_key("fmPickerHierarchy")
+    });
+    let settings = CompletionSettings {
+        arpeggio_enabled: completion_field(
+            options,
+            "arpeggio_enabled",
+            "arpeggioEnabled",
+            defaults.arpeggio_enabled,
+            &mut warning,
+        ),
+        arpeggio_pattern: completion_field(
+            options,
+            "arpeggio_pattern",
+            "arpeggioPattern",
+            defaults.arpeggio_pattern,
+            &mut warning,
+        ),
+        chord_stack_mode: completion_field(
+            options,
+            "chord_stack_mode",
+            "chordStackMode",
+            defaults.chord_stack_mode,
+            &mut warning,
+        ),
+        fm_picker_hierarchy: completion_field(
+            options,
+            "fm_picker_hierarchy",
+            "fmPickerHierarchy",
+            defaults.fm_picker_hierarchy,
+            &mut warning,
+        ),
+    };
     (settings, hierarchy_explicit)
+}
+
+fn completion_field<T: DeserializeOwned>(
+    options: Option<&Map<String, Value>>,
+    snake_case: &str,
+    camel_case: &str,
+    default: T,
+    warning: &mut impl FnMut(&str, &serde_json::Error),
+) -> T {
+    let Some(value) =
+        options.and_then(|options| options.get(snake_case).or_else(|| options.get(camel_case)))
+    else {
+        return default;
+    };
+    match serde_json::from_value(value.clone()) {
+        Ok(value) => value,
+        Err(error) => {
+            warning(snake_case, &error);
+            default
+        }
+    }
+}
+
+pub(crate) fn apply_completion_client_defaults(
+    settings: &mut CompletionSettings,
+    hierarchy_explicit: bool,
+    client_name: Option<&str>,
+) {
+    if hierarchy_explicit {
+        return;
+    }
+    if let Some(name) = client_name {
+        let name = name.to_lowercase();
+        settings.fm_picker_hierarchy =
+            name.contains("visual studio code") || name.contains("vscode");
+    }
 }
 
 #[cfg(test)]
@@ -69,6 +146,55 @@ mod tests {
         }));
 
         assert!(settings.fm_picker_hierarchy);
+        assert!(hierarchy_explicit);
+    }
+
+    #[test]
+    fn completion_settings_parse_case_insensitive_aliases_and_camel_case() {
+        let (settings, hierarchy_explicit) = completion_settings_from_value(&json!({
+            "arpeggioEnabled": true,
+            "arpeggioPattern": "UpDown",
+            "chordStackMode": "stack-up",
+            "fmPickerHierarchy": true
+        }));
+
+        assert!(settings.arpeggio_enabled);
+        assert_eq!(settings.arpeggio_pattern, ArpeggioPattern::UpDown);
+        assert_eq!(settings.chord_stack_mode, ChordStackMode::StackUp);
+        assert!(settings.fm_picker_hierarchy);
+        assert!(hierarchy_explicit);
+    }
+
+    #[test]
+    fn invalid_completion_field_falls_back_without_resetting_siblings_and_warns() {
+        let mut warnings = Vec::new();
+        let (settings, _) = completion_settings_from_value_with_warning(
+            &json!({
+                "arpeggio_enabled": true,
+                "arpeggio_pattern": "BOGUS"
+            }),
+            |field, error| warnings.push((field.to_string(), error.to_string())),
+        );
+
+        assert!(settings.arpeggio_enabled);
+        assert_eq!(settings.arpeggio_pattern, ArpeggioPattern::Up);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].0, "arpeggio_pattern");
+        assert!(warnings[0].1.contains("unknown variant"));
+    }
+
+    #[test]
+    fn camel_case_hierarchy_is_not_overridden_for_vscode() {
+        let (mut settings, hierarchy_explicit) = completion_settings_from_value(&json!({
+            "fmPickerHierarchy": false
+        }));
+        apply_completion_client_defaults(
+            &mut settings,
+            hierarchy_explicit,
+            Some("Visual Studio Code"),
+        );
+
+        assert!(!settings.fm_picker_hierarchy);
         assert!(hierarchy_explicit);
     }
 }

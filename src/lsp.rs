@@ -18,7 +18,9 @@ use tower_lsp::{
 
 use crate::backend::Backend;
 use crate::completion::scan_pcm_paths;
-use crate::config::{completion_settings_from_value, config_from_value};
+use crate::config::{
+    apply_completion_client_defaults, completion_settings_from_value, config_from_value,
+};
 use crate::export::ExportFormat;
 use crate::fill_measure::{fetch_cursor_tick, fill_measure_code_action};
 use crate::lsp_commands::{
@@ -78,15 +80,13 @@ impl LanguageServer for Backend {
             (completion_settings, hierarchy_explicit) = completion_settings_from_value(&options);
         }
 
-        if let Some(info) = &params.client_info {
-            let name = info.name.to_lowercase();
-            let is_vscode = name.contains("visual studio code") || name.contains("vscode");
-            // Compatibility until native extensions send completion settings:
-            // client-name sniffing may fill only an omitted hierarchy flag.
-            if !hierarchy_explicit {
-                completion_settings.fm_picker_hierarchy = is_vscode;
-            }
-        }
+        // Compatibility until native extensions send completion settings:
+        // client-name sniffing may fill only an omitted hierarchy flag.
+        apply_completion_client_defaults(
+            &mut completion_settings,
+            hierarchy_explicit,
+            params.client_info.as_ref().map(|info| info.name.as_str()),
+        );
         *self.completion_settings.write().await = completion_settings;
 
         Ok(InitializeResult {
@@ -276,6 +276,9 @@ impl LanguageServer for Backend {
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let document_uri = params.text_document_position.text_document.uri;
         let uri = document_uri.to_string();
+        if !is_mml_uri(&uri) {
+            return Ok(None);
+        }
         let position = params.text_document_position.position;
         let text = self
             .docs
@@ -809,7 +812,7 @@ fn core_completion_item(item: CoreItem, supports_as_is: bool) -> CompletionItem 
         kind: Some(core_completion_kind(item.kind)),
         detail: item.detail,
         documentation: item.documentation.map(Documentation::String),
-        insert_text: Some(item.insert.text),
+        insert_text: None,
         insert_text_format: (item.insert.format == InsertFormat::Snippet)
             .then_some(InsertTextFormat::SNIPPET),
         insert_text_mode: (item.insert.as_is && supports_as_is).then_some(InsertTextMode::AS_IS),
@@ -1235,6 +1238,7 @@ mod tests {
         item.command = Some(CoreCommand::TriggerSuggest);
 
         let mapped = core_completion_item(item, true);
+        assert_eq!(mapped.insert_text, None);
         assert_eq!(mapped.kind, Some(CompletionItemKind::SNIPPET));
         assert_eq!(mapped.insert_text_format, Some(InsertTextFormat::SNIPPET));
         assert_eq!(mapped.insert_text_mode, Some(InsertTextMode::AS_IS));

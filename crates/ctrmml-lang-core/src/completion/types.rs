@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 
 /// Zero-based document position. `character` is measured in UTF-16 code units.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,7 +35,7 @@ pub struct CoreItem {
     pub kind: CoreItemKind,
     /// Short explanatory text displayed beside the label.
     pub detail: Option<String>,
-    /// Optional Markdown documentation for the item.
+    /// Optional plain-text documentation for the item.
     pub documentation: Option<String>,
     /// Text and insertion behavior applied when the item is accepted.
     pub insert: InsertSpec,
@@ -138,12 +138,16 @@ pub enum CoreCommand {
 #[serde(default)]
 pub struct CompletionSettings {
     /// Whether arpeggio completions are enabled.
+    #[serde(alias = "arpeggioEnabled")]
     pub arpeggio_enabled: bool,
     /// Pattern used to render arpeggio completions.
+    #[serde(alias = "arpeggioPattern")]
     pub arpeggio_pattern: ArpeggioPattern,
     /// Direction strategy used to render stacked chords.
+    #[serde(alias = "chordStackMode")]
     pub chord_stack_mode: ChordStackMode,
     /// Whether FM patches use the two-step file-to-patch picker.
+    #[serde(alias = "fmPickerHierarchy")]
     pub fm_picker_hierarchy: bool,
 }
 
@@ -159,7 +163,7 @@ impl Default for CompletionSettings {
 }
 
 /// Available arpeggio traversal patterns.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ArpeggioPattern {
     /// Ascend through chord tones.
@@ -174,14 +178,72 @@ pub enum ArpeggioPattern {
     Alberti,
 }
 
+impl<'de> Deserialize<'de> for ArpeggioPattern {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        match normalize_setting_variant(&value).as_str() {
+            "up" => Ok(Self::Up),
+            "down" => Ok(Self::Down),
+            "updown" => Ok(Self::UpDown),
+            "downup" => Ok(Self::DownUp),
+            "alberti" => Ok(Self::Alberti),
+            _ => Err(D::Error::unknown_variant(
+                &value,
+                &["up", "down", "updown", "downup", "alberti"],
+            )),
+        }
+    }
+}
+
 /// Rendering modes for chord completions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChordStackMode {
     /// Adjust octaves so chord tones rise monotonically.
     StackUp,
     /// Render chord letters without octave stacking.
     Plain,
+}
+
+impl<'de> Deserialize<'de> for ChordStackMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        match normalize_setting_variant(&value).as_str() {
+            "stack_up" => Ok(Self::StackUp),
+            "plain" => Ok(Self::Plain),
+            _ => Err(D::Error::unknown_variant(&value, &["stack_up", "plain"])),
+        }
+    }
+}
+
+fn normalize_setting_variant(value: &str) -> String {
+    value.to_ascii_lowercase().replace('-', "_")
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::de::value::{Error, StringDeserializer};
+
+    use super::*;
+
+    #[test]
+    fn completion_setting_enums_accept_case_and_separator_variants() {
+        let arpeggio =
+            ArpeggioPattern::deserialize(StringDeserializer::<Error>::new("UpDown".to_string()))
+                .expect("mixed-case arpeggio pattern");
+        let chord =
+            ChordStackMode::deserialize(StringDeserializer::<Error>::new("stack-up".to_string()))
+                .expect("hyphenated chord stack mode");
+
+        assert_eq!(arpeggio, ArpeggioPattern::UpDown);
+        assert_eq!(chord, ChordStackMode::StackUp);
+    }
 }
 
 /// Host data requested by a completion provider.

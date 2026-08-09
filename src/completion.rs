@@ -39,7 +39,7 @@ pub(crate) fn scan_pcm_paths(uri: &str, roots: &[PathBuf]) -> Vec<String> {
     for root in completion_search_roots(uri, roots) {
         for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
             let path = entry.path();
-            if !entry.file_type().is_file() || !is_wav(path) {
+            if !path.is_file() || !is_wav(path) {
                 continue;
             }
             let Some(relative) = relative_completion_path(path, uri, roots) else {
@@ -94,6 +94,22 @@ mod tests {
         std::fs::create_dir_all(root.join("samples")).expect("create test directory");
         std::fs::write(root.join("samples/kick.wav"), b"wave").expect("write wav");
         std::fs::write(root.join("samples/ignore.txt"), b"nope").expect("write txt");
+
+        let paths = scan_pcm_paths("not-a-uri", std::slice::from_ref(&root));
+        assert_eq!(paths, vec!["samples/kick.wav"]);
+
+        std::fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_pcm_paths_follows_wav_file_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_test_dir("pcm-symlink");
+        std::fs::create_dir_all(root.join("samples")).expect("create test directory");
+        std::fs::write(root.join("sample-data"), b"wave").expect("write target");
+        symlink(root.join("sample-data"), root.join("samples/kick.wav")).expect("create symlink");
 
         let paths = scan_pcm_paths("not-a-uri", std::slice::from_ref(&root));
         assert_eq!(paths, vec!["samples/kick.wav"]);

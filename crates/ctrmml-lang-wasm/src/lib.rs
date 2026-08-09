@@ -1261,6 +1261,23 @@ mod tests {
     }
 
     #[test]
+    fn completion_settings_accept_camel_case_and_variant_aliases() {
+        let settings = serde_json::json!({
+            "arpeggioEnabled": true,
+            "arpeggioPattern": "UpDown",
+            "chordStackMode": "stack-up",
+            "fmPickerHierarchy": false
+        });
+        let json = completion_plan_json("A c", 0, 3, "", &settings.to_string());
+        let plan: ctrmml_lang_core::CompletionPlan = serde_json::from_str(&json).unwrap();
+
+        let ctrmml_lang_core::CompletionPlan::Done(list) = plan else {
+            panic!("arpeggio completion should resolve without host data");
+        };
+        assert!(!list.items.is_empty());
+    }
+
+    #[test]
     fn completion_malformed_json_returns_error_objects() {
         let settings_error = completion_plan_json("", 0, 0, "", "{");
         let settings_value: serde_json::Value = serde_json::from_str(&settings_error).unwrap();

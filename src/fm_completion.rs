@@ -44,7 +44,7 @@ fn scan_instrument_files(uri: &str, roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut seen_files = HashSet::new();
     for root in completion_search_roots(uri, roots) {
         for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
-            if !entry.file_type().is_file() || !is_fm_instrument(entry.path()) {
+            if !entry.path().is_file() || !is_fm_instrument(entry.path()) {
                 continue;
             }
             let path = entry.path().to_path_buf();
@@ -267,6 +267,22 @@ mod tests {
         std::fs::create_dir_all(root.join("nested")).expect("create test directory");
         std::fs::write(root.join("nested/lead.dmp"), b"patch").expect("write dmp");
         std::fs::write(root.join("nested/ignore.txt"), b"nope").expect("write txt");
+
+        let files = scan_instrument_files("not-a-uri", std::slice::from_ref(&root));
+        assert_eq!(files, vec![root.join("nested/lead.dmp")]);
+
+        std::fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_instrument_files_follows_supported_file_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_test_dir("fm-symlink");
+        std::fs::create_dir_all(root.join("nested")).expect("create test directory");
+        std::fs::write(root.join("patch-data"), b"patch").expect("write target");
+        symlink(root.join("patch-data"), root.join("nested/lead.dmp")).expect("create symlink");
 
         let files = scan_instrument_files("not-a-uri", std::slice::from_ref(&root));
         assert_eq!(files, vec![root.join("nested/lead.dmp")]);

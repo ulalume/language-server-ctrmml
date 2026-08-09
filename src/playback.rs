@@ -82,7 +82,9 @@ impl Backend {
         if let Some((line, col)) = start {
             cmd.arg("--start").arg(format!("{line}:{col}"));
         }
-        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
         let mut child = cmd
             .spawn()
@@ -190,7 +192,9 @@ impl Backend {
     /// (e.g. preview) or when the URI doesn't match.
     pub(crate) async fn push_playback_update(&self, uri: &str, text: &str) {
         let slot = self.playback.lock().await;
-        let Some(playback) = slot.as_ref() else { return };
+        let Some(playback) = slot.as_ref() else {
+            return;
+        };
         if !playback.hot_reload || playback.uri != uri {
             return;
         }
