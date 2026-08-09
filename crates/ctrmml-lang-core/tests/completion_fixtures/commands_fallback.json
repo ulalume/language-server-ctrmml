@@ -1,0 +1,39 @@
+[
+  {
+    "name": "commands_fallback_full_table",
+    "notes": "D19: the fallback emits the whole COMMAND_COMPLETIONS table (37 entries in docs.rs, incl. the two `V` variants), kind Function, 3-digit index sortText, filterText = table key, and is_incomplete so editors re-query on every keystroke (so the note/rest guard keeps working). D18: insert_format is Snippet only when the insert contains `$` — index 0 (`c`) is plain, index 1 (`r${1:duration}`) is a snippet.",
+    "decisions": ["D18", "D19", "D17"],
+    "doc": "A ",
+    "pos": {"line": 0, "character": 2},
+    "trigger": " ",
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": true,
+      "count": 37,
+      "items_spot": [
+        {"index": 0, "label": "cdefgabh", "kind": "function", "detail": "Insert notes.", "documentation_contains": "Insert notes. You can optionally add a duration", "insert": "c", "insert_format": "plain", "filter_text": "notes", "sort_text": "000", "range": {"start_character": 2, "end_character": 2}},
+        {"index": 1, "label": "r<duration>", "kind": "function", "detail": "Insert a rest.", "insert": "r${1:duration}", "insert_format": "snippet", "filter_text": "r", "sort_text": "001", "range": {"start_character": 2, "end_character": 2}},
+        {"index": 2, "label": "o<1..8>", "kind": "function", "detail": "Set octave.", "insert": "o${1:1..8}", "insert_format": "snippet", "filter_text": "o", "sort_text": "002"},
+        {"index": 36, "label": "{ ... / ... } end", "kind": "function", "detail": "Conditional block end.", "insert": "}", "insert_format": "plain", "filter_text": "}", "sort_text": "036"}
+      ]
+    }
+  },
+  {
+    "name": "commands_fallback_covers_typed_word",
+    "notes": "D17: the same list with an explicit range over the partially typed word (`o` is not a note letter, so the note guard does not fire).",
+    "decisions": ["D17", "D19"],
+    "doc": "A o",
+    "pos": {"line": 0, "character": 3},
+    "trigger": null,
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": true,
+      "count": 37,
+      "items_spot": [
+        {"index": 0, "label": "cdefgabh", "sort_text": "000", "range": {"start_character": 2, "end_character": 3}}
+      ]
+    }
+  }
+]

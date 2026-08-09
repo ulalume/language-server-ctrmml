@@ -1,0 +1,86 @@
+[
+  {
+    "name": "instrument_types_after_at_number",
+    "notes": "D9: fires at `@N ` exactly. Whole INSTRUMENT_TYPES table, kind TypeParameter, is_incomplete so the editor re-queries; `fm`/`pcm` carry TriggerSuggest (INSTRUMENT_TYPES_TRIGGER_SUGGEST) so the file picker opens right after acceptance; `2op` is the only snippet insert (D18).",
+    "decisions": ["D9", "D17", "D18"],
+    "doc": "@1 ",
+    "pos": {"line": 0, "character": 3},
+    "trigger": " ",
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": true,
+      "items": [
+        {"label": "pcm", "kind": "type_parameter", "detail": "PCM sample instrument", "documentation_contains": "PCM samples are defined as instruments.", "insert": "pcm ", "insert_format": "plain", "filter_text": "pcm", "sort_text": "000", "command": "trigger_suggest", "range": {"start_character": 3, "end_character": 3}},
+        {"label": "fm", "kind": "type_parameter", "detail": "FM synthesis instrument", "documentation_contains": "FM instruments are defined with ALG", "insert": "fm ", "insert_format": "plain", "filter_text": "fm", "sort_text": "001", "command": "trigger_suggest", "range": {"start_character": 3, "end_character": 3}},
+        {"label": "psg", "kind": "type_parameter", "detail": "PSG envelope instrument", "documentation_contains": "PSG instruments (envelopes) are defined", "insert": "psg ", "insert_format": "plain", "filter_text": "psg", "sort_text": "002", "assert_absent": ["command"], "range": {"start_character": 3, "end_character": 3}},
+        {"label": "2op", "kind": "type_parameter", "detail": "2-operator FM instrument", "documentation_contains": "Create a derived FM instrument", "insert": "2op   ${1:2}   ${2:5}   ${3:5}   ${4:4}   ${5:4}   ${6:0}", "insert_format": "snippet", "filter_text": "2op", "sort_text": "003", "range": {"start_character": 3, "end_character": 3}}
+      ]
+    }
+  },
+  {
+    "name": "instrument_types_keep_firing_while_typing",
+    "notes": "D9 [RS]: the predicate stays satisfied while the typed text is a prefix of a known keyword (`f`), so the provider re-fires with the same 4 items and a range covering the typed word; is_incomplete lets the editor swap to the FM picker once `fm` is complete. Server-side filtering is NOT applied — the editor filters on filter_text.",
+    "decisions": ["D9", "D17"],
+    "doc": "@1 f",
+    "pos": {"line": 0, "character": 4},
+    "trigger": null,
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": true,
+      "count": 4,
+      "items_spot": [
+        {"index": 1, "label": "fm", "kind": "type_parameter", "insert": "fm ", "insert_format": "plain", "filter_text": "fm", "sort_text": "001", "command": "trigger_suggest", "range": {"start_character": 3, "end_character": 4}}
+      ]
+    }
+  },
+  {
+    "name": "rate_offset_fires_after_three_tokens",
+    "notes": "D8: predicate = prefix ends with a space AND tokens (quote-aware) >= 3 AND `@<num>` `pcm` `\"…\"`. Items come strictly from the shared RATE_OFFSET table (label = table label, insert = table snippet), kind Property.",
+    "decisions": ["D8", "D17", "D18"],
+    "doc": "@1 pcm \"drums/kick.wav\" ",
+    "pos": {"line": 0, "character": 24},
+    "trigger": " ",
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "items": [
+        {"label": "rate=<num>", "kind": "property", "detail": "Override the sample rate.", "documentation_contains": "Override the sample rate of a PCM instrument.", "insert": "rate=${1:<num>}", "insert_format": "snippet", "filter_text": "rate=", "sort_text": "000", "range": {"start_character": 24, "end_character": 24}},
+        {"label": "offset=<num>", "kind": "property", "detail": "Adjust the start position.", "documentation_contains": "Adjust the start position of a PCM instrument", "insert": "offset=${1:<num>}", "insert_format": "snippet", "filter_text": "offset=", "sort_text": "001", "range": {"start_character": 24, "end_character": 24}}
+      ]
+    }
+  },
+  {
+    "name": "rate_offset_refires_with_four_tokens",
+    "notes": "D8: TS uses `tokens >= 3`, so a second modifier is still offered after `rate=8000 ` (native's `tokens == 3` would stop here).",
+    "decisions": ["D8"],
+    "doc": "@1 pcm \"drums/kick.wav\" rate=8000 ",
+    "pos": {"line": 0, "character": 34},
+    "trigger": " ",
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "items": [
+        {"label": "rate=<num>", "kind": "property", "insert": "rate=${1:<num>}", "insert_format": "snippet", "filter_text": "rate=", "sort_text": "000", "range": {"start_character": 34, "end_character": 34}},
+        {"label": "offset=<num>", "kind": "property", "insert": "offset=${1:<num>}", "insert_format": "snippet", "filter_text": "offset=", "sort_text": "001", "range": {"start_character": 34, "end_character": 34}}
+      ]
+    }
+  },
+  {
+    "name": "fm_keyword_word_boundary_at_fmx",
+    "notes": "ADJUDICATED: the FM predicate is `@<digits>` + required whitespace (megamml side) + `fm` + word boundary (native side) — the strict composite. `@1 fmx` matches no provider and hits the `@`-prefix bail: exclusive empty. megamml previously opened the picker here (behavior-change ledger).",
+    "decisions": ["D11"],
+    "doc": "@1 fmx",
+    "pos": {"line": 0, "character": 6},
+    "trigger": null,
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "items": []
+    }
+  }
+]

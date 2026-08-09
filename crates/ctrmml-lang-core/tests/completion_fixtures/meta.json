@@ -1,0 +1,189 @@
+[
+  {
+    "name": "meta_keywords_after_hash",
+    "notes": "D6: range starts AFTER the `#` (character 1) and the insert carries no `#` (RS mechanism); TriggerSuggest only on the 4 value-taking keywords. Table detail/filter/sort rendering is shared, and §3.1-4 requires documentation to be absent when the table doc is empty (asserted on #author).",
+    "decisions": ["D6", "D17"],
+    "doc": "#ti",
+    "pos": {"line": 0, "character": 3},
+    "trigger": null,
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "items": [
+        {"label": "#title", "kind": "keyword", "detail": "Song title.", "insert": "title", "insert_format": "plain", "filter_text": "#title", "sort_text": "000", "range": {"start_character": 1, "end_character": 3}},
+        {"label": "#composer", "kind": "keyword", "detail": "Original composer.", "insert": "composer", "insert_format": "plain", "filter_text": "#composer", "sort_text": "001", "range": {"start_character": 1, "end_character": 3}},
+        {"label": "#programmer", "kind": "keyword", "detail": "MML programmer.", "insert": "programmer", "insert_format": "plain", "filter_text": "#programmer", "sort_text": "002", "range": {"start_character": 1, "end_character": 3}},
+        {"label": "#author", "kind": "keyword", "detail": "Song metadata.", "insert": "author", "insert_format": "plain", "filter_text": "#author", "sort_text": "003", "assert_absent": ["documentation"], "range": {"start_character": 1, "end_character": 3}},
+        {"label": "#date", "kind": "keyword", "detail": "Song metadata.", "insert": "date", "insert_format": "plain", "filter_text": "#date", "sort_text": "004", "range": {"start_character": 1, "end_character": 3}},
+        {"label": "#comment", "kind": "keyword", "detail": "Song metadata.", "insert": "comment", "insert_format": "plain", "filter_text": "#comment", "sort_text": "005", "range": {"start_character": 1, "end_character": 3}},
+        {"label": "#platform", "kind": "keyword", "detail": "Choose the Mega Drive playback mode.", "insert": "platform", "insert_format": "plain", "filter_text": "#platform", "sort_text": "006", "command": "trigger_suggest", "range": {"start_character": 1, "end_character": 3}},
+        {"label": "#option", "kind": "keyword", "detail": "Sets platform options.", "insert": "option", "insert_format": "plain", "filter_text": "#option", "sort_text": "007", "command": "trigger_suggest", "range": {"start_character": 1, "end_character": 3}},
+        {"label": "#group", "kind": "keyword", "detail": "MDSDRV song group.", "insert": "group", "insert_format": "plain", "filter_text": "#group", "sort_text": "008", "command": "trigger_suggest", "range": {"start_character": 1, "end_character": 3}},
+        {"label": "#game", "kind": "keyword", "detail": "Song metadata.", "insert": "game", "insert_format": "plain", "filter_text": "#game", "sort_text": "009", "range": {"start_character": 1, "end_character": 3}},
+        {"label": "#composerj", "kind": "keyword", "detail": "Song metadata.", "insert": "composerj", "insert_format": "plain", "filter_text": "#composerj", "sort_text": "010", "range": {"start_character": 1, "end_character": 3}},
+        {"label": "#license", "kind": "keyword", "detail": "License information.", "insert": "license", "insert_format": "plain", "filter_text": "#license", "sort_text": "011", "range": {"start_character": 1, "end_character": 3}},
+        {"label": "#timesig", "kind": "keyword", "detail": "Time signature for piano roll.", "insert": "timesig", "insert_format": "plain", "filter_text": "#timesig", "sort_text": "012", "command": "trigger_suggest", "range": {"start_character": 1, "end_character": 3}}
+      ]
+    }
+  },
+  {
+    "name": "meta_keywords_require_hash_as_first_non_ws",
+    "notes": "D6 strict predicate: `#` must be the first non-whitespace character of the line, so `x #ti` yields NO meta keywords and falls through to the command fallback.",
+    "decisions": ["D6", "D19"],
+    "doc": "x #ti",
+    "pos": {"line": 0, "character": 5},
+    "trigger": null,
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": true,
+      "count": 37,
+      "items_spot": [
+        {"index": 0, "label": "cdefgabh", "kind": "function", "insert": "c", "filter_text": "notes", "sort_text": "000", "range": {"start_character": 3, "end_character": 5}}
+      ]
+    }
+  },
+  {
+    "name": "meta_value_platform",
+    "notes": "D7: PLATFORM_VALUES verbatim from docs.rs, kind Value, insertText = table insert, explicit (here empty) range at the cursor.",
+    "decisions": ["D7", "D17"],
+    "doc": "#platform ",
+    "pos": {"line": 0, "character": 10},
+    "trigger": " ",
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "items": [
+        {"label": "megadrive", "kind": "value", "detail": "Mega Drive / Genesis", "documentation_contains": "Use raw VGM DAC stream playback for PCM", "insert": "megadrive", "insert_format": "plain", "filter_text": "megadrive", "sort_text": "000", "range": {"start_character": 10, "end_character": 10}},
+        {"label": "mdsdrv", "kind": "value", "detail": "MDSDRV sound driver", "documentation_contains": "Simulate the MDSDRV PCM driver", "insert": "mdsdrv", "insert_format": "plain", "filter_text": "mdsdrv", "sort_text": "001", "range": {"start_character": 10, "end_character": 10}}
+      ]
+    }
+  },
+  {
+    "name": "meta_value_option",
+    "notes": "D7: OPTION_VALUES has exactly one entry.",
+    "decisions": ["D7"],
+    "doc": "#option ",
+    "pos": {"line": 0, "character": 8},
+    "trigger": " ",
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "items": [
+        {"label": "noextpitch", "kind": "value", "detail": "Disable extended pitch envelopes", "insert": "noextpitch", "insert_format": "plain", "filter_text": "noextpitch", "sort_text": "000", "range": {"start_character": 8, "end_character": 8}}
+      ]
+    }
+  },
+  {
+    "name": "meta_value_timesig",
+    "notes": "D7: native gains #timesig values; TIMESIG_VALUES order is table order (3/4, 4/4, 5/4, 6/8, no).",
+    "decisions": ["D7"],
+    "doc": "#timesig ",
+    "pos": {"line": 0, "character": 9},
+    "trigger": " ",
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "items": [
+        {"label": "3/4", "kind": "value", "detail": "Three beats per measure.", "insert": "3/4", "insert_format": "plain", "filter_text": "3/4", "sort_text": "000", "range": {"start_character": 9, "end_character": 9}},
+        {"label": "4/4", "kind": "value", "detail": "Four beats per measure (default).", "insert": "4/4", "insert_format": "plain", "filter_text": "4/4", "sort_text": "001", "range": {"start_character": 9, "end_character": 9}},
+        {"label": "5/4", "kind": "value", "detail": "Five beats per measure.", "insert": "5/4", "insert_format": "plain", "filter_text": "5/4", "sort_text": "002", "range": {"start_character": 9, "end_character": 9}},
+        {"label": "6/8", "kind": "value", "detail": "Six eighth-note beats per measure.", "insert": "6/8", "insert_format": "plain", "filter_text": "6/8", "sort_text": "003", "range": {"start_character": 9, "end_character": 9}},
+        {"label": "no", "kind": "value", "detail": "No measure lines.", "documentation_contains": "disables the `|` bar-line rest fill", "insert": "no", "insert_format": "plain", "filter_text": "no", "sort_text": "004", "range": {"start_character": 9, "end_character": 9}}
+      ]
+    }
+  },
+  {
+    "name": "meta_value_group",
+    "notes": "D7: native gains #group values.",
+    "decisions": ["D7"],
+    "doc": "#group ",
+    "pos": {"line": 0, "character": 7},
+    "trigger": " ",
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "items": [
+        {"label": "bgm", "kind": "value", "detail": "Background music group.", "insert": "bgm", "insert_format": "plain", "filter_text": "bgm", "sort_text": "000", "range": {"start_character": 7, "end_character": 7}},
+        {"label": "se", "kind": "value", "detail": "Sound effect group.", "insert": "se", "insert_format": "plain", "filter_text": "se", "sort_text": "001", "range": {"start_character": 7, "end_character": 7}}
+      ]
+    }
+  },
+  {
+    "name": "meta_value_still_offered_after_typing_starts",
+    "notes": "D7: native's 'stop offering once the value is being typed' predicate is dropped — the TS predicate (whitespace after the keyword) keeps firing and the range covers the typed word.",
+    "decisions": ["D7", "D17"],
+    "doc": "#platform me",
+    "pos": {"line": 0, "character": 12},
+    "trigger": null,
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "items": [
+        {"label": "megadrive", "kind": "value", "insert": "megadrive", "insert_format": "plain", "filter_text": "megadrive", "sort_text": "000", "range": {"start_character": 10, "end_character": 12}},
+        {"label": "mdsdrv", "kind": "value", "insert": "mdsdrv", "insert_format": "plain", "filter_text": "mdsdrv", "sort_text": "001", "range": {"start_character": 10, "end_character": 12}}
+      ]
+    }
+  },
+  {
+    "name": "meta_value_timesig_replaces_punctuated_token",
+    "notes": "§3.1-16: the value-token range includes `/`, so accepting `3/4` replaces `3/` instead of producing a duplicated fraction.",
+    "decisions": ["D7", "D17"],
+    "doc": "#timesig 3/",
+    "pos": {"line": 0, "character": 11},
+    "trigger": null,
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "count": 5,
+      "items_spot": [
+        {"index": 0, "label": "3/4", "range": {"start_character": 9, "end_character": 11}},
+        {"index": 1, "label": "4/4", "range": {"start_character": 9, "end_character": 11}},
+        {"index": 2, "label": "5/4", "range": {"start_character": 9, "end_character": 11}},
+        {"index": 3, "label": "6/8", "range": {"start_character": 9, "end_character": 11}},
+        {"index": 4, "label": "no", "range": {"start_character": 9, "end_character": 11}}
+      ]
+    }
+  },
+  {
+    "name": "meta_value_platform_replaces_hyphenated_token",
+    "notes": "§3.1-16: the value-token range includes `-`, so accepting a platform replaces the entire typed `mega-` fragment.",
+    "decisions": ["D7", "D17"],
+    "doc": "#platform mega-",
+    "pos": {"line": 0, "character": 15},
+    "trigger": null,
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "items": [
+        {"label": "megadrive", "range": {"start_character": 10, "end_character": 15}},
+        {"label": "mdsdrv", "range": {"start_character": 10, "end_character": 15}}
+      ]
+    }
+  },
+  {
+    "name": "at_meta_two_table_items",
+    "notes": "D10: exactly the 2 AT_META_COMPLETION_LABELS entries (`@<num>`, `@M<num>`); `@E<num>`/`@P<num>` stay hover-only. Kind Struct, range starts after the `@`, snippet inserts.",
+    "decisions": ["D10", "D17", "D18"],
+    "doc": "@M",
+    "pos": {"line": 0, "character": 2},
+    "trigger": null,
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "items": [
+        {"label": "@<num>", "kind": "struct", "detail": "Instrument definition", "documentation_contains": "Define an instrument table.", "insert": "${1:num}", "insert_format": "snippet", "filter_text": "@<num>", "sort_text": "000", "range": {"start_character": 1, "end_character": 2}},
+        {"label": "@M<num>", "kind": "struct", "detail": "Pitch envelope", "documentation_contains": "Define a pitch envelope table.", "insert": "M${1:num}", "insert_format": "snippet", "filter_text": "@M<num>", "sort_text": "001", "range": {"start_character": 1, "end_character": 2}}
+      ]
+    }
+  }
+]

@@ -1,0 +1,58 @@
+[
+  {
+    "name": "measure_fill_simple_4_4",
+    "notes": "D1/D4: typing `|` (a trigger char for everyone now) asks for the cursor tick, then offers one snippet that replaces the typed `|` with rests + ` |`. Derivation with the frozen core: scan_time_signature(doc) = 4/4 (no #timesig), is_after_bar_line(line, cursor) = false (the text before the just-typed `|` does not end with a bar line — TS passes column-1, i.e. the `|` itself is excluded), measure_remainder_ticks(24, 24, 4/4) = 96-24 = 72, ticks_to_mml_rest(72, 24) = \"r2.\" ⇒ insert \"r2. |\".",
+    "decisions": ["D1", "D4"],
+    "doc": "A o4 c4 |",
+    "pos": {"line": 0, "character": 9},
+    "trigger": "|",
+    "data": {"kind": "cursor_tick", "tick": 24, "ppqn": 24},
+    "expect": {
+      "plan": {"needs": "cursor_tick"},
+      "is_incomplete": false,
+      "items": [
+        {"label": "Fill measure (r2. |)", "kind": "snippet", "insert": "r2. |", "insert_format": "plain", "sort_text": "0", "range": {"start_character": 8, "end_character": 9}}
+      ]
+    }
+  },
+  {
+    "name": "measure_fill_ctrl_space_4_4",
+    "notes": "§3.1-26: measure fill is invocation-independent, so the Ctrl+Space path (`trigger: null`) is identical to the happy-path `|` trigger case.",
+    "decisions": ["D1", "D4"],
+    "doc": "A o4 c4 |",
+    "pos": {"line": 0, "character": 9},
+    "trigger": null,
+    "data": {"kind": "cursor_tick", "tick": 24, "ppqn": 24},
+    "expect": {
+      "plan": {"needs": "cursor_tick"},
+      "is_incomplete": false,
+      "items": [
+        {"label": "Fill measure (r2. |)", "kind": "snippet", "insert": "r2. |", "insert_format": "plain", "sort_text": "0", "range": {"start_character": 8, "end_character": 9}}
+      ]
+    }
+  },
+  {
+    "name": "measure_fill_not_offered_inside_comment",
+    "notes": "D4: the comment guard now runs BEFORE measure fill (TS ran the fill first — that was the bug). A `|` typed inside a comment must not even request the cursor tick, so the plan is Done with an empty exclusive list.",
+    "decisions": ["D2", "D3", "D4"],
+    "doc": "A o4 c4 ; |",
+    "pos": {"line": 0, "character": 11},
+    "trigger": "|",
+    "data": null,
+    "expect": {"plan": "done", "is_incomplete": false, "items": []}
+  },
+  {
+    "name": "measure_fill_tick_unavailable",
+    "notes": "D4/D20: when the host cannot supply a tick (compile failed / no compiler), the provider returns an exclusive EMPTY list — no fall-through to the command fallback.",
+    "decisions": ["D4", "D20"],
+    "doc": "A o4 c4 |",
+    "pos": {"line": 0, "character": 9},
+    "trigger": "|",
+    "data": {"kind": "cursor_tick", "tick": null},
+    "expect": {
+      "plan": {"needs": "cursor_tick"},
+      "is_incomplete": false,
+      "items": []
+    }
+  }
+]

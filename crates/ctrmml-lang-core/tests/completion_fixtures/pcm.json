@@ -1,0 +1,78 @@
+[
+  {
+    "name": "pcm_instruments_plan_requests_files",
+    "notes": "D14: `@N pcm ` asks the host for the PCM file list (megamml: IDB files typed `pcm`; native: *.wav under the doc dir + workspace roots).",
+    "decisions": ["D14"],
+    "doc": "@1 pcm ",
+    "pos": {"line": 0, "character": 7},
+    "trigger": " ",
+    "data": null,
+    "expect": {"plan": {"needs": "pcm_files"}}
+  },
+  {
+    "name": "pcm_instruments_resolve_file_list",
+    "notes": "D14 [TS]: File items whose insert is ` \"<relpath>\"` (leading space + quotes) replacing from just after `pcm` to end of line; detail = uppercased extension + ` sample`; sortText = the relative path itself.",
+    "decisions": ["D14", "D17"],
+    "doc": "@1 pcm ",
+    "pos": {"line": 0, "character": 7},
+    "trigger": " ",
+    "data": {"kind": "pcm_files", "paths": ["drums/kick.wav", "drums/snare.wav"]},
+    "expect": {
+      "plan": {"needs": "pcm_files"},
+      "is_incomplete": false,
+      "items": [
+        {"label": "drums/kick.wav", "kind": "file", "detail": "WAV sample", "insert": " \"drums/kick.wav\"", "insert_format": "plain", "filter_text": "drums/kick.wav", "sort_text": "drums/kick.wav", "range": {"start_character": 6, "end_character": 7}},
+        {"label": "drums/snare.wav", "kind": "file", "detail": "WAV sample", "insert": " \"drums/snare.wav\"", "insert_format": "plain", "filter_text": "drums/snare.wav", "sort_text": "drums/snare.wav", "range": {"start_character": 6, "end_character": 7}}
+      ]
+    }
+  },
+  {
+    "name": "pcm_instruments_empty_state_placeholder",
+    "notes": "D14 [TS]: with no PCM files the provider still returns an exclusive single Text item explaining why. Its insert is the text currently covered by the range (here empty, since the cursor sits right after `pcm` at end of line) and filterText falls back to `pcm` when that text is empty.",
+    "decisions": ["D14", "D20"],
+    "doc": "@1 pcm",
+    "pos": {"line": 0, "character": 6},
+    "trigger": null,
+    "data": {"kind": "pcm_files", "paths": []},
+    "expect": {
+      "plan": {"needs": "pcm_files"},
+      "is_incomplete": false,
+      "items": [
+        {"label": "PCM files (.wav) are suggested when present.", "kind": "text", "detail": "Import a PCM file to see path suggestions here.", "insert": "", "insert_format": "plain", "filter_text": "pcm", "sort_text": "zzzz", "range": {"start_character": 6, "end_character": 6}}
+      ]
+    }
+  },
+  {
+    "name": "pcm_path_appends_closing_quote",
+    "notes": "PCM path completion inside an open `\"` after a `pcm` token: the item closes the string because the next character is not already a quote. Range starts right after the opening quote and ends at the cursor.",
+    "decisions": ["D14", "D17"],
+    "doc": "@1 pcm \"",
+    "pos": {"line": 0, "character": 8},
+    "trigger": "\"",
+    "data": {"kind": "pcm_paths", "paths": ["drums/kick.wav", "fx/snare.wav"]},
+    "expect": {
+      "plan": {"needs": "pcm_paths"},
+      "is_incomplete": false,
+      "items": [
+        {"label": "drums/kick.wav", "kind": "file", "insert": "drums/kick.wav\"", "insert_format": "plain", "filter_text": "drums/kick.wav", "sort_text": "drums/kick.wav", "range": {"start_character": 8, "end_character": 8}},
+        {"label": "fx/snare.wav", "kind": "file", "insert": "fx/snare.wav\"", "insert_format": "plain", "filter_text": "fx/snare.wav", "sort_text": "fx/snare.wav", "range": {"start_character": 8, "end_character": 8}}
+      ]
+    }
+  },
+  {
+    "name": "pcm_path_keeps_existing_closing_quote",
+    "notes": "Same context but the string is already closed (next character is `\"`), so no quote is appended to the insert.",
+    "decisions": ["D14"],
+    "doc": "@1 pcm \"\"",
+    "pos": {"line": 0, "character": 8},
+    "trigger": "\"",
+    "data": {"kind": "pcm_paths", "paths": ["drums/kick.wav"]},
+    "expect": {
+      "plan": {"needs": "pcm_paths"},
+      "is_incomplete": false,
+      "items": [
+        {"label": "drums/kick.wav", "kind": "file", "insert": "drums/kick.wav", "insert_format": "plain", "filter_text": "drums/kick.wav", "sort_text": "drums/kick.wav", "range": {"start_character": 8, "end_character": 8}}
+      ]
+    }
+  }
+]

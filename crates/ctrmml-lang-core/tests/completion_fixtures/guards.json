@@ -1,0 +1,119 @@
+[
+  {
+    "name": "guard_comment_suppresses_everything",
+    "notes": "D3 guard order: the comment guard runs first and returns an empty exclusive list, so nothing (not even the command fallback) is offered inside a `;` comment.",
+    "decisions": ["D2", "D3"],
+    "doc": "A c4 ; slur",
+    "pos": {"line": 0, "character": 11},
+    "trigger": null,
+    "data": null,
+    "expect": {"plan": "done", "is_incomplete": false, "items": []}
+  },
+  {
+    "name": "guard_comment_ignores_semicolon_inside_single_quotes",
+    "notes": "D2 regression: is_in_comment is quote-aware, so the `;` inside '…' does NOT start a comment; the cascade reaches the command fallback (37 = COMMAND_COMPLETIONS len).",
+    "decisions": ["D2", "D19"],
+    "doc": "A c 'sr1 0;0' ",
+    "pos": {"line": 0, "character": 14},
+    "trigger": " ",
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": true,
+      "count": 37,
+      "items_spot": [
+        {"index": 0, "label": "cdefgabh", "kind": "function", "insert": "c", "insert_format": "plain", "filter_text": "notes", "sort_text": "000", "range": {"start_character": 14, "end_character": 14}}
+      ]
+    }
+  },
+  {
+    "name": "guard_key_signature_block",
+    "notes": "D3: cursor inside an unterminated `_{…}` key-signature block — is_in_key_sig(line, cursor) is true, so the guard fires before any provider.",
+    "decisions": ["D3"],
+    "doc": "A _{F",
+    "pos": {"line": 0, "character": 5},
+    "trigger": null,
+    "data": null,
+    "expect": {"plan": "done", "is_incomplete": false, "items": []}
+  },
+  {
+    "name": "guard_leading_track_selector_region",
+    "notes": "D3: cursor at character 2 == selector.end for `AB` (spans A[0,1) B[1,2)); TS predicate is `column <= selector.end + 1` (1-based) i.e. `character <= end` (0-based).",
+    "decisions": ["D3"],
+    "doc": "AB c4",
+    "pos": {"line": 0, "character": 2},
+    "trigger": null,
+    "data": null,
+    "expect": {"plan": "done", "is_incomplete": false, "items": []}
+  },
+  {
+    "name": "guard_note_suppression_bare_note",
+    "notes": "D3: whitespace-bounded token `c` matches isNoteOrRestToken, so the `C<ticks>` command must not surface. Arpeggio is off by default (suite default), so nothing takes over.",
+    "decisions": ["D3", "D16"],
+    "doc": "A c",
+    "pos": {"line": 0, "character": 3},
+    "trigger": null,
+    "data": null,
+    "expect": {"plan": "done", "is_incomplete": false, "items": []}
+  },
+  {
+    "name": "guard_note_suppression_dotted",
+    "notes": "D3: `c8.` is a note token (duration + dot).",
+    "decisions": ["D3"],
+    "doc": "A c8.",
+    "pos": {"line": 0, "character": 5},
+    "trigger": ".",
+    "data": null,
+    "expect": {"plan": "done", "is_incomplete": false, "items": []}
+  },
+  {
+    "name": "guard_note_suppression_colon_length",
+    "notes": "D3: `c:12` (explicit tick length) is a note token.",
+    "decisions": ["D3"],
+    "doc": "A c:12",
+    "pos": {"line": 0, "character": 6},
+    "trigger": null,
+    "data": null,
+    "expect": {"plan": "done", "is_incomplete": false, "items": []}
+  },
+  {
+    "name": "guard_note_suppression_octave_prefixed",
+    "notes": "D3: `>c` is not a whitespace-bounded note token, but the broader suffix check (endsAtNoteLike, `[<>]*[a-h]…$`) catches it.",
+    "decisions": ["D3"],
+    "doc": "A >c",
+    "pos": {"line": 0, "character": 4},
+    "trigger": null,
+    "data": null,
+    "expect": {"plan": "done", "is_incomplete": false, "items": []}
+  },
+  {
+    "name": "guard_rest_suppression",
+    "notes": "D3: `r4` matches the rest branch of isNoteOrRestToken.",
+    "decisions": ["D3"],
+    "doc": "A r4",
+    "pos": {"line": 0, "character": 4},
+    "trigger": null,
+    "data": null,
+    "expect": {"plan": "done", "is_incomplete": false, "items": []}
+  },
+  {
+    "name": "guard_hash_prefix_bail",
+    "notes": "Cascade bail: line's first non-ws char is `#` but no meta-keyword/meta-value context matches (`#title` takes free text) — exclusive empty, no command fallback.",
+    "decisions": ["D6", "D20"],
+    "doc": "#title My Song",
+    "pos": {"line": 0, "character": 14},
+    "trigger": null,
+    "data": null,
+    "expect": {"plan": "done", "is_incomplete": false, "items": []}
+  },
+  {
+    "name": "guard_at_prefix_bail",
+    "notes": "Cascade bail: line starts with `@` but no instrument-type / @meta / fm / pcm context matches — exclusive empty.",
+    "decisions": ["D9", "D10", "D20"],
+    "doc": "@1 xyz",
+    "pos": {"line": 0, "character": 6},
+    "trigger": null,
+    "data": null,
+    "expect": {"plan": "done", "is_incomplete": false, "items": []}
+  }
+]

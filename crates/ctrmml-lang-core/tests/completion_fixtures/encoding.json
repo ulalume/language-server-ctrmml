@@ -1,0 +1,80 @@
+[
+  {
+    "name": "encoding_comment_guard_with_japanese_text",
+    "notes": "Plan §2: positions are UTF-16 code units. `日本語の注釈` is 6 BMP chars = 6 UTF-16 units but 18 UTF-8 bytes; the comment guard must convert before scanning, otherwise the byte offset lands past the line end (or inside a codepoint).",
+    "decisions": ["D2", "D3"],
+    "doc": "A c4 ; 日本語の注釈",
+    "pos": {"line": 0, "character": 13},
+    "trigger": null,
+    "data": null,
+    "expect": {"plan": "done", "is_incomplete": false, "items": []}
+  },
+  {
+    "name": "encoding_platform_command_start_column_multibyte",
+    "notes": "D5 + plan §2: the replace range must be computed in UTF-16 units. Inside `'…'` the start column is the character after the last whitespace: `あ` occupies one UTF-16 unit (3 bytes), so the range is 5..7, not 7..9 (bytes).",
+    "decisions": ["D5", "D17"],
+    "doc": "A 'あ fm",
+    "pos": {"line": 0, "character": 7},
+    "trigger": null,
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "count": 37,
+      "items_spot": [
+        {"index": 0, "label": "fm3 <mask>", "insert": "fm3 0000", "sort_text": "000", "range": {"start_character": 5, "end_character": 7}}
+      ]
+    }
+  },
+  {
+    "name": "encoding_rate_offset_after_multibyte_path",
+    "notes": "D8 + plan §2: a PCM path with Japanese directory names. Tokenisation is quote-aware and the (empty) word range sits at UTF-16 column 23 — the same line is 29 UTF-8 bytes long.",
+    "decisions": ["D8", "D17"],
+    "doc": "@30 pcm \"ドラム/kick.wav\" ",
+    "pos": {"line": 0, "character": 23},
+    "trigger": " ",
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "items": [
+        {"label": "rate=<num>", "kind": "property", "insert": "rate=${1:<num>}", "insert_format": "snippet", "filter_text": "rate=", "sort_text": "000", "range": {"start_character": 23, "end_character": 23}},
+        {"label": "offset=<num>", "kind": "property", "insert": "offset=${1:<num>}", "insert_format": "snippet", "filter_text": "offset=", "sort_text": "001", "range": {"start_character": 23, "end_character": 23}}
+      ]
+    }
+  },
+  {
+    "name": "encoding_command_fallback_after_multibyte_whitespace",
+    "notes": "§3.1-17/§3.1-18: trailing whitespace after Japanese track text must reach the 37-item command fallback without token_at slicing inside UTF-8.",
+    "decisions": ["D17", "D19"],
+    "doc": "A ドラム ",
+    "pos": {"line": 0, "character": 6},
+    "trigger": " ",
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": true,
+      "count": 37,
+      "items_spot": [
+        {"index": 0, "label": "cdefgabh", "kind": "function", "insert": "c", "range": {"start_character": 6, "end_character": 6}}
+      ]
+    }
+  },
+  {
+    "name": "encoding_range_uses_nonzero_cursor_line",
+    "notes": "§3.1-18: a multi-line document must preserve the cursor line in both endpoints of an explicit completion range.",
+    "decisions": ["D17", "D19"],
+    "doc": "#title Prelude\nA o",
+    "pos": {"line": 1, "character": 3},
+    "trigger": null,
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": true,
+      "count": 37,
+      "items_spot": [
+        {"index": 0, "label": "cdefgabh", "range": {"start_line": 1, "start_character": 2, "end_line": 1, "end_character": 3}}
+      ]
+    }
+  }
+]

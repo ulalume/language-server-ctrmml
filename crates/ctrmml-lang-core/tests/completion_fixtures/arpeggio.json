@@ -1,0 +1,307 @@
+[
+  {
+    "name": "arpeggio_disabled_by_default",
+    "notes": "D16 + suite default: arpeggio_enabled is false (megamml default, completion-prefs.ts getArpeggioEnabled), so a bare note letter falls through to the note-suppression guard and nothing is offered.",
+    "decisions": ["D3", "D16"],
+    "doc": "A o5 a",
+    "pos": {"line": 0, "character": 6},
+    "trigger": null,
+    "data": null,
+    "expect": {"plan": "done", "is_incomplete": false, "items": []}
+  },
+  {
+    "name": "arpeggio_up_pattern_exact",
+    "notes": "D16 Up pattern, root `a`, starting octave 5 (scanned from `o5` on the same line). Bodies derived by running the TS arpeggio.ts algorithm verbatim (resolveChordNotes + renderArpeggioBody). Order: generic 3, generic 4, then CHORDS_3 (including the bare major, which arpeggio does NOT skip) then CHORDS_4. Range starts at the note letter.",
+    "decisions": ["D16", "D17"],
+    "doc": "A o5 a",
+    "pos": {"line": 0, "character": 6},
+    "trigger": null,
+    "settings": {"arpeggio_enabled": true, "arpeggio_pattern": "up", "chord_stack_mode": "stack_up", "fm_picker_hierarchy": false},
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "items": [
+        {"label": "Arpeggio (3 notes)", "kind": "snippet", "detail": "A: a>ce · Up", "insert": "a>ce", "insert_format": "plain", "filter_text": "A", "sort_text": "000", "preselect": true, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Arpeggio (4 notes)", "kind": "snippet", "detail": "A: a>ceg · Up", "insert": "a>ceg", "insert_format": "plain", "filter_text": "A", "sort_text": "001", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A", "kind": "snippet", "detail": "3-note arpeggio · Major triad · Up", "insert": "a>c+e", "insert_format": "plain", "filter_text": "A", "sort_text": "002", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Am", "kind": "snippet", "detail": "3-note arpeggio · Minor triad · Up", "insert": "a>ce", "insert_format": "plain", "filter_text": "Am", "sort_text": "003", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Adim", "kind": "snippet", "detail": "3-note arpeggio · Diminished triad · Up", "insert": "a>ce-", "insert_format": "plain", "filter_text": "Adim", "sort_text": "004", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Aaug", "kind": "snippet", "detail": "3-note arpeggio · Augmented triad · Up", "insert": "a>c+e+", "insert_format": "plain", "filter_text": "Aaug", "sort_text": "005", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Asus2", "kind": "snippet", "detail": "3-note arpeggio · Suspended 2nd · Up", "insert": "ab>e", "insert_format": "plain", "filter_text": "Asus2", "sort_text": "006", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Asus4", "kind": "snippet", "detail": "3-note arpeggio · Suspended 4th · Up", "insert": "a>de", "insert_format": "plain", "filter_text": "Asus4", "sort_text": "007", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A4th", "kind": "snippet", "detail": "3-note arpeggio · Quartal triad · Up", "insert": "a>dg", "insert_format": "plain", "filter_text": "A4th", "sort_text": "008", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "AM7", "kind": "snippet", "detail": "4-note arpeggio · Major 7th · Up", "insert": "a>c+eg+", "insert_format": "plain", "filter_text": "AM7", "sort_text": "009", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A7", "kind": "snippet", "detail": "4-note arpeggio · Dominant 7th · Up", "insert": "a>c+eg", "insert_format": "plain", "filter_text": "A7", "sort_text": "010", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Am7", "kind": "snippet", "detail": "4-note arpeggio · Minor 7th · Up", "insert": "a>ceg", "insert_format": "plain", "filter_text": "Am7", "sort_text": "011", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "AmM7", "kind": "snippet", "detail": "4-note arpeggio · Minor-major 7th · Up", "insert": "a>ceg+", "insert_format": "plain", "filter_text": "AmM7", "sort_text": "012", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Am7b5", "kind": "snippet", "detail": "4-note arpeggio · Half-diminished 7th · Up", "insert": "a>ce-g", "insert_format": "plain", "filter_text": "Am7b5", "sort_text": "013", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Adim7", "kind": "snippet", "detail": "4-note arpeggio · Diminished 7th · Up", "insert": "a>ce-f+", "insert_format": "plain", "filter_text": "Adim7", "sort_text": "014", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A6", "kind": "snippet", "detail": "4-note arpeggio · Major 6th · Up", "insert": "a>c+ef+", "insert_format": "plain", "filter_text": "A6", "sort_text": "015", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Aadd9", "kind": "snippet", "detail": "4-note arpeggio · Major add9 · Up", "insert": "a>c+e<b", "insert_format": "plain", "filter_text": "Aadd9", "sort_text": "016", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A4th", "kind": "snippet", "detail": "4-note arpeggio · Quartal 7th · Up", "insert": "a>dgc", "insert_format": "plain", "filter_text": "A4th", "sort_text": "017", "preselect": false, "range": {"start_character": 5, "end_character": 6}}
+      ]
+    }
+  },
+  {
+    "name": "arpeggio_alberti_pattern_exact",
+    "notes": "D16 Alberti pattern (minNotes 3; 3-tone => [0,2,1,2], 4-tone => [0,3,1,2]). Same doc/pos as arpeggio_up_pattern_exact so only the pattern-dependent bodies and the ` · Alberti` detail suffix change.",
+    "decisions": ["D16"],
+    "doc": "A o5 a",
+    "pos": {"line": 0, "character": 6},
+    "trigger": null,
+    "settings": {"arpeggio_enabled": true, "arpeggio_pattern": "alberti", "chord_stack_mode": "stack_up", "fm_picker_hierarchy": false},
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "items": [
+        {"label": "Arpeggio (3 notes)", "kind": "snippet", "detail": "A: a>ece · Alberti", "insert": "a>ece", "insert_format": "plain", "filter_text": "A", "sort_text": "000", "preselect": true, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Arpeggio (4 notes)", "kind": "snippet", "detail": "A: a>gce · Alberti", "insert": "a>gce", "insert_format": "plain", "filter_text": "A", "sort_text": "001", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A", "kind": "snippet", "detail": "3-note arpeggio · Major triad · Alberti", "insert": "a>ec+e", "insert_format": "plain", "filter_text": "A", "sort_text": "002", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Am", "kind": "snippet", "detail": "3-note arpeggio · Minor triad · Alberti", "insert": "a>ece", "insert_format": "plain", "filter_text": "Am", "sort_text": "003", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Adim", "kind": "snippet", "detail": "3-note arpeggio · Diminished triad · Alberti", "insert": "a>e-ce-", "insert_format": "plain", "filter_text": "Adim", "sort_text": "004", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Aaug", "kind": "snippet", "detail": "3-note arpeggio · Augmented triad · Alberti", "insert": "a>e+c+e+", "insert_format": "plain", "filter_text": "Aaug", "sort_text": "005", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Asus2", "kind": "snippet", "detail": "3-note arpeggio · Suspended 2nd · Alberti", "insert": "a>e<b>e", "insert_format": "plain", "filter_text": "Asus2", "sort_text": "006", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Asus4", "kind": "snippet", "detail": "3-note arpeggio · Suspended 4th · Alberti", "insert": "a>ede", "insert_format": "plain", "filter_text": "Asus4", "sort_text": "007", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A4th", "kind": "snippet", "detail": "3-note arpeggio · Quartal triad · Alberti", "insert": "a>gdg", "insert_format": "plain", "filter_text": "A4th", "sort_text": "008", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "AM7", "kind": "snippet", "detail": "4-note arpeggio · Major 7th · Alberti", "insert": "a>g+c+e", "insert_format": "plain", "filter_text": "AM7", "sort_text": "009", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A7", "kind": "snippet", "detail": "4-note arpeggio · Dominant 7th · Alberti", "insert": "a>gc+e", "insert_format": "plain", "filter_text": "A7", "sort_text": "010", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Am7", "kind": "snippet", "detail": "4-note arpeggio · Minor 7th · Alberti", "insert": "a>gce", "insert_format": "plain", "filter_text": "Am7", "sort_text": "011", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "AmM7", "kind": "snippet", "detail": "4-note arpeggio · Minor-major 7th · Alberti", "insert": "a>g+ce", "insert_format": "plain", "filter_text": "AmM7", "sort_text": "012", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Am7b5", "kind": "snippet", "detail": "4-note arpeggio · Half-diminished 7th · Alberti", "insert": "a>gce-", "insert_format": "plain", "filter_text": "Am7b5", "sort_text": "013", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Adim7", "kind": "snippet", "detail": "4-note arpeggio · Diminished 7th · Alberti", "insert": "a>f+ce-", "insert_format": "plain", "filter_text": "Adim7", "sort_text": "014", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A6", "kind": "snippet", "detail": "4-note arpeggio · Major 6th · Alberti", "insert": "a>f+c+e", "insert_format": "plain", "filter_text": "A6", "sort_text": "015", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Aadd9", "kind": "snippet", "detail": "4-note arpeggio · Major add9 · Alberti", "insert": "ab>c+e", "insert_format": "plain", "filter_text": "Aadd9", "sort_text": "016", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A4th", "kind": "snippet", "detail": "4-note arpeggio · Quartal 7th · Alberti", "insert": "a>cdg", "insert_format": "plain", "filter_text": "A4th", "sort_text": "017", "preselect": false, "range": {"start_character": 5, "end_character": 6}}
+      ]
+    }
+  },
+  {
+    "name": "arpeggio_down_pattern_shape",
+    "notes": "D16 Down pattern — labels/count only (bodies pinned exactly for Up and Alberti); the two generic entries and the 16 named ones stay in the same order for every pattern. Spot inserts included for the two generics.",
+    "decisions": ["D16"],
+    "doc": "A o5 a",
+    "pos": {"line": 0, "character": 6},
+    "trigger": null,
+    "settings": {"arpeggio_enabled": true, "arpeggio_pattern": "down", "chord_stack_mode": "stack_up", "fm_picker_hierarchy": false},
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "count": 18,
+      "items_spot": [
+        {"index": 0, "label": "Arpeggio (3 notes)", "insert": ">ec<a", "detail": "A: >ec<a · Down", "sort_text": "000", "preselect": true},
+        {"index": 1, "label": "Arpeggio (4 notes)", "insert": ">gec<a", "sort_text": "001"},
+        {"index": 2, "label": "A", "sort_text": "002"},
+        {"index": 17, "label": "A4th", "sort_text": "017"}
+      ]
+    }
+  },
+  {
+    "name": "arpeggio_down_pattern_exact",
+    "notes": "D16 Down pattern, re-verified against megamml arpeggio.ts:44-47: n=3 => [2,1,0], n=4 => [3,2,1,0]. Full bodies are pinned for all 18 items.",
+    "decisions": ["D16"],
+    "doc": "A o5 a",
+    "pos": {"line": 0, "character": 6},
+    "trigger": null,
+    "settings": {"arpeggio_enabled": true, "arpeggio_pattern": "down", "chord_stack_mode": "stack_up", "fm_picker_hierarchy": false},
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "items": [
+        {"label": "Arpeggio (3 notes)", "kind": "snippet", "detail": "A: >ec<a · Down", "insert": ">ec<a", "insert_format": "plain", "filter_text": "A", "sort_text": "000", "preselect": true, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Arpeggio (4 notes)", "kind": "snippet", "detail": "A: >gec<a · Down", "insert": ">gec<a", "insert_format": "plain", "filter_text": "A", "sort_text": "001", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A", "kind": "snippet", "detail": "3-note arpeggio · Major triad · Down", "insert": ">ec+<a", "insert_format": "plain", "filter_text": "A", "sort_text": "002", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Am", "kind": "snippet", "detail": "3-note arpeggio · Minor triad · Down", "insert": ">ec<a", "insert_format": "plain", "filter_text": "Am", "sort_text": "003", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Adim", "kind": "snippet", "detail": "3-note arpeggio · Diminished triad · Down", "insert": ">e-c<a", "insert_format": "plain", "filter_text": "Adim", "sort_text": "004", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Aaug", "kind": "snippet", "detail": "3-note arpeggio · Augmented triad · Down", "insert": ">e+c+<a", "insert_format": "plain", "filter_text": "Aaug", "sort_text": "005", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Asus2", "kind": "snippet", "detail": "3-note arpeggio · Suspended 2nd · Down", "insert": ">e<ba", "insert_format": "plain", "filter_text": "Asus2", "sort_text": "006", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Asus4", "kind": "snippet", "detail": "3-note arpeggio · Suspended 4th · Down", "insert": ">ed<a", "insert_format": "plain", "filter_text": "Asus4", "sort_text": "007", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A4th", "kind": "snippet", "detail": "3-note arpeggio · Quartal triad · Down", "insert": ">gd<a", "insert_format": "plain", "filter_text": "A4th", "sort_text": "008", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "AM7", "kind": "snippet", "detail": "4-note arpeggio · Major 7th · Down", "insert": ">g+ec+<a", "insert_format": "plain", "filter_text": "AM7", "sort_text": "009", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A7", "kind": "snippet", "detail": "4-note arpeggio · Dominant 7th · Down", "insert": ">gec+<a", "insert_format": "plain", "filter_text": "A7", "sort_text": "010", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Am7", "kind": "snippet", "detail": "4-note arpeggio · Minor 7th · Down", "insert": ">gec<a", "insert_format": "plain", "filter_text": "Am7", "sort_text": "011", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "AmM7", "kind": "snippet", "detail": "4-note arpeggio · Minor-major 7th · Down", "insert": ">g+ec<a", "insert_format": "plain", "filter_text": "AmM7", "sort_text": "012", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Am7b5", "kind": "snippet", "detail": "4-note arpeggio · Half-diminished 7th · Down", "insert": ">ge-c<a", "insert_format": "plain", "filter_text": "Am7b5", "sort_text": "013", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Adim7", "kind": "snippet", "detail": "4-note arpeggio · Diminished 7th · Down", "insert": ">f+e-c<a", "insert_format": "plain", "filter_text": "Adim7", "sort_text": "014", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A6", "kind": "snippet", "detail": "4-note arpeggio · Major 6th · Down", "insert": ">f+ec+<a", "insert_format": "plain", "filter_text": "A6", "sort_text": "015", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Aadd9", "kind": "snippet", "detail": "4-note arpeggio · Major add9 · Down", "insert": "b>ec+<a", "insert_format": "plain", "filter_text": "Aadd9", "sort_text": "016", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A4th", "kind": "snippet", "detail": "4-note arpeggio · Quartal 7th · Down", "insert": ">cgd<a", "insert_format": "plain", "filter_text": "A4th", "sort_text": "017", "preselect": false, "range": {"start_character": 5, "end_character": 6}}
+      ]
+    }
+  },
+  {
+    "name": "arpeggio_updown_pattern_shape",
+    "notes": "D16 UpDown pattern (no endpoint repeat: n=3 => [0,1,2,1], n=4 => [0,1,2,3,2,1]) — labels/count plus the generic bodies.",
+    "decisions": ["D16"],
+    "doc": "A o5 a",
+    "pos": {"line": 0, "character": 6},
+    "trigger": null,
+    "settings": {"arpeggio_enabled": true, "arpeggio_pattern": "updown", "chord_stack_mode": "stack_up", "fm_picker_hierarchy": false},
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "count": 18,
+      "items_spot": [
+        {"index": 0, "label": "Arpeggio (3 notes)", "insert": "a>cec", "detail": "A: a>cec · UpDown", "sort_text": "000", "preselect": true},
+        {"index": 1, "label": "Arpeggio (4 notes)", "insert": "a>cegec", "sort_text": "001"},
+        {"index": 17, "label": "A4th", "sort_text": "017"}
+      ]
+    }
+  },
+  {
+    "name": "arpeggio_updown_pattern_exact",
+    "notes": "D16 UpDown pattern, re-verified against megamml arpeggio.ts:49-58: n=3 => [0,1,2,1], n=4 => [0,1,2,3,2,1]. Full bodies are pinned for all 18 items.",
+    "decisions": ["D16"],
+    "doc": "A o5 a",
+    "pos": {"line": 0, "character": 6},
+    "trigger": null,
+    "settings": {"arpeggio_enabled": true, "arpeggio_pattern": "updown", "chord_stack_mode": "stack_up", "fm_picker_hierarchy": false},
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "items": [
+        {"label": "Arpeggio (3 notes)", "kind": "snippet", "detail": "A: a>cec · UpDown", "insert": "a>cec", "insert_format": "plain", "filter_text": "A", "sort_text": "000", "preselect": true, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Arpeggio (4 notes)", "kind": "snippet", "detail": "A: a>cegec · UpDown", "insert": "a>cegec", "insert_format": "plain", "filter_text": "A", "sort_text": "001", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A", "kind": "snippet", "detail": "3-note arpeggio · Major triad · UpDown", "insert": "a>c+ec+", "insert_format": "plain", "filter_text": "A", "sort_text": "002", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Am", "kind": "snippet", "detail": "3-note arpeggio · Minor triad · UpDown", "insert": "a>cec", "insert_format": "plain", "filter_text": "Am", "sort_text": "003", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Adim", "kind": "snippet", "detail": "3-note arpeggio · Diminished triad · UpDown", "insert": "a>ce-c", "insert_format": "plain", "filter_text": "Adim", "sort_text": "004", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Aaug", "kind": "snippet", "detail": "3-note arpeggio · Augmented triad · UpDown", "insert": "a>c+e+c+", "insert_format": "plain", "filter_text": "Aaug", "sort_text": "005", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Asus2", "kind": "snippet", "detail": "3-note arpeggio · Suspended 2nd · UpDown", "insert": "ab>e<b", "insert_format": "plain", "filter_text": "Asus2", "sort_text": "006", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Asus4", "kind": "snippet", "detail": "3-note arpeggio · Suspended 4th · UpDown", "insert": "a>ded", "insert_format": "plain", "filter_text": "Asus4", "sort_text": "007", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A4th", "kind": "snippet", "detail": "3-note arpeggio · Quartal triad · UpDown", "insert": "a>dgd", "insert_format": "plain", "filter_text": "A4th", "sort_text": "008", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "AM7", "kind": "snippet", "detail": "4-note arpeggio · Major 7th · UpDown", "insert": "a>c+eg+ec+", "insert_format": "plain", "filter_text": "AM7", "sort_text": "009", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A7", "kind": "snippet", "detail": "4-note arpeggio · Dominant 7th · UpDown", "insert": "a>c+egec+", "insert_format": "plain", "filter_text": "A7", "sort_text": "010", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Am7", "kind": "snippet", "detail": "4-note arpeggio · Minor 7th · UpDown", "insert": "a>cegec", "insert_format": "plain", "filter_text": "Am7", "sort_text": "011", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "AmM7", "kind": "snippet", "detail": "4-note arpeggio · Minor-major 7th · UpDown", "insert": "a>ceg+ec", "insert_format": "plain", "filter_text": "AmM7", "sort_text": "012", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Am7b5", "kind": "snippet", "detail": "4-note arpeggio · Half-diminished 7th · UpDown", "insert": "a>ce-ge-c", "insert_format": "plain", "filter_text": "Am7b5", "sort_text": "013", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Adim7", "kind": "snippet", "detail": "4-note arpeggio · Diminished 7th · UpDown", "insert": "a>ce-f+e-c", "insert_format": "plain", "filter_text": "Adim7", "sort_text": "014", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A6", "kind": "snippet", "detail": "4-note arpeggio · Major 6th · UpDown", "insert": "a>c+ef+ec+", "insert_format": "plain", "filter_text": "A6", "sort_text": "015", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Aadd9", "kind": "snippet", "detail": "4-note arpeggio · Major add9 · UpDown", "insert": "a>c+e<b>ec+", "insert_format": "plain", "filter_text": "Aadd9", "sort_text": "016", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A4th", "kind": "snippet", "detail": "4-note arpeggio · Quartal 7th · UpDown", "insert": "a>dgcgd", "insert_format": "plain", "filter_text": "A4th", "sort_text": "017", "preselect": false, "range": {"start_character": 5, "end_character": 6}}
+      ]
+    }
+  },
+  {
+    "name": "arpeggio_downup_pattern_shape",
+    "notes": "D16 DownUp pattern — labels/count plus the generic bodies.",
+    "decisions": ["D16"],
+    "doc": "A o5 a",
+    "pos": {"line": 0, "character": 6},
+    "trigger": null,
+    "settings": {"arpeggio_enabled": true, "arpeggio_pattern": "downup", "chord_stack_mode": "stack_up", "fm_picker_hierarchy": false},
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "count": 18,
+      "items_spot": [
+        {"index": 0, "label": "Arpeggio (3 notes)", "insert": ">ec<a>c", "detail": "A: >ec<a>c · DownUp", "sort_text": "000", "preselect": true},
+        {"index": 1, "label": "Arpeggio (4 notes)", "insert": ">gec<a>ce", "sort_text": "001"},
+        {"index": 17, "label": "A4th", "sort_text": "017"}
+      ]
+    }
+  },
+  {
+    "name": "arpeggio_downup_pattern_exact",
+    "notes": "D16 DownUp pattern, re-verified against megamml arpeggio.ts:60-68: n=3 => [2,1,0,1], n=4 => [3,2,1,0,1,2]. Full bodies are pinned for all 18 items.",
+    "decisions": ["D16"],
+    "doc": "A o5 a",
+    "pos": {"line": 0, "character": 6},
+    "trigger": null,
+    "settings": {"arpeggio_enabled": true, "arpeggio_pattern": "downup", "chord_stack_mode": "stack_up", "fm_picker_hierarchy": false},
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "items": [
+        {"label": "Arpeggio (3 notes)", "kind": "snippet", "detail": "A: >ec<a>c · DownUp", "insert": ">ec<a>c", "insert_format": "plain", "filter_text": "A", "sort_text": "000", "preselect": true, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Arpeggio (4 notes)", "kind": "snippet", "detail": "A: >gec<a>ce · DownUp", "insert": ">gec<a>ce", "insert_format": "plain", "filter_text": "A", "sort_text": "001", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A", "kind": "snippet", "detail": "3-note arpeggio · Major triad · DownUp", "insert": ">ec+<a>c+", "insert_format": "plain", "filter_text": "A", "sort_text": "002", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Am", "kind": "snippet", "detail": "3-note arpeggio · Minor triad · DownUp", "insert": ">ec<a>c", "insert_format": "plain", "filter_text": "Am", "sort_text": "003", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Adim", "kind": "snippet", "detail": "3-note arpeggio · Diminished triad · DownUp", "insert": ">e-c<a>c", "insert_format": "plain", "filter_text": "Adim", "sort_text": "004", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Aaug", "kind": "snippet", "detail": "3-note arpeggio · Augmented triad · DownUp", "insert": ">e+c+<a>c+", "insert_format": "plain", "filter_text": "Aaug", "sort_text": "005", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Asus2", "kind": "snippet", "detail": "3-note arpeggio · Suspended 2nd · DownUp", "insert": ">e<bab", "insert_format": "plain", "filter_text": "Asus2", "sort_text": "006", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Asus4", "kind": "snippet", "detail": "3-note arpeggio · Suspended 4th · DownUp", "insert": ">ed<a>d", "insert_format": "plain", "filter_text": "Asus4", "sort_text": "007", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A4th", "kind": "snippet", "detail": "3-note arpeggio · Quartal triad · DownUp", "insert": ">gd<a>d", "insert_format": "plain", "filter_text": "A4th", "sort_text": "008", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "AM7", "kind": "snippet", "detail": "4-note arpeggio · Major 7th · DownUp", "insert": ">g+ec+<a>c+e", "insert_format": "plain", "filter_text": "AM7", "sort_text": "009", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A7", "kind": "snippet", "detail": "4-note arpeggio · Dominant 7th · DownUp", "insert": ">gec+<a>c+e", "insert_format": "plain", "filter_text": "A7", "sort_text": "010", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Am7", "kind": "snippet", "detail": "4-note arpeggio · Minor 7th · DownUp", "insert": ">gec<a>ce", "insert_format": "plain", "filter_text": "Am7", "sort_text": "011", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "AmM7", "kind": "snippet", "detail": "4-note arpeggio · Minor-major 7th · DownUp", "insert": ">g+ec<a>ce", "insert_format": "plain", "filter_text": "AmM7", "sort_text": "012", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Am7b5", "kind": "snippet", "detail": "4-note arpeggio · Half-diminished 7th · DownUp", "insert": ">ge-c<a>ce-", "insert_format": "plain", "filter_text": "Am7b5", "sort_text": "013", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Adim7", "kind": "snippet", "detail": "4-note arpeggio · Diminished 7th · DownUp", "insert": ">f+e-c<a>ce-", "insert_format": "plain", "filter_text": "Adim7", "sort_text": "014", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A6", "kind": "snippet", "detail": "4-note arpeggio · Major 6th · DownUp", "insert": ">f+ec+<a>c+e", "insert_format": "plain", "filter_text": "A6", "sort_text": "015", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Aadd9", "kind": "snippet", "detail": "4-note arpeggio · Major add9 · DownUp", "insert": "b>ec+<a>c+e", "insert_format": "plain", "filter_text": "Aadd9", "sort_text": "016", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "A4th", "kind": "snippet", "detail": "4-note arpeggio · Quartal 7th · DownUp", "insert": ">cgd<a>dg", "insert_format": "plain", "filter_text": "A4th", "sort_text": "017", "preselect": false, "range": {"start_character": 5, "end_character": 6}}
+      ]
+    }
+  },
+  {
+    "name": "arpeggio_suppressed_inside_open_brace",
+    "notes": "D16: inside an unclosed `{…}` the chord provider owns the position; arpeggio must not shadow it. Here the letter is not directly after `{` so chord completion does not fire either, and the note-suffix guard produces an empty exclusive list.",
+    "decisions": ["D15", "D16"],
+    "doc": "A {c/e",
+    "pos": {"line": 0, "character": 6},
+    "trigger": null,
+    "settings": {"arpeggio_enabled": true, "arpeggio_pattern": "up", "chord_stack_mode": "stack_up", "fm_picker_hierarchy": false},
+    "data": null,
+    "expect": {"plan": "done", "is_incomplete": false, "items": []}
+  },
+  {
+    "name": "arpeggio_octave_from_channel_context",
+    "notes": "D16 + §3.1-12/§3.1-22: structural/schema-level case only. Arpeggio bodies are invariant under a uniform starting-octave shift, so octave is unobservable and the provider intentionally uses a constant base without a channel-context scan.",
+    "decisions": ["D16"],
+    "doc": "A o5 c4\n  a",
+    "pos": {"line": 1, "character": 3},
+    "trigger": null,
+    "settings": {"arpeggio_enabled": true, "arpeggio_pattern": "up", "chord_stack_mode": "stack_up", "fm_picker_hierarchy": false},
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "count": 18,
+      "items_spot": [
+        {"index": 0, "label": "Arpeggio (3 notes)", "insert": "a>ce", "detail": "A: a>ce · Up", "sort_text": "000", "preselect": true, "range": {"start_character": 2, "end_character": 3}},
+        {"index": 2, "label": "A", "insert": "a>c+e", "detail": "3-note arpeggio · Major triad · Up", "sort_text": "002"}
+      ]
+    }
+  },
+  {
+    "name": "arpeggio_b_sharp_enharmonic_respelling",
+    "notes": "§3.1-21: B-sharp major resolves to B-sharp/D-double-sharp/F-double-sharp and now renders as `b+>eg`: the typed root stays B-sharp, D-double-sharp respells to E, and F-double-sharp respells to G. The full 18-item list is pinned because no named chord is skipped.",
+    "decisions": ["D16"],
+    "doc": "A b+",
+    "pos": {"line": 0, "character": 4},
+    "trigger": null,
+    "settings": {"arpeggio_enabled": true, "arpeggio_pattern": "up", "chord_stack_mode": "stack_up", "fm_picker_hierarchy": false},
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "items": [
+        {"label": "Arpeggio (3 notes)", "kind": "snippet", "detail": "B+: b+>df · Up", "insert": "b+>df", "insert_format": "plain", "filter_text": "B+", "sort_text": "000", "preselect": true, "range": {"start_character": 2, "end_character": 4}},
+        {"label": "Arpeggio (4 notes)", "kind": "snippet", "detail": "B+: b+>dfa · Up", "insert": "b+>dfa", "insert_format": "plain", "filter_text": "B+", "sort_text": "001", "preselect": false, "range": {"start_character": 2, "end_character": 4}},
+        {"label": "B", "kind": "snippet", "detail": "3-note arpeggio · Major triad · Up", "insert": "b+>eg", "insert_format": "plain", "filter_text": "B+", "sort_text": "002", "preselect": false, "range": {"start_character": 2, "end_character": 4}},
+        {"label": "Bm", "kind": "snippet", "detail": "3-note arpeggio · Minor triad · Up", "insert": "b+>d+g", "insert_format": "plain", "filter_text": "B+m", "sort_text": "003", "preselect": false, "range": {"start_character": 2, "end_character": 4}},
+        {"label": "Bdim", "kind": "snippet", "detail": "3-note arpeggio · Diminished triad · Up", "insert": "b+>d+f+", "insert_format": "plain", "filter_text": "B+dim", "sort_text": "004", "preselect": false, "range": {"start_character": 2, "end_character": 4}},
+        {"label": "Baug", "kind": "snippet", "detail": "3-note arpeggio · Augmented triad · Up", "insert": "b+>eg+", "insert_format": "plain", "filter_text": "B+aug", "sort_text": "005", "preselect": false, "range": {"start_character": 2, "end_character": 4}},
+        {"label": "Bsus2", "kind": "snippet", "detail": "3-note arpeggio · Suspended 2nd · Up", "insert": "b+>dg", "insert_format": "plain", "filter_text": "B+sus2", "sort_text": "006", "preselect": false, "range": {"start_character": 2, "end_character": 4}},
+        {"label": "Bsus4", "kind": "snippet", "detail": "3-note arpeggio · Suspended 4th · Up", "insert": "b+>e+g", "insert_format": "plain", "filter_text": "B+sus4", "sort_text": "007", "preselect": false, "range": {"start_character": 2, "end_character": 4}},
+        {"label": "B4th", "kind": "snippet", "detail": "3-note arpeggio · Quartal triad · Up", "insert": "b+>e+a+", "insert_format": "plain", "filter_text": "B+4th", "sort_text": "008", "preselect": false, "range": {"start_character": 2, "end_character": 4}},
+        {"label": "BM7", "kind": "snippet", "detail": "4-note arpeggio · Major 7th · Up", "insert": "b+>egb", "insert_format": "plain", "filter_text": "B+M7", "sort_text": "009", "preselect": false, "range": {"start_character": 2, "end_character": 4}},
+        {"label": "B7", "kind": "snippet", "detail": "4-note arpeggio · Dominant 7th · Up", "insert": "b+>ega+", "insert_format": "plain", "filter_text": "B+7", "sort_text": "010", "preselect": false, "range": {"start_character": 2, "end_character": 4}},
+        {"label": "Bm7", "kind": "snippet", "detail": "4-note arpeggio · Minor 7th · Up", "insert": "b+>d+ga+", "insert_format": "plain", "filter_text": "B+m7", "sort_text": "011", "preselect": false, "range": {"start_character": 2, "end_character": 4}},
+        {"label": "BmM7", "kind": "snippet", "detail": "4-note arpeggio · Minor-major 7th · Up", "insert": "b+>d+gb", "insert_format": "plain", "filter_text": "B+mM7", "sort_text": "012", "preselect": false, "range": {"start_character": 2, "end_character": 4}},
+        {"label": "Bm7b5", "kind": "snippet", "detail": "4-note arpeggio · Half-diminished 7th · Up", "insert": "b+>d+f+a+", "insert_format": "plain", "filter_text": "B+m7b5", "sort_text": "013", "preselect": false, "range": {"start_character": 2, "end_character": 4}},
+        {"label": "Bdim7", "kind": "snippet", "detail": "4-note arpeggio · Diminished 7th · Up", "insert": "b+>d+f+a", "insert_format": "plain", "filter_text": "B+dim7", "sort_text": "014", "preselect": false, "range": {"start_character": 2, "end_character": 4}},
+        {"label": "B6", "kind": "snippet", "detail": "4-note arpeggio · Major 6th · Up", "insert": "b+>ega", "insert_format": "plain", "filter_text": "B+6", "sort_text": "015", "preselect": false, "range": {"start_character": 2, "end_character": 4}},
+        {"label": "Badd9", "kind": "snippet", "detail": "4-note arpeggio · Major add9 · Up", "insert": "b+>egd", "insert_format": "plain", "filter_text": "B+add9", "sort_text": "016", "preselect": false, "range": {"start_character": 2, "end_character": 4}},
+        {"label": "B4th", "kind": "snippet", "detail": "4-note arpeggio · Quartal 7th · Up", "insert": "b+>e+a+d+", "insert_format": "plain", "filter_text": "B+4th", "sort_text": "017", "preselect": false, "range": {"start_character": 2, "end_character": 4}}
+      ]
+    }
+  }
+]

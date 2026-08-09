@@ -1,0 +1,73 @@
+[
+  {
+    "name": "platform_commands_at_open_quote",
+    "notes": "D5: inside `'…'` the full filtered PLATFORM_COMMANDS table is offered (40 entries − `_`/`__`/`_{` = 37). Item shape is TS toItems: kind Function, detail from the table, 3-digit index sortText, filterText = table key, plain insert (no entry contains `$`, D18). Range starts right after the quote.",
+    "decisions": ["D5", "D17", "D18"],
+    "doc": "A '",
+    "pos": {"line": 0, "character": 3},
+    "trigger": "'",
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "count": 37,
+      "items_spot": [
+        {"index": 0, "label": "fm3 <mask>", "kind": "function", "detail": "FM3 special mode.", "documentation_contains": "Enable FM3 special mode for selected operators", "insert": "fm3 0000", "insert_format": "plain", "filter_text": "fm3", "sort_text": "000", "range": {"start_character": 3, "end_character": 3}},
+        {"index": 1, "label": "lfo <0..3> <0..7>", "kind": "function", "detail": "Hardware LFO.", "insert": "lfo 0 0", "insert_format": "plain", "filter_text": "lfo", "sort_text": "001", "range": {"start_character": 3, "end_character": 3}},
+        {"index": 7, "label": "write <register> <data>", "kind": "function", "detail": "Direct register write.", "insert": "write 00 00", "insert_format": "plain", "filter_text": "write", "sort_text": "007", "range": {"start_character": 3, "end_character": 3}},
+        {"index": 36, "label": "ssg4 <value>", "kind": "function", "detail": "SSG-EG operator 4.", "insert": "ssg4 0", "insert_format": "plain", "filter_text": "ssg4", "sort_text": "036", "range": {"start_character": 3, "end_character": 3}}
+      ]
+    }
+  },
+  {
+    "name": "platform_commands_typing_prefix",
+    "notes": "D5: the list is not narrowed server-side while typing; only the replace range grows to cover the typed word (start = first char after the opening quote).",
+    "decisions": ["D5", "D17"],
+    "doc": "A 'fm",
+    "pos": {"line": 0, "character": 5},
+    "trigger": null,
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "count": 37,
+      "items_spot": [
+        {"index": 0, "label": "fm3 <mask>", "insert": "fm3 0000", "sort_text": "000", "range": {"start_character": 3, "end_character": 5}}
+      ]
+    }
+  },
+  {
+    "name": "platform_commands_start_column_after_inner_space",
+    "notes": "D5 start-column rule: last whitespace inside the quoted run wins over the quote itself — `A 'fm3 000` replaces only `000` (chars 7..10).",
+    "decisions": ["D5", "D17"],
+    "doc": "A 'fm3 000",
+    "pos": {"line": 0, "character": 10},
+    "trigger": null,
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "count": 37,
+      "items_spot": [
+        {"index": 0, "label": "fm3 <mask>", "sort_text": "000", "range": {"start_character": 7, "end_character": 10}}
+      ]
+    }
+  },
+  {
+    "name": "platform_commands_exclude_transpose_forms",
+    "notes": "D5: `_`, `__` and `_{` (PLATFORM_COMMANDS[0..3]) are dropped by isQuotedPlatformCommand even when the user typed `_`; the list is still the same 37 entries starting at `fm3` (index 0 would be `_<-128..127>` without the filter).",
+    "decisions": ["D5"],
+    "doc": "A '_",
+    "pos": {"line": 0, "character": 4},
+    "trigger": null,
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "count": 37,
+      "items_spot": [
+        {"index": 0, "label": "fm3 <mask>", "filter_text": "fm3", "sort_text": "000", "range": {"start_character": 3, "end_character": 4}}
+      ]
+    }
+  }
+]

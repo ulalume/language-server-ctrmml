@@ -1,0 +1,170 @@
+[
+  {
+    "name": "fm_patches_plan_requests_data",
+    "notes": "Plan phase at `@N fm` (cursor immediately after the keyword, no trailing space yet) asks the host for the converted patch list.",
+    "decisions": ["D11"],
+    "doc": "@1 fm",
+    "pos": {"line": 0, "character": 5},
+    "trigger": null,
+    "data": null,
+    "expect": {"plan": {"needs": "fm_patches"}}
+  },
+  {
+    "name": "fm_patches_resolve_flat_list",
+    "notes": "D11 [TS]: one flat item per patch in payload order, rel-path labels (`path` / `path — name` for a single named patch / `path: name` inside a multi-patch file), detail = patch name or `<EXT> instrument`, 4-digit index sortText, `Default FM template` always appended last with sortText `~default`. Insert = the TS paramText transform: drop the `@N fm` header line, keep its trailing comment, prefix one space, strip trailing newlines. Replace range runs from just after `fm` to end of line.",
+    "decisions": ["D11", "D17", "D18"],
+    "doc": "@1 fm ",
+    "pos": {"line": 0, "character": 6},
+    "trigger": " ",
+    "data": {
+      "kind": "fm_patches",
+      "patches": [
+        {"rel_path": "inst/bass.dmp", "name": null, "mml": "@1 fm\n; ALG  FB\n    4   7\n", "has_macros": false},
+        {"rel_path": "inst/lead.vgi", "name": "Lead", "mml": "@1 fm ; Lead\n; ALG  FB\n    5   3\n", "has_macros": false},
+        {"rel_path": "inst/multi.dmp", "name": "Pad", "mml": "@1 fm ; Pad\n; ALG  FB\n    2   0\n", "has_macros": false},
+        {"rel_path": "inst/multi.dmp", "name": "Brass", "mml": "@1 fm ; Brass\n; ALG  FB\n    6   1\n", "has_macros": true}
+      ]
+    },
+    "expect": {
+      "plan": {"needs": "fm_patches"},
+      "is_incomplete": false,
+      "items": [
+        {"label": "inst/bass.dmp", "kind": "snippet", "detail": "DMP instrument", "insert": " ; ALG  FB\n    4   7", "insert_format": "plain", "sort_text": "0000", "range": {"start_character": 5, "end_character": 6}},
+        {"label": "inst/lead.vgi — Lead", "kind": "snippet", "detail": "Lead", "insert": " ; Lead\n; ALG  FB\n    5   3", "insert_format": "plain", "sort_text": "0001", "range": {"start_character": 5, "end_character": 6}},
+        {"label": "inst/multi.dmp: Pad", "kind": "snippet", "detail": "Pad", "insert": " ; Pad\n; ALG  FB\n    2   0", "insert_format": "plain", "sort_text": "0002", "range": {"start_character": 5, "end_character": 6}},
+        {"label": "inst/multi.dmp: Brass", "kind": "snippet", "detail": "Brass", "insert": " ; Brass\n; ALG  FB\n    6   1", "insert_format": "plain", "sort_text": "0003", "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Default FM template", "kind": "snippet", "detail": "template", "insert": " ; ${1:default}\n; ALG  FB\n    ${2:3}   ${3:4}\n;  AR  DR  SR  RR  SL  TL  KS  ML  DT SSG\n   ${4:31}   ${5:0}   ${6:0}   ${7:5}   ${8:0}   ${9:48}   ${10:0}   ${11:1}   ${12:3}   ${13:0} ; OP1\n   ${14:31}   ${15:0}   ${16:0}   ${17:5}   ${18:0}   ${19:36}   ${20:0}   ${21:1}   ${22:3}   ${23:0} ; OP2\n   ${24:31}   ${25:0}   ${26:0}   ${27:5}   ${28:0}   ${29:24}   ${30:0}   ${31:1}   ${32:3}   ${33:0} ; OP3\n   ${34:31}   ${35:0}   ${36:0}   ${37:5}   ${38:0}   ${39:12}   ${40:0}   ${41:1}   ${42:4}   ${43:0} ; OP4\n", "insert_format": "snippet", "filter_text": "default fm template", "sort_text": "~default", "range": {"start_character": 5, "end_character": 6}}
+      ]
+    }
+  },
+  {
+    "name": "fm_patches_empty_payload_offers_template_only",
+    "notes": "D11/D20: an empty payload (no converter, no instrument files) still yields the always-appended template — the FM provider is never an empty exclusive result.",
+    "decisions": ["D11", "D20"],
+    "doc": "@1 fm ",
+    "pos": {"line": 0, "character": 6},
+    "trigger": " ",
+    "data": {"kind": "fm_patches", "patches": []},
+    "expect": {
+      "plan": {"needs": "fm_patches"},
+      "is_incomplete": false,
+      "count": 1,
+      "items_spot": [
+        {"index": 0, "label": "Default FM template", "kind": "snippet", "detail": "template", "insert_format": "snippet", "filter_text": "default fm template", "sort_text": "~default", "range": {"start_character": 5, "end_character": 6}}
+      ]
+    }
+  },
+  {
+    "name": "fm_patches_delete_existing_param_block",
+    "notes": "D13: collectInstrumentParamLines scans from the line after the cursor; it collects the pending comment line `; ALG  FB` and the parameter line `    3   4`, then stops at the blank line (params already seen). The additional edit deletes whole lines 1..2 (start of line 1 to start of line 3), so re-picking a patch replaces rather than duplicates the block. Not at EOF here, so the edit ends at column 0 of the line after the last param line.",
+    "decisions": ["D13"],
+    "doc": "@1 fm \n; ALG  FB\n    3   4\n\nA c",
+    "pos": {"line": 0, "character": 6},
+    "trigger": " ",
+    "data": {
+      "kind": "fm_patches",
+      "patches": [
+        {"rel_path": "inst/bass.dmp", "name": "Bass", "mml": "@1 fm ; Bass\n; ALG  FB\n    4   7\n", "has_macros": false}
+      ]
+    },
+    "expect": {
+      "plan": {"needs": "fm_patches"},
+      "is_incomplete": false,
+      "count": 2,
+      "items_spot": [
+        {"index": 0, "label": "inst/bass.dmp — Bass", "detail": "Bass", "insert": " ; Bass\n; ALG  FB\n    4   7", "insert_format": "plain", "sort_text": "0000", "range": {"start_character": 5, "end_character": 6}, "additional_edits": [{"start_line": 1, "start_character": 0, "end_line": 3, "end_character": 0, "new_text": ""}]},
+        {"index": 1, "label": "Default FM template", "sort_text": "~default", "additional_edits": [{"start_line": 1, "start_character": 0, "end_line": 3, "end_character": 0, "new_text": ""}]}
+      ]
+    }
+  },
+  {
+    "name": "fm_patches_delete_unindented_param_block",
+    "notes": "§3.1-28: column-0 parameter rows consist entirely of the parameter charset even though their leading digits also parse as a track selector, so the deletion edit covers lines 1 through 3 and ends at (4, 0).",
+    "decisions": ["D13"],
+    "doc": "@1 fm \n; ALG  FB\n3 4\n31 0 0 5\n\nA c",
+    "pos": {"line": 0, "character": 6},
+    "trigger": " ",
+    "data": {
+      "kind": "fm_patches",
+      "patches": [
+        {
+          "rel_path": "inst/bass.dmp",
+          "name": "Bass",
+          "mml": "@1 fm ; Bass\n; ALG  FB\n4 7\n",
+          "has_macros": false
+        }
+      ]
+    },
+    "expect": {
+      "plan": {"needs": "fm_patches"},
+      "is_incomplete": false,
+      "count": 2,
+      "items_spot": [
+        {
+          "index": 0,
+          "label": "inst/bass.dmp — Bass",
+          "additional_edits": [
+            {
+              "start_line": 1,
+              "start_character": 0,
+              "end_line": 4,
+              "end_character": 0,
+              "new_text": ""
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "fm_patches_hierarchy_file_level",
+    "notes": "D12 / §3.1-7 with fm_picker_hierarchy=true and more than one distinct file: single-patch files collapse to flat-content patch items while retaining rel-path sort_text; multi-patch files become a file-level step keyed by REL PATH (not basename) that inserts ` <relpath>/` and re-triggers completion. The template is still appended. label_description (the patch count / file basename badge) is part of the core item model but is not expressible in this fixture schema and is therefore not asserted.",
+    "decisions": ["D12", "D17"],
+    "doc": "@1 fm ",
+    "pos": {"line": 0, "character": 6},
+    "trigger": " ",
+    "settings": {"arpeggio_enabled": false, "arpeggio_pattern": "up", "chord_stack_mode": "stack_up", "fm_picker_hierarchy": true},
+    "data": {
+      "kind": "fm_patches",
+      "patches": [
+        {"rel_path": "inst/bass.dmp", "name": "Bass", "mml": "@1 fm ; Bass\n; ALG  FB\n    4   7\n", "has_macros": false},
+        {"rel_path": "inst/multi.dmp", "name": "Pad", "mml": "@1 fm ; Pad\n; ALG  FB\n    2   0\n", "has_macros": false},
+        {"rel_path": "inst/multi.dmp", "name": "Brass", "mml": "@1 fm ; Brass\n; ALG  FB\n    6   1\n", "has_macros": true}
+      ]
+    },
+    "expect": {
+      "plan": {"needs": "fm_patches"},
+      "is_incomplete": false,
+      "items": [
+        {"label": "inst/bass.dmp — Bass", "kind": "snippet", "insert": " ; Bass\n; ALG  FB\n    4   7", "insert_format": "plain", "sort_text": "inst/bass.dmp", "range": {"start_character": 5, "end_character": 6}},
+        {"label": "inst/multi.dmp", "kind": "file", "insert": " inst/multi.dmp/", "insert_format": "plain", "filter_text": "inst/multi.dmp", "sort_text": "inst/multi.dmp", "command": "trigger_suggest", "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Default FM template", "kind": "snippet", "detail": "template", "insert_format": "snippet", "filter_text": "default fm template", "sort_text": "~default", "range": {"start_character": 5, "end_character": 6}}
+      ]
+    }
+  },
+  {
+    "name": "fm_patches_hierarchy_patch_fragment",
+    "notes": "D12 second step: the typed fragment `inst/multi.dmp/` (everything after `fm ` up to the last `/`) selects one file by rel path, so only that file's patches are listed and the template is NOT appended. Insert bodies use the same paramText transform as the flat list (core-rendered — native's raw ` {mml}` would re-emit the `@N fm` header). detail (`[macros]` in native) is not asserted: D12 does not restate the item shape.",
+    "decisions": ["D12"],
+    "doc": "@1 fm inst/multi.dmp/",
+    "pos": {"line": 0, "character": 21},
+    "trigger": "/",
+    "settings": {"arpeggio_enabled": false, "arpeggio_pattern": "up", "chord_stack_mode": "stack_up", "fm_picker_hierarchy": true},
+    "data": {
+      "kind": "fm_patches",
+      "patches": [
+        {"rel_path": "inst/bass.dmp", "name": "Bass", "mml": "@1 fm ; Bass\n; ALG  FB\n    4   7\n", "has_macros": false},
+        {"rel_path": "inst/multi.dmp", "name": "Pad", "mml": "@1 fm ; Pad\n; ALG  FB\n    2   0\n", "has_macros": false},
+        {"rel_path": "inst/multi.dmp", "name": "Brass", "mml": "@1 fm ; Brass\n; ALG  FB\n    6   1\n", "has_macros": true}
+      ]
+    },
+    "expect": {
+      "plan": {"needs": "fm_patches"},
+      "is_incomplete": false,
+      "items": [
+        {"label": "Pad", "kind": "value", "insert": " ; Pad\n; ALG  FB\n    2   0", "insert_format": "plain", "filter_text": "inst/multi.dmp/Pad", "sort_text": "Pad", "range": {"start_character": 5, "end_character": 21}},
+        {"label": "Brass", "kind": "value", "insert": " ; Brass\n; ALG  FB\n    6   1", "insert_format": "plain", "filter_text": "inst/multi.dmp/Brass", "sort_text": "Brass", "range": {"start_character": 5, "end_character": 21}}
+      ]
+    }
+  }
+]

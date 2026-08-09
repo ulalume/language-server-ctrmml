@@ -1,0 +1,258 @@
+[
+  {
+    "name": "chord_dyads_two_channel_selector",
+    "notes": "D15: a 2-channel selector shows only the dyads, in DYADS table order (5, 2, 3, 4, 6, 7 — power chord first), and preselects the power chord. Bodies derived by running the frozen core renderers (render_stacked_generic_diatonic_dyad, stack_up default, channel octaves [6,6,6] = core default, compensate=false because nothing follows the chord).",
+    "decisions": ["D15", "D17"],
+    "doc": "AB {c",
+    "pos": {"line": 0, "character": 5},
+    "trigger": null,
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "items": [
+        {"label": "C5", "kind": "snippet", "detail": "2-note dyad · Diatonic 5th (power chord)", "insert": "c/g}", "insert_format": "plain", "filter_text": "C5", "sort_text": "000", "preselect": true, "range": {"start_character": 4, "end_character": 5}},
+        {"label": "C2", "kind": "snippet", "detail": "2-note dyad · Diatonic 2nd", "insert": "c/d}", "insert_format": "plain", "filter_text": "C2", "sort_text": "001", "preselect": false, "range": {"start_character": 4, "end_character": 5}},
+        {"label": "C3", "kind": "snippet", "detail": "2-note dyad · Diatonic 3rd", "insert": "c/e}", "insert_format": "plain", "filter_text": "C3", "sort_text": "002", "preselect": false, "range": {"start_character": 4, "end_character": 5}},
+        {"label": "C4", "kind": "snippet", "detail": "2-note dyad · Diatonic 4th", "insert": "c/f}", "insert_format": "plain", "filter_text": "C4", "sort_text": "003", "preselect": false, "range": {"start_character": 4, "end_character": 5}},
+        {"label": "C6", "kind": "snippet", "detail": "2-note dyad · Diatonic 6th", "insert": "c/a}", "insert_format": "plain", "filter_text": "C6", "sort_text": "004", "preselect": false, "range": {"start_character": 4, "end_character": 5}},
+        {"label": "C7", "kind": "snippet", "detail": "2-note dyad · Diatonic 7th", "insert": "c/b}", "insert_format": "plain", "filter_text": "C7", "sort_text": "005", "preselect": false, "range": {"start_character": 4, "end_character": 5}}
+      ]
+    }
+  },
+  {
+    "name": "chord_triads_three_channel_selector",
+    "notes": "D15: 3 channels ⇒ generic triad + named triads only (no dyads, no sevenths). The duplicate empty-suffix major triad from CHORDS_3 is skipped [RS], so CHORDS_3 contributes 6 named items. Bodies from render_stacked_generic_chord / render_stacked_chord.",
+    "decisions": ["D15", "D17"],
+    "doc": "ABC {d",
+    "pos": {"line": 0, "character": 6},
+    "trigger": null,
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "items": [
+        {"label": "Chord (3 notes)", "kind": "snippet", "detail": "D: d/f/a", "insert": "d/f/a}", "insert_format": "plain", "filter_text": "D", "sort_text": "000", "preselect": true, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Dm", "kind": "snippet", "detail": "3-note chord · Minor triad", "insert": "d/f/a}", "insert_format": "plain", "filter_text": "Dm", "sort_text": "001", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Ddim", "kind": "snippet", "detail": "3-note chord · Diminished triad", "insert": "d/f/a-}", "insert_format": "plain", "filter_text": "Ddim", "sort_text": "002", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Daug", "kind": "snippet", "detail": "3-note chord · Augmented triad", "insert": "d/f+/a+}", "insert_format": "plain", "filter_text": "Daug", "sort_text": "003", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Dsus2", "kind": "snippet", "detail": "3-note chord · Suspended 2nd", "insert": "d/e/a}", "insert_format": "plain", "filter_text": "Dsus2", "sort_text": "004", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Dsus4", "kind": "snippet", "detail": "3-note chord · Suspended 4th", "insert": "d/g/a}", "insert_format": "plain", "filter_text": "Dsus4", "sort_text": "005", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "D4th", "kind": "snippet", "detail": "3-note chord · Quartal triad", "insert": "d/g/>c}", "insert_format": "plain", "filter_text": "D4th", "sort_text": "006", "preselect": false, "range": {"start_character": 5, "end_character": 6}}
+      ]
+    }
+  },
+  {
+    "name": "chord_sevenths_four_channel_selector",
+    "notes": "D15: 4 channels ⇒ generic 4-note chord + all 9 CHORDS_4 entries.",
+    "decisions": ["D15"],
+    "doc": "ABCD {c",
+    "pos": {"line": 0, "character": 7},
+    "trigger": null,
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "items": [
+        {"label": "Chord (4 notes)", "kind": "snippet", "detail": "C: c/e/g/b", "insert": "c/e/g/b}", "insert_format": "plain", "filter_text": "C", "sort_text": "000", "preselect": true, "range": {"start_character": 6, "end_character": 7}},
+        {"label": "CM7", "kind": "snippet", "detail": "4-note chord · Major 7th", "insert": "c/e/g/b}", "insert_format": "plain", "filter_text": "CM7", "sort_text": "001", "preselect": false, "range": {"start_character": 6, "end_character": 7}},
+        {"label": "C7", "kind": "snippet", "detail": "4-note chord · Dominant 7th", "insert": "c/e/g/b-}", "insert_format": "plain", "filter_text": "C7", "sort_text": "002", "preselect": false, "range": {"start_character": 6, "end_character": 7}},
+        {"label": "Cm7", "kind": "snippet", "detail": "4-note chord · Minor 7th", "insert": "c/e-/g/b-}", "insert_format": "plain", "filter_text": "Cm7", "sort_text": "003", "preselect": false, "range": {"start_character": 6, "end_character": 7}},
+        {"label": "CmM7", "kind": "snippet", "detail": "4-note chord · Minor-major 7th", "insert": "c/e-/g/b}", "insert_format": "plain", "filter_text": "CmM7", "sort_text": "004", "preselect": false, "range": {"start_character": 6, "end_character": 7}},
+        {"label": "Cm7b5", "kind": "snippet", "detail": "4-note chord · Half-diminished 7th", "insert": "c/e-/g-/b-}", "insert_format": "plain", "filter_text": "Cm7b5", "sort_text": "005", "preselect": false, "range": {"start_character": 6, "end_character": 7}},
+        {"label": "Cdim7", "kind": "snippet", "detail": "4-note chord · Diminished 7th", "insert": "c/e-/g-/a}", "insert_format": "plain", "filter_text": "Cdim7", "sort_text": "006", "preselect": false, "range": {"start_character": 6, "end_character": 7}},
+        {"label": "C6", "kind": "snippet", "detail": "4-note chord · Major 6th", "insert": "c/e/g/a}", "insert_format": "plain", "filter_text": "C6", "sort_text": "007", "preselect": false, "range": {"start_character": 6, "end_character": 7}},
+        {"label": "Cadd9", "kind": "snippet", "detail": "4-note chord · Major add9", "insert": "c/e/g/>d}", "insert_format": "plain", "filter_text": "Cadd9", "sort_text": "008", "preselect": false, "range": {"start_character": 6, "end_character": 7}},
+        {"label": "C4th", "kind": "snippet", "detail": "4-note chord · Quartal 7th", "insert": "c/f/b-/>e-}", "insert_format": "plain", "filter_text": "C4th", "sort_text": "009", "preselect": false, "range": {"start_character": 6, "end_character": 7}}
+      ]
+    }
+  },
+  {
+    "name": "chord_no_selector_offers_all_sizes",
+    "notes": "D15 [TS]: with no enclosing track selector (numChannels = 0) every size is enabled — 6 dyads + 2 generics + 6 named triads + 9 named sevenths = 23. Native currently bails out entirely here.",
+    "decisions": ["D15"],
+    "doc": "{c",
+    "pos": {"line": 0, "character": 2},
+    "trigger": null,
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "count": 23,
+      "items_spot": [
+        {"index": 0, "label": "C5", "detail": "2-note dyad · Diatonic 5th (power chord)", "insert": "c/g}", "sort_text": "000", "preselect": false, "range": {"start_character": 1, "end_character": 2}},
+        {"index": 6, "label": "Chord (3 notes)", "detail": "C: c/e/g", "insert": "c/e/g}", "sort_text": "006", "preselect": true},
+        {"index": 7, "label": "Chord (4 notes)", "detail": "C: c/e/g/b", "insert": "c/e/g/b}", "sort_text": "007", "preselect": true},
+        {"index": 8, "label": "Cm", "detail": "3-note chord · Minor triad", "insert": "c/e-/g}", "sort_text": "008"},
+        {"index": 22, "label": "C4th", "detail": "4-note chord · Quartal 7th", "insert": "c/f/b-/>e-}", "sort_text": "022"}
+      ]
+    }
+  },
+  {
+    "name": "chord_close_brace_already_present",
+    "notes": "D15: when the next character is `}` the inserted body must not append another one.",
+    "decisions": ["D15"],
+    "doc": "ABC {c}",
+    "pos": {"line": 0, "character": 6},
+    "trigger": null,
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "items": [
+        {"label": "Chord (3 notes)", "kind": "snippet", "detail": "C: c/e/g", "insert": "c/e/g", "insert_format": "plain", "filter_text": "C", "sort_text": "000", "preselect": true, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Cm", "kind": "snippet", "detail": "3-note chord · Minor triad", "insert": "c/e-/g", "insert_format": "plain", "filter_text": "Cm", "sort_text": "001", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Cdim", "kind": "snippet", "detail": "3-note chord · Diminished triad", "insert": "c/e-/g-", "insert_format": "plain", "filter_text": "Cdim", "sort_text": "002", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Caug", "kind": "snippet", "detail": "3-note chord · Augmented triad", "insert": "c/e/g+", "insert_format": "plain", "filter_text": "Caug", "sort_text": "003", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Csus2", "kind": "snippet", "detail": "3-note chord · Suspended 2nd", "insert": "c/d/g", "insert_format": "plain", "filter_text": "Csus2", "sort_text": "004", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Csus4", "kind": "snippet", "detail": "3-note chord · Suspended 4th", "insert": "c/f/g", "insert_format": "plain", "filter_text": "Csus4", "sort_text": "005", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "C4th", "kind": "snippet", "detail": "3-note chord · Quartal triad", "insert": "c/f/b-", "insert_format": "plain", "filter_text": "C4th", "sort_text": "006", "preselect": false, "range": {"start_character": 5, "end_character": 6}}
+      ]
+    }
+  },
+  {
+    "name": "chord_stack_up_default_mode",
+    "notes": "D15 stack mode (suite default = stack_up): the F triad lifts its third tone with `>` (render_stacked_* renderers, channel octaves [6,6,6]). Compare with chord_plain_mode, same doc/pos.",
+    "decisions": ["D15"],
+    "doc": "ABC {f",
+    "pos": {"line": 0, "character": 6},
+    "trigger": null,
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "items": [
+        {"label": "Chord (3 notes)", "kind": "snippet", "detail": "F: f/a/>c", "insert": "f/a/>c}", "insert_format": "plain", "filter_text": "F", "sort_text": "000", "preselect": true, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Fm", "kind": "snippet", "detail": "3-note chord · Minor triad", "insert": "f/a-/>c}", "insert_format": "plain", "filter_text": "Fm", "sort_text": "001", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Fdim", "kind": "snippet", "detail": "3-note chord · Diminished triad", "insert": "f/a-/>c-}", "insert_format": "plain", "filter_text": "Fdim", "sort_text": "002", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Faug", "kind": "snippet", "detail": "3-note chord · Augmented triad", "insert": "f/a/>c+}", "insert_format": "plain", "filter_text": "Faug", "sort_text": "003", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Fsus2", "kind": "snippet", "detail": "3-note chord · Suspended 2nd", "insert": "f/g/>c}", "insert_format": "plain", "filter_text": "Fsus2", "sort_text": "004", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Fsus4", "kind": "snippet", "detail": "3-note chord · Suspended 4th", "insert": "f/b-/>c}", "insert_format": "plain", "filter_text": "Fsus4", "sort_text": "005", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "F4th", "kind": "snippet", "detail": "3-note chord · Quartal triad", "insert": "f/b-/>e-}", "insert_format": "plain", "filter_text": "F4th", "sort_text": "006", "preselect": false, "range": {"start_character": 5, "end_character": 6}}
+      ]
+    }
+  },
+  {
+    "name": "chord_plain_mode",
+    "notes": "D15 plain mode under §3.1-25: same doc/pos as chord_stack_up_default_mode, but plain voicing keeps every slash branch at the channel octave and emits no octave marks.",
+    "decisions": ["D15"],
+    "doc": "ABC {f",
+    "pos": {"line": 0, "character": 6},
+    "trigger": null,
+    "settings": {"arpeggio_enabled": false, "arpeggio_pattern": "up", "chord_stack_mode": "plain", "fm_picker_hierarchy": false},
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "items": [
+        {"label": "Chord (3 notes)", "kind": "snippet", "detail": "F: f/a/c", "insert": "f/a/c}", "insert_format": "plain", "filter_text": "F", "sort_text": "000", "preselect": true, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Fm", "kind": "snippet", "detail": "3-note chord · Minor triad", "insert": "f/a-/c}", "insert_format": "plain", "filter_text": "Fm", "sort_text": "001", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Fdim", "kind": "snippet", "detail": "3-note chord · Diminished triad", "insert": "f/a-/c-}", "insert_format": "plain", "filter_text": "Fdim", "sort_text": "002", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Faug", "kind": "snippet", "detail": "3-note chord · Augmented triad", "insert": "f/a/c+}", "insert_format": "plain", "filter_text": "Faug", "sort_text": "003", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Fsus2", "kind": "snippet", "detail": "3-note chord · Suspended 2nd", "insert": "f/g/c}", "insert_format": "plain", "filter_text": "Fsus2", "sort_text": "004", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "Fsus4", "kind": "snippet", "detail": "3-note chord · Suspended 4th", "insert": "f/b-/c}", "insert_format": "plain", "filter_text": "Fsus4", "sort_text": "005", "preselect": false, "range": {"start_character": 5, "end_character": 6}},
+        {"label": "F4th", "kind": "snippet", "detail": "3-note chord · Quartal triad", "insert": "f/b-/e-}", "insert_format": "plain", "filter_text": "F4th", "sort_text": "006", "preselect": false, "range": {"start_character": 5, "end_character": 6}}
+      ]
+    }
+  },
+  {
+    "name": "chord_compensates_when_note_follows",
+    "notes": "D15 stack-up compensation: content follows the chord on the same line (` c`, not a comment), so every branch whose channel octave moved gets a trailing `<`/`>`. The `}` is already present so no close suffix is appended.",
+    "decisions": ["D15"],
+    "doc": "ABC {f} c",
+    "pos": {"line": 0, "character": 6},
+    "trigger": null,
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "count": 7,
+      "items_spot": [
+        {"index": 0, "label": "Chord (3 notes)", "detail": "F: f/a/>c<", "insert": "f/a/>c<", "sort_text": "000", "preselect": true, "range": {"start_character": 5, "end_character": 6}},
+        {"index": 6, "label": "F4th", "detail": "3-note chord · Quartal triad", "insert": "f/b-/>e-<", "sort_text": "006"}
+      ]
+    }
+  },
+  {
+    "name": "chord_explicit_root_accidental",
+    "notes": "D15: an explicit `+` on the root is kept on the root tone and folded into filter_text (`C+m`), while the other tones are respelled against the raised root.",
+    "decisions": ["D15"],
+    "doc": "ABC {c+",
+    "pos": {"line": 0, "character": 7},
+    "trigger": "+",
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "count": 7,
+      "items_spot": [
+        {"index": 0, "label": "Chord (3 notes)", "detail": "C+: c+/e/g", "insert": "c+/e/g}", "filter_text": "C+", "sort_text": "000", "preselect": true, "range": {"start_character": 5, "end_character": 7}},
+        {"index": 1, "label": "Cm", "detail": "3-note chord · Minor triad", "insert": "c+/e/g+}", "filter_text": "C+m", "sort_text": "001"}
+      ]
+    }
+  },
+  {
+    "name": "chord_b_sharp_enharmonic_respelling",
+    "notes": "§3.1-21: a five-channel selector exposes every chord size so B-sharp bodies that formerly emitted single-sharp approximations are pinned after full respelling. The typed `b+` root remains unchanged; named double-sharp-family tones move to the adjacent letter at the same pitch.",
+    "decisions": ["D15"],
+    "doc": "ABCDE {b+",
+    "pos": {"line": 0, "character": 9},
+    "trigger": "+",
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "count": 23,
+      "items_spot": [
+        {"index": 6, "label": "Chord (3 notes)", "detail": "B+: b+/>d/>f", "insert": "b+/>d/>f}", "filter_text": "B+", "sort_text": "006", "preselect": true, "range": {"start_character": 7, "end_character": 9}},
+        {"index": 10, "label": "Baug", "detail": "3-note chord · Augmented triad", "insert": "b+/>e/>g+}", "filter_text": "B+aug", "sort_text": "010"},
+        {"index": 14, "label": "BM7", "detail": "4-note chord · Major 7th", "insert": "b+/>e/>g/>b}", "filter_text": "B+M7", "sort_text": "014"},
+        {"index": 22, "label": "B4th", "detail": "4-note chord · Quartal 7th", "insert": "b+/>e+/>a+/>>d+}", "filter_text": "B+4th", "sort_text": "022"}
+      ]
+    }
+  },
+  {
+    "name": "chord_plain_b_sharp_enharmonic_respelling",
+    "notes": "§3.1-21 and §3.1-25: plain mode keeps the typed `b+` root and respells double-accidental non-root tones, while deliberately emitting no octave marks. The completion list pins plain generic/dyad/named bodies; named_body separately pins the skipped empty-suffix major renderer as b+/e/g.",
+    "decisions": ["D15"],
+    "doc": "ABCDE {b+",
+    "pos": {"line": 0, "character": 9},
+    "trigger": "+",
+    "settings": {"arpeggio_enabled": false, "arpeggio_pattern": "up", "chord_stack_mode": "plain", "fm_picker_hierarchy": false},
+    "data": null,
+    "expect": {
+      "plan": "done",
+      "is_incomplete": false,
+      "count": 23,
+      "items_spot": [
+        {"index": 0, "label": "B5", "insert": "b+/f}", "sort_text": "000", "range": {"start_character": 7, "end_character": 9}},
+        {"index": 1, "label": "B2", "insert": "b+/c}", "sort_text": "001"},
+        {"index": 6, "label": "Chord (3 notes)", "detail": "B+: b+/d/f", "insert": "b+/d/f}", "sort_text": "006", "preselect": true},
+        {"index": 10, "label": "Baug", "insert": "b+/e/g+}", "sort_text": "010"},
+        {"index": 14, "label": "BM7", "insert": "b+/e/g/b}", "sort_text": "014"},
+        {"index": 22, "label": "B4th", "insert": "b+/e+/a+/d+}", "sort_text": "022"}
+      ],
+      "named_body": {"root": "b+", "suffix": "", "size": 3, "key_sig": "none", "body": "b+/e/g"}
+    }
+  },
+  {
+    "name": "chord_rejected_inside_fm_block",
+    "notes": "D15 [RS]: chord completion is rejected inside an FM/PSG instrument block. The cascade then hits the note-suffix suppression (prefix ends `{c`), so the canonical result is an empty exclusive list.",
+    "decisions": ["D3", "D15", "D20"],
+    "doc": "A x\n@1 fm\n\t31,0,12,7,0,28,0,0,5,0\n\t{c",
+    "pos": {"line": 3, "character": 3},
+    "trigger": null,
+    "data": null,
+    "expect": {"plan": "done", "is_incomplete": false, "items": []}
+  },
+  {
+    "name": "chord_rejected_in_unterminated_key_sig",
+    "notes": "D15 [RS] is_in_key_sig at the letter column rejects `_{F {c`; the key-signature guard (D3) already fires for this position, so both paths agree on an empty exclusive list.",
+    "decisions": ["D3", "D15"],
+    "doc": "A _{F {c",
+    "pos": {"line": 0, "character": 8},
+    "trigger": null,
+    "data": null,
+    "expect": {"plan": "done", "is_incomplete": false, "items": []}
+  }
+]
