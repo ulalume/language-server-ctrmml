@@ -23,7 +23,6 @@ pub(crate) struct Backend {
     pub(crate) playback: Arc<Mutex<Option<Playback>>>,
     pub(crate) playback_seq: Arc<Mutex<u64>>,
     pub(crate) last_doc: Arc<RwLock<Option<String>>>,
-    pub(crate) supports_hierarchy: Arc<RwLock<bool>>,
     pub(crate) completion_settings: Arc<RwLock<CompletionSettings>>,
     pub(crate) supports_completion_as_is: Arc<RwLock<bool>>,
 }
@@ -46,7 +45,6 @@ impl Backend {
             playback: Arc::new(Mutex::new(None)),
             playback_seq: Arc::new(Mutex::new(0)),
             last_doc: Arc::new(RwLock::new(None)),
-            supports_hierarchy: Arc::new(RwLock::new(false)),
             completion_settings: Arc::new(RwLock::new(CompletionSettings::default())),
             supports_completion_as_is: Arc::new(RwLock::new(false)),
         }

@@ -81,7 +81,6 @@ impl LanguageServer for Backend {
         if let Some(info) = &params.client_info {
             let name = info.name.to_lowercase();
             let is_vscode = name.contains("visual studio code") || name.contains("vscode");
-            *self.supports_hierarchy.write().await = is_vscode;
             // Compatibility until native extensions send completion settings:
             // client-name sniffing may fill only an omitted hierarchy flag.
             if !hierarchy_explicit {
