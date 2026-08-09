@@ -14,6 +14,21 @@ use crate::track_selector::LineReader;
 /// an iterator of line-like values).
 pub struct LinesModel(pub Vec<String>);
 
+/// A borrowing line model for read-only scans that should not copy the
+/// document text.
+pub struct BorrowedLinesModel<'a>(Vec<&'a str>);
+
+impl<'a> BorrowedLinesModel<'a> {
+    /// Index the document's lines while retaining borrowed slices.
+    pub fn from_text(text: &'a str) -> Self {
+        Self(
+            text.split('\n')
+                .map(|line| line.strip_suffix('\r').unwrap_or(line))
+                .collect(),
+        )
+    }
+}
+
 impl LinesModel {
     /// Build a model from an iterator of `&str`-like values, one per
     /// line. None of the inputs should contain `\n`.
@@ -42,6 +57,19 @@ impl LineReader for LinesModel {
         self.0
             .get((line_number as usize).saturating_sub(1))
             .map(String::as_str)
+            .unwrap_or("")
+    }
+
+    fn get_line_count(&self) -> u32 {
+        self.0.len() as u32
+    }
+}
+
+impl LineReader for BorrowedLinesModel<'_> {
+    fn get_line_content(&self, line_number: u32) -> &str {
+        self.0
+            .get((line_number as usize).saturating_sub(1))
+            .copied()
             .unwrap_or("")
     }
 

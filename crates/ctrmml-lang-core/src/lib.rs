@@ -10,11 +10,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod arpeggio;
 pub mod beat_fill;
 pub mod block_finder;
 pub mod brace_state;
 pub mod chord;
 pub mod code_lens;
+pub mod completion;
 pub mod docs;
 pub mod hover;
 pub mod instrument_preview;
@@ -28,17 +30,10 @@ pub mod timesig;
 pub mod track_selector;
 pub mod transpose;
 
-pub use chord::{
-    accidental_char, chord_natural_semitones, render_chord, render_generic_chord,
-    render_stacked_chord, render_stacked_generic_chord, ChordDef, ChordSize, RootAccidental,
-    CHORDS_3, CHORDS_4, CHORD_LETTERS,
-};
-pub use key_sig::{default_key_sig, parse_key_sig, scale_for_name, scan_key_sig_at, KeySig};
-pub use octave_scan::{scan_brace_state_at, scan_channel_context_at, ChannelContext};
-pub use string_model::LinesModel;
-pub use psg_parser::{
-    compute_timeline, node_effective_length, node_start_frame, parse_psg_mml, serialize_psg_mml,
-    total_duration, PsgEnvelope, PsgNode, TimePoint,
+pub use arpeggio::{
+    chord_defs_for_arpeggio, parse_note_sequence, pattern_by_name, render_arpeggio_body,
+    render_chord_arpeggio, render_chord_arpeggio_with_pattern, render_generic_arpeggio,
+    render_mml_note, resolve_chord_notes, ResolvedNote, PATTERNS,
 };
 pub use beat_fill::{
     generate_measure_rests, is_after_bar_line, measure_remainder_ticks, ticks_to_mml_rest,
@@ -47,21 +42,41 @@ pub use block_finder::{
     find_block_at, find_fm_block_at, find_psg_block_at, InstrumentBlock, InstrumentKind,
 };
 pub use brace_state::BraceState;
-pub use timesig::{
-    parse_time_signature, scan_time_signature, TimeSignature, DEFAULT_TIME_SIGNATURE,
+pub use chord::{
+    accidental_char, chord_natural_semitones, render_chord, render_generic_chord,
+    render_generic_diatonic_dyad, render_stacked_chord, render_stacked_generic_chord,
+    render_stacked_generic_diatonic_dyad, ChordDef, ChordSize, DyadDef, RootAccidental, CHORDS_3,
+    CHORDS_4, CHORD_LETTERS, DYADS,
 };
 pub use code_lens::{code_lens, CodeLens};
+pub use completion::{
+    byte_offset_to_utf16_character, completion_plan, completion_resolve,
+    utf16_character_to_byte_offset, word_range_before_cursor, ArpeggioPattern, ChordStackMode,
+    CompletionPlan, CompletionSettings, CoreCommand, CoreCompletionList, CoreItem, CoreItemKind,
+    CoreTextEdit, CursorTickData, DataPayload, DataRequest, EditRange, FmPatchData, InsertFormat,
+    InsertSpec, Pos,
+};
 pub use hover::{hover_at, HoverInfo};
 pub use instrument_preview::{
     build_preview_mml, extract_instrument_block, ExtractedBlock, InstrumentType,
 };
+pub use key_sig::{default_key_sig, parse_key_sig, scale_for_name, scan_key_sig_at, KeySig};
+pub use octave_scan::{scan_brace_state_at, scan_channel_context_at, ChannelContext};
 pub use preview_note::{preview_note_at, PreviewNoteHit};
+pub use psg_parser::{
+    compute_timeline, node_effective_length, node_start_frame, parse_psg_mml, serialize_psg_mml,
+    total_duration, PsgEnvelope, PsgNode, TimePoint,
+};
+pub use string_model::LinesModel;
 pub use text_scan::{
     double_quote_bounds, is_at_number, is_in_comment, is_in_key_sig, single_quote_bounds, token_at,
     tokenize_outside_double_quotes,
 };
-pub use transpose::{transpose_selection, Direction, Selection, TransposeEdit};
-pub use track_selector::{
-    find_enclosing_track_selector, find_enclosing_track_selector_at,
-    parse_leading_track_selector, LeadingTrackSelector, LeadingTrackSpan, LineReader,
+pub use timesig::{
+    parse_time_signature, scan_time_signature, TimeSignature, DEFAULT_TIME_SIGNATURE,
 };
+pub use track_selector::{
+    find_enclosing_track_selector, find_enclosing_track_selector_at, parse_leading_track_selector,
+    LeadingTrackSelector, LeadingTrackSpan, LineReader,
+};
+pub use transpose::{transpose_selection, Direction, Selection, TransposeEdit};

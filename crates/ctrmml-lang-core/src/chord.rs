@@ -73,32 +73,211 @@ pub struct ChordDef {
     pub detail: &'static str,
 }
 
+/// One generic diatonic dyad definition used by chord completion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DyadDef {
+    /// Display suffix appended to the root letter (for example, `"5"`).
+    pub name: &'static str,
+    /// Diatonic letter offset from the root (`1..=6`).
+    pub step: i32,
+    /// Short description shown in completion detail text.
+    pub detail: &'static str,
+}
+
 pub const CHORDS_3: &[ChordDef] = &[
-    ChordDef { suffix: "",     letter_steps: &[0, 2, 4], intervals: &[0, 4, 7],  detail: "Major triad" },
-    ChordDef { suffix: "m",    letter_steps: &[0, 2, 4], intervals: &[0, 3, 7],  detail: "Minor triad" },
-    ChordDef { suffix: "dim",  letter_steps: &[0, 2, 4], intervals: &[0, 3, 6],  detail: "Diminished triad" },
-    ChordDef { suffix: "aug",  letter_steps: &[0, 2, 4], intervals: &[0, 4, 8],  detail: "Augmented triad" },
-    ChordDef { suffix: "sus2", letter_steps: &[0, 1, 4], intervals: &[0, 2, 7],  detail: "Suspended 2nd" },
-    ChordDef { suffix: "sus4", letter_steps: &[0, 3, 4], intervals: &[0, 5, 7],  detail: "Suspended 4th" },
-    ChordDef { suffix: "4th",  letter_steps: &[0, 3, 6], intervals: &[0, 5, 10], detail: "Quartal triad" },
+    ChordDef {
+        suffix: "",
+        letter_steps: &[0, 2, 4],
+        intervals: &[0, 4, 7],
+        detail: "Major triad",
+    },
+    ChordDef {
+        suffix: "m",
+        letter_steps: &[0, 2, 4],
+        intervals: &[0, 3, 7],
+        detail: "Minor triad",
+    },
+    ChordDef {
+        suffix: "dim",
+        letter_steps: &[0, 2, 4],
+        intervals: &[0, 3, 6],
+        detail: "Diminished triad",
+    },
+    ChordDef {
+        suffix: "aug",
+        letter_steps: &[0, 2, 4],
+        intervals: &[0, 4, 8],
+        detail: "Augmented triad",
+    },
+    ChordDef {
+        suffix: "sus2",
+        letter_steps: &[0, 1, 4],
+        intervals: &[0, 2, 7],
+        detail: "Suspended 2nd",
+    },
+    ChordDef {
+        suffix: "sus4",
+        letter_steps: &[0, 3, 4],
+        intervals: &[0, 5, 7],
+        detail: "Suspended 4th",
+    },
+    ChordDef {
+        suffix: "4th",
+        letter_steps: &[0, 3, 6],
+        intervals: &[0, 5, 10],
+        detail: "Quartal triad",
+    },
+];
+
+/// Diatonic two-note chords in the canonical completion display order.
+///
+/// The fifth is deliberately first so it can be preselected for an exact
+/// two-channel selector, followed by the remaining intervals in ascending
+/// display order. This matches megamml's `DYADS` table byte-for-byte.
+pub const DYADS: &[DyadDef] = &[
+    DyadDef {
+        name: "5",
+        step: 4,
+        detail: "Diatonic 5th (power chord)",
+    },
+    DyadDef {
+        name: "2",
+        step: 1,
+        detail: "Diatonic 2nd",
+    },
+    DyadDef {
+        name: "3",
+        step: 2,
+        detail: "Diatonic 3rd",
+    },
+    DyadDef {
+        name: "4",
+        step: 3,
+        detail: "Diatonic 4th",
+    },
+    DyadDef {
+        name: "6",
+        step: 5,
+        detail: "Diatonic 6th",
+    },
+    DyadDef {
+        name: "7",
+        step: 6,
+        detail: "Diatonic 7th",
+    },
 ];
 
 pub const CHORDS_4: &[ChordDef] = &[
-    ChordDef { suffix: "M7",   letter_steps: &[0, 2, 4, 6], intervals: &[0, 4, 7, 11], detail: "Major 7th" },
-    ChordDef { suffix: "7",    letter_steps: &[0, 2, 4, 6], intervals: &[0, 4, 7, 10], detail: "Dominant 7th" },
-    ChordDef { suffix: "m7",   letter_steps: &[0, 2, 4, 6], intervals: &[0, 3, 7, 10], detail: "Minor 7th" },
-    ChordDef { suffix: "mM7",  letter_steps: &[0, 2, 4, 6], intervals: &[0, 3, 7, 11], detail: "Minor-major 7th" },
-    ChordDef { suffix: "m7b5", letter_steps: &[0, 2, 4, 6], intervals: &[0, 3, 6, 10], detail: "Half-diminished 7th" },
+    ChordDef {
+        suffix: "M7",
+        letter_steps: &[0, 2, 4, 6],
+        intervals: &[0, 4, 7, 11],
+        detail: "Major 7th",
+    },
+    ChordDef {
+        suffix: "7",
+        letter_steps: &[0, 2, 4, 6],
+        intervals: &[0, 4, 7, 10],
+        detail: "Dominant 7th",
+    },
+    ChordDef {
+        suffix: "m7",
+        letter_steps: &[0, 2, 4, 6],
+        intervals: &[0, 3, 7, 10],
+        detail: "Minor 7th",
+    },
+    ChordDef {
+        suffix: "mM7",
+        letter_steps: &[0, 2, 4, 6],
+        intervals: &[0, 3, 7, 11],
+        detail: "Minor-major 7th",
+    },
+    ChordDef {
+        suffix: "m7b5",
+        letter_steps: &[0, 2, 4, 6],
+        intervals: &[0, 3, 6, 10],
+        detail: "Half-diminished 7th",
+    },
     // dim7's 4th tone is enharmonically `bbb`; ctrmml can't spell that, so use
     // the a-letter (dim6 equivalent) and rely on the natural a matching semitone 9.
-    ChordDef { suffix: "dim7", letter_steps: &[0, 2, 4, 5], intervals: &[0, 3, 6, 9],  detail: "Diminished 7th" },
-    ChordDef { suffix: "6",    letter_steps: &[0, 2, 4, 5], intervals: &[0, 4, 7, 9],  detail: "Major 6th" },
-    ChordDef { suffix: "add9", letter_steps: &[0, 2, 4, 1], intervals: &[0, 4, 7, 2],  detail: "Major add9" },
-    ChordDef { suffix: "4th",  letter_steps: &[0, 3, 6, 2], intervals: &[0, 5, 10, 3], detail: "Quartal 7th" },
+    ChordDef {
+        suffix: "dim7",
+        letter_steps: &[0, 2, 4, 5],
+        intervals: &[0, 3, 6, 9],
+        detail: "Diminished 7th",
+    },
+    ChordDef {
+        suffix: "6",
+        letter_steps: &[0, 2, 4, 5],
+        intervals: &[0, 4, 7, 9],
+        detail: "Major 6th",
+    },
+    ChordDef {
+        suffix: "add9",
+        letter_steps: &[0, 2, 4, 1],
+        intervals: &[0, 4, 7, 2],
+        detail: "Major add9",
+    },
+    ChordDef {
+        suffix: "4th",
+        letter_steps: &[0, 3, 6, 2],
+        intervals: &[0, 5, 10, 3],
+        detail: "Quartal 7th",
+    },
 ];
 
 /// The 7 natural letters, in pitch order from `c`.
 pub const CHORD_LETTERS: [char; 7] = ['c', 'd', 'e', 'f', 'g', 'a', 'b'];
+
+/// A theoretical tone respelled into ctrmml's single-accidental vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SpelledTone {
+    pub(crate) letter: char,
+    pub(crate) accidental: i32,
+    pub(crate) octave: i32,
+}
+
+/// Respell a theoretical non-root tone without changing its pitch.
+///
+/// Double-sharp families move forward through the diatonic letters and
+/// double-flat families move backward until at most one accidental remains.
+/// Crossing B/C carries the octave. Callers deliberately bypass this helper
+/// for the user-typed root so its spelling is preserved verbatim (§3.1-21).
+pub(crate) fn spell_tone(
+    mut letter: char,
+    mut accidental: i32,
+    mut octave: i32,
+) -> Option<SpelledTone> {
+    let mut letter_idx = CHORD_LETTERS
+        .iter()
+        .position(|candidate| *candidate == letter)?;
+
+    while accidental >= 2 {
+        let semitone_step = if matches!(letter, 'e' | 'b') { 1 } else { 2 };
+        if letter == 'b' {
+            octave += 1;
+        }
+        letter_idx = (letter_idx + 1) % CHORD_LETTERS.len();
+        letter = CHORD_LETTERS[letter_idx];
+        accidental -= semitone_step;
+    }
+
+    while accidental <= -2 {
+        let semitone_step = if matches!(letter, 'c' | 'f') { 1 } else { 2 };
+        if letter == 'c' {
+            octave -= 1;
+        }
+        letter_idx = (letter_idx + CHORD_LETTERS.len() - 1) % CHORD_LETTERS.len();
+        letter = CHORD_LETTERS[letter_idx];
+        accidental += semitone_step;
+    }
+
+    Some(SpelledTone {
+        letter,
+        accidental,
+        octave,
+    })
+}
 
 /// Semitones above `c` for each natural letter.
 #[inline]
@@ -118,7 +297,11 @@ pub fn chord_natural_semitones(letter: char) -> Option<i32> {
 /// Index of `letter` within [`CHORD_LETTERS`], with `'h'` aliased to `'b'`
 /// (German-style notation).
 fn root_index(root_letter_lower: char) -> Option<usize> {
-    let effective = if root_letter_lower == 'h' { 'b' } else { root_letter_lower };
+    let effective = if root_letter_lower == 'h' {
+        'b'
+    } else {
+        root_letter_lower
+    };
     CHORD_LETTERS.iter().position(|&c| c == effective)
 }
 
@@ -217,11 +400,21 @@ pub fn render_chord(
         }
 
         let mut note_text = String::new();
-        note_text.push(letter);
-        if k == 0 && root_accidental.is_some() {
-            note_text.push_str(accidental_char(root_accidental));
+        if k == 0 {
+            note_text.push(letter);
+            if root_accidental.is_some() {
+                note_text.push_str(accidental_char(root_accidental));
+            } else {
+                note_text.push_str(non_root_accidental_glyph(acc, letter, key_sig));
+            }
         } else {
-            note_text.push_str(non_root_accidental_glyph(acc, letter, key_sig));
+            let spelled = spell_tone(letter, acc, 0)?;
+            note_text.push(spelled.letter);
+            note_text.push_str(non_root_accidental_glyph(
+                spelled.accidental,
+                spelled.letter,
+                key_sig,
+            ));
         }
         parts.push(note_text);
     }
@@ -254,9 +447,9 @@ fn stack_tones(
     let mut parts: Vec<String> = Vec::with_capacity(tones.len());
     let mut prev_pitch: i32 = -1;
     for (k, tone) in tones.iter().enumerate() {
-        let letter = tone.letter;
-        let acc = tone.acc;
-        let letter_sem = chord_natural_semitones(letter).unwrap_or(0);
+        let theoretical_letter = tone.letter;
+        let theoretical_acc = tone.acc;
+        let letter_sem = chord_natural_semitones(theoretical_letter).unwrap_or(0);
 
         // Natural-letter octave (without the accidental) is what the `>` / `<`
         // prefix needs to shift the channel to; the accidental is emitted as a
@@ -265,13 +458,13 @@ fn stack_tones(
         let target_pitch: i32;
         if k == 0 {
             target_oct = chans[0];
-            target_pitch = (target_oct - 1) * 12 + letter_sem + acc;
+            target_pitch = (target_oct - 1) * 12 + letter_sem + theoretical_acc;
         } else {
             // `Math.floor((prevPitch - letterSem) / 12) + 1`. `div_euclid`
             // matches `Math.floor` for the positive divisor 12, where Rust's
             // built-in `/` would truncate toward zero on negative dividends.
             let mut t_oct = (prev_pitch - letter_sem).div_euclid(12) + 1;
-            let mut t_pitch = (t_oct - 1) * 12 + letter_sem + acc;
+            let mut t_pitch = (t_oct - 1) * 12 + letter_sem + theoretical_acc;
             while t_pitch < prev_pitch {
                 t_oct += 1;
                 t_pitch += 12;
@@ -280,8 +473,19 @@ fn stack_tones(
             target_pitch = t_pitch;
         }
 
-        let shift = target_oct - chans[k];
-        chans[k] = target_oct;
+        let spelled = if k == 0 {
+            SpelledTone {
+                letter: theoretical_letter,
+                accidental: theoretical_acc,
+                octave: target_oct,
+            }
+        } else {
+            spell_tone(theoretical_letter, theoretical_acc, target_oct)
+                .expect("stacked tones use natural chord letters")
+        };
+
+        let shift = spelled.octave - chans[k];
+        chans[k] = spelled.octave;
 
         let mut note_text = String::with_capacity(shift.unsigned_abs() as usize + 2);
         let (glyph, count) = if shift > 0 {
@@ -292,11 +496,15 @@ fn stack_tones(
         for _ in 0..count {
             note_text.push(glyph);
         }
-        note_text.push(letter);
+        note_text.push(spelled.letter);
         if k == 0 && root_accidental.is_some() {
             note_text.push_str(accidental_char(root_accidental));
         } else {
-            note_text.push_str(non_root_accidental_glyph(acc, letter, key_sig));
+            note_text.push_str(non_root_accidental_glyph(
+                spelled.accidental,
+                spelled.letter,
+                key_sig,
+            ));
         }
         parts.push(note_text);
         prev_pitch = target_pitch;
@@ -490,6 +698,83 @@ mod tests {
         KeySig::new()
     }
 
+    #[test]
+    fn spell_tone_matrix_covers_double_accidentals_and_identity() {
+        let sharp_family = [
+            ('c', 'd', 0, 4),
+            ('d', 'e', 0, 4),
+            ('e', 'f', 1, 4),
+            ('f', 'g', 0, 4),
+            ('g', 'a', 0, 4),
+            ('a', 'b', 0, 4),
+            ('b', 'c', 1, 5),
+        ];
+        let flat_family = [
+            ('c', 'b', -1, 3),
+            ('d', 'c', 0, 4),
+            ('e', 'd', 0, 4),
+            ('f', 'e', -1, 4),
+            ('g', 'f', 0, 4),
+            ('a', 'g', 0, 4),
+            ('b', 'a', 0, 4),
+        ];
+
+        for (input, letter, accidental, octave) in sharp_family {
+            assert_eq!(
+                spell_tone(input, 2, 4),
+                Some(SpelledTone {
+                    letter,
+                    accidental,
+                    octave,
+                }),
+                "double-sharp family for {input}"
+            );
+        }
+        for (input, letter, accidental, octave) in flat_family {
+            assert_eq!(
+                spell_tone(input, -2, 4),
+                Some(SpelledTone {
+                    letter,
+                    accidental,
+                    octave,
+                }),
+                "double-flat family for {input}"
+            );
+        }
+        for letter in CHORD_LETTERS {
+            for accidental in -1..=1 {
+                assert_eq!(
+                    spell_tone(letter, accidental, 4),
+                    Some(SpelledTone {
+                        letter,
+                        accidental,
+                        octave: 4,
+                    })
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn spell_tone_iterates_until_large_accidentals_are_renderable() {
+        assert_eq!(
+            spell_tone('e', 3, 4),
+            Some(SpelledTone {
+                letter: 'g',
+                accidental: 0,
+                octave: 4,
+            })
+        );
+        assert_eq!(
+            spell_tone('c', -3, 4),
+            Some(SpelledTone {
+                letter: 'a',
+                accidental: 0,
+                octave: 3,
+            })
+        );
+    }
+
     // ----- renderGenericChord ------------------------------------------------
 
     #[test]
@@ -505,6 +790,14 @@ mod tests {
         assert_eq!(
             render_generic_chord('f', None, ChordSize::Triad).as_deref(),
             Some("f/a/c")
+        );
+    }
+
+    #[test]
+    fn generic_a_triad_uses_plain_letters() {
+        assert_eq!(
+            render_generic_chord('a', None, ChordSize::Triad).as_deref(),
+            Some("a/c/e")
         );
     }
 
@@ -531,6 +824,14 @@ mod tests {
         assert_eq!(
             render_generic_diatonic_dyad('b', None, 4).as_deref(),
             Some("b/f")
+        );
+    }
+
+    #[test]
+    fn dyad_b_sharp_second_preserves_plain_voicing() {
+        assert_eq!(
+            render_generic_diatonic_dyad('b', Some(RootAccidental::Sharp), 1).as_deref(),
+            Some("b+/c")
         );
     }
 
@@ -593,6 +894,14 @@ mod tests {
     }
 
     #[test]
+    fn named_f_major_preserves_plain_voicing() {
+        assert_eq!(
+            render_chord('f', None, by_name(""), &ks()).as_deref(),
+            Some("f/a/c")
+        );
+    }
+
+    #[test]
     fn named_c_minor() {
         assert_eq!(
             render_chord('c', None, by_name("m"), &ks()).as_deref(),
@@ -614,6 +923,41 @@ mod tests {
         assert_eq!(
             render_chord('c', None, by_name("m"), &key).as_deref(),
             Some("c/e/g")
+        );
+    }
+
+    #[test]
+    fn named_chord_respellings_preserve_root_and_use_respelled_key_sig_letter() {
+        let major = &CHORDS_3[0];
+        assert_eq!(
+            render_chord('b', Some(RootAccidental::Sharp), major, &ks()).as_deref(),
+            Some("b+/e/g")
+        );
+        assert_eq!(
+            render_stacked_chord(
+                'b',
+                Some(RootAccidental::Sharp),
+                major,
+                &ks(),
+                &[4, 4, 4],
+                false,
+            )
+            .as_deref(),
+            Some("b+/>e/>g")
+        );
+
+        let e_sharp_key = KeySig::new().with('e', 1);
+        assert_eq!(
+            render_chord('b', Some(RootAccidental::Sharp), major, &e_sharp_key,).as_deref(),
+            Some("b+/e=/g")
+        );
+    }
+
+    #[test]
+    fn named_a_major_preserves_plain_voicing() {
+        assert_eq!(
+            render_chord('a', None, by_name(""), &ks()).as_deref(),
+            Some("a/c+/e")
         );
     }
 
@@ -762,15 +1106,8 @@ mod tests {
         let roots = ['c', 'd', 'e', 'f', 'g', 'a', 'b', 'c'];
         let mut got: Vec<String> = Vec::with_capacity(roots.len());
         for &root in &roots {
-            let s = render_stacked_generic_chord(
-                root,
-                None,
-                ChordSize::Triad,
-                &ks(),
-                &ch,
-                false,
-            )
-            .unwrap();
+            let s = render_stacked_generic_chord(root, None, ChordSize::Triad, &ks(), &ch, false)
+                .unwrap();
             // Mutate ch according to leading >/< glyphs on each branch.
             for (k, branch) in s.split('/').enumerate() {
                 let mut shift = 0_i32;
@@ -787,16 +1124,7 @@ mod tests {
         }
         assert_eq!(
             got,
-            vec![
-                "c/e/g",
-                "d/f/a",
-                "e/g/b",
-                "f/a/>c",
-                "g/b/d",
-                "a/>c/e",
-                "b/d/f",
-                "c/<e/<g",
-            ]
+            vec!["c/e/g", "d/f/a", "e/g/b", "f/a/>c", "g/b/d", "a/>c/e", "b/d/f", "c/<e/<g",]
         );
     }
 
@@ -809,5 +1137,4 @@ mod tests {
         assert_eq!(accidental_char(Some(RootAccidental::Natural)), "=");
         assert_eq!(accidental_char(None), "");
     }
-
 }
