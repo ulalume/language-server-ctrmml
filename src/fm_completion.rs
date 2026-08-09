@@ -76,10 +76,7 @@ fn scan_instrument_files(uri: &str, roots: &[PathBuf]) -> Vec<PathBuf> {
     files
 }
 
-async fn parse_instruments(
-    cmd_path: &str,
-    files: &[PathBuf],
-) -> Vec<CachedPatch> {
+async fn parse_instruments(cmd_path: &str, files: &[PathBuf]) -> Vec<CachedPatch> {
     if files.is_empty() {
         return Vec::new();
     }
@@ -110,10 +107,7 @@ async fn parse_instruments(
         if let Some(response) = run_info(cmd_path, &unique_files).await {
             for p in response.patches {
                 let bn = p.file.clone().unwrap_or_default();
-                let full_path = unique_path_map
-                    .get(&bn)
-                    .cloned()
-                    .unwrap_or(bn);
+                let full_path = unique_path_map.get(&bn).cloned().unwrap_or(bn);
                 all_patches.push(CachedPatch {
                     file: full_path,
                     name: p.name,
@@ -256,9 +250,10 @@ fn build_items(
             items.push(default_template_item(line_num, *fm_end_col, col));
             items
         }
-        FmCompletionKind::SelectPatch { file_key, fm_end_col } => {
-            build_patch_items(patches, file_key, line_num, *fm_end_col, col)
-        }
+        FmCompletionKind::SelectPatch {
+            file_key,
+            fm_end_col,
+        } => build_patch_items(patches, file_key, line_num, *fm_end_col, col),
     }
 }
 

@@ -51,10 +51,30 @@ pub(crate) fn at_meta_completion_items(
         end: Position::new(line_index, col as u32),
     };
     vec![
-        at_meta_item("@<num>", docs::at_meta_doc("@<num>").unwrap_or(""), "${1:num}", range),
-        at_meta_item("@E<num>", docs::at_meta_doc("@E<num>").unwrap_or(""), "E${1:num}", range),
-        at_meta_item("@M<num>", docs::at_meta_doc("@M<num>").unwrap_or(""), "M${1:num}", range),
-        at_meta_item("@P<num>", docs::at_meta_doc("@P<num>").unwrap_or(""), "P${1:num}", range),
+        at_meta_item(
+            "@<num>",
+            docs::at_meta_doc("@<num>").unwrap_or(""),
+            "${1:num}",
+            range,
+        ),
+        at_meta_item(
+            "@E<num>",
+            docs::at_meta_doc("@E<num>").unwrap_or(""),
+            "E${1:num}",
+            range,
+        ),
+        at_meta_item(
+            "@M<num>",
+            docs::at_meta_doc("@M<num>").unwrap_or(""),
+            "M${1:num}",
+            range,
+        ),
+        at_meta_item(
+            "@P<num>",
+            docs::at_meta_doc("@P<num>").unwrap_or(""),
+            "P${1:num}",
+            range,
+        ),
     ]
 }
 
@@ -84,10 +104,7 @@ pub(crate) fn rate_offset_items() -> Vec<CompletionItem> {
 }
 
 pub(crate) fn command_items() -> Vec<CompletionItem> {
-    docs::COMMAND_COMPLETIONS
-        .iter()
-        .map(command_item)
-        .collect()
+    docs::COMMAND_COMPLETIONS.iter().map(command_item).collect()
 }
 
 pub(crate) fn platform_command_items(
@@ -211,10 +228,7 @@ pub(crate) fn fm_instrument_context(line: &str, col: usize) -> Option<FmCompleti
     }
     let leading_ws = prefix.len() - trimmed.len();
     let rest = &trimmed[1..];
-    let digits_len = rest
-        .chars()
-        .take_while(|ch| ch.is_ascii_digit())
-        .count();
+    let digits_len = rest.chars().take_while(|ch| ch.is_ascii_digit()).count();
     if digits_len == 0 {
         return None;
     }
@@ -243,7 +257,10 @@ pub(crate) fn fm_instrument_context(line: &str, col: usize) -> Option<FmCompleti
 
     if let Some(slash_pos) = after_fm_space.find('/') {
         let file_key = after_fm_space[..slash_pos].to_string();
-        Some(FmCompletionKind::SelectPatch { file_key, fm_end_col })
+        Some(FmCompletionKind::SelectPatch {
+            file_key,
+            fm_end_col,
+        })
     } else {
         Some(FmCompletionKind::SelectFile { fm_end_col })
     }
@@ -259,10 +276,7 @@ pub(crate) fn is_instrument_definition_context(line: &str, col: usize) -> bool {
         return false;
     }
     let rest = &trimmed[1..];
-    let digits_len = rest
-        .chars()
-        .take_while(|ch| ch.is_ascii_digit())
-        .count();
+    let digits_len = rest.chars().take_while(|ch| ch.is_ascii_digit()).count();
     if digits_len == 0 {
         return false;
     }
@@ -363,7 +377,6 @@ pub(crate) fn is_platform_command_context(line: &str, col: usize) -> bool {
     in_single
 }
 
-
 fn meta_prefix_start_col(line: &str, col: usize) -> u32 {
     let prefix = match line.get(..col) {
         Some(text) => text,
@@ -400,7 +413,6 @@ fn platform_command_start_col(line: &str, col: usize) -> u32 {
     };
     start as u32
 }
-
 
 fn string_prefix(line: &str, col: usize) -> Option<(String, usize)> {
     let before = line.get(..col)?;
@@ -472,11 +484,19 @@ fn meta_item(label: &str) -> CompletionItem {
 }
 
 fn platform_item(label: &str) -> CompletionItem {
-    documented_item(label, CompletionItemKind::KEYWORD, docs::platform_value_doc(label))
+    documented_item(
+        label,
+        CompletionItemKind::KEYWORD,
+        docs::platform_value_doc(label),
+    )
 }
 
 fn option_item(label: &str) -> CompletionItem {
-    documented_item(label, CompletionItemKind::KEYWORD, docs::option_value_doc(label))
+    documented_item(
+        label,
+        CompletionItemKind::KEYWORD,
+        docs::option_value_doc(label),
+    )
 }
 
 fn instrument_item(entry: &docs::DocEntry) -> CompletionItem {
