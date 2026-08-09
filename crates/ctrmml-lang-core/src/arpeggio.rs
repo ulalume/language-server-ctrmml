@@ -213,6 +213,18 @@ pub fn render_arpeggio_body(
         result.push_str(&mml);
         current_octave = new_octave;
     }
+
+    let net_displacement = result.bytes().fold(0i32, |net, byte| match byte {
+        b'>' => net + 1,
+        b'<' => net - 1,
+        _ => net,
+    });
+    if net_displacement > 0 {
+        result.push_str(&"<".repeat(net_displacement as usize));
+    } else if net_displacement < 0 {
+        result.push_str(&">".repeat((-net_displacement) as usize));
+    }
+
     Some(result)
 }
 
@@ -602,7 +614,7 @@ mod tests {
         );
         assert_eq!(
             render_chord_arpeggio('f', None, named(""), &no_key(), 4).as_deref(),
-            Some("fa>c")
+            Some("fa>c<")
         );
         assert_eq!(
             render_chord_arpeggio('c', None, named("m"), &no_key(), 4).as_deref(),
@@ -610,7 +622,7 @@ mod tests {
         );
         assert_eq!(
             render_chord_arpeggio('f', None, named("M7"), &no_key(), 4).as_deref(),
-            Some("fa>ce")
+            Some("fa>ce<")
         );
     }
 
@@ -629,11 +641,14 @@ mod tests {
         let render = |pattern: ArpeggioPattern| {
             render_arpeggio_body(&notes, &pattern.indices(3), 4, &no_key())
         };
-        assert_eq!(render(ArpeggioPattern::Up).as_deref(), Some("fa>c"));
+        assert_eq!(render(ArpeggioPattern::Up).as_deref(), Some("fa>c<"));
         assert_eq!(render(ArpeggioPattern::Down).as_deref(), Some(">c<af"));
         assert_eq!(render(ArpeggioPattern::UpDown).as_deref(), Some("fa>c<a"));
         assert_eq!(render(ArpeggioPattern::DownUp).as_deref(), Some(">c<afa"));
-        assert_eq!(render(ArpeggioPattern::Alberti).as_deref(), Some("f>c<a>c"));
+        assert_eq!(
+            render(ArpeggioPattern::Alberti).as_deref(),
+            Some("f>c<a>c<")
+        );
     }
 
     #[test]
@@ -657,7 +672,7 @@ mod tests {
     fn renders_generic_patterned_arpeggios() {
         assert_eq!(
             render_generic_arpeggio('f', None, 3, &no_key(), 4, ArpeggioPattern::Up).as_deref(),
-            Some("fa>c")
+            Some("fa>c<")
         );
         assert_eq!(
             render_generic_arpeggio('c', None, 4, &no_key(), 4, ArpeggioPattern::Alberti)
@@ -677,7 +692,7 @@ mod tests {
         assert_eq!(
             render_chord_arpeggio('b', Some(RootAccidental::Sharp), named(""), &no_key(), 4,)
                 .as_deref(),
-            Some("b+>eg")
+            Some("b+>eg<")
         );
 
         // C-flat minor resolves to C-flat, E-double-flat, G-flat; diminished
@@ -697,8 +712,66 @@ mod tests {
         assert_eq!(
             render_chord_arpeggio('b', Some(RootAccidental::Sharp), named(""), &e_sharp_key, 4,)
                 .as_deref(),
-            Some("b+>e=g")
+            Some("b+>e=g<")
         );
+    }
+
+    #[test]
+    fn all_arpeggio_bodies_are_octave_neutral() {
+        let roots = [
+            ('c', None, "c"),
+            ('a', None, "a"),
+            ('g', None, "g"),
+            ('b', Some(RootAccidental::Sharp), "b+"),
+            ('e', Some(RootAccidental::Flat), "e-"),
+        ];
+        let displacement = |body: &str| {
+            body.bytes().fold(0i32, |net, byte| match byte {
+                b'>' => net + 1,
+                b'<' => net - 1,
+                _ => net,
+            })
+        };
+        let mut bodies = 0usize;
+
+        for pattern in PATTERNS {
+            for &(root, root_accidental, root_name) in &roots {
+                for def in CHORDS_3.iter().chain(CHORDS_4) {
+                    let body = render_chord_arpeggio_with_pattern(
+                        root,
+                        root_accidental,
+                        def,
+                        &no_key(),
+                        4,
+                        pattern,
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        displacement(&body),
+                        0,
+                        "named {root_name}{} {} body {body:?}",
+                        def.suffix,
+                        pattern.name(),
+                    );
+                    bodies += 1;
+                }
+
+                for size in [3, 4] {
+                    let body =
+                        render_generic_arpeggio(root, root_accidental, size, &no_key(), 4, pattern)
+                            .unwrap();
+                    assert_eq!(
+                        displacement(&body),
+                        0,
+                        "generic {size}-note {root_name} {} body {body:?}",
+                        pattern.name(),
+                    );
+                    bodies += 1;
+                }
+            }
+        }
+
+        assert_eq!(bodies, 450);
     }
 
     #[test]
@@ -942,7 +1015,7 @@ mod tests {
                 &no_key(),
             )
             .as_deref(),
-            Some("f>c<a>c")
+            Some("f>c<a>c<")
         );
     }
 
