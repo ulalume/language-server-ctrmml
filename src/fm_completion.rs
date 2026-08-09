@@ -428,33 +428,409 @@ fn build_patch_items(
     patches
         .iter()
         .filter(|p| file_basename(&p.file) == file_key)
-        .map(|p| {
-            CompletionItem {
-                label: p.name.clone(),
-                label_details: Some(CompletionItemLabelDetails {
-                    detail: None,
-                    description: Some(file_key.to_string()),
-                }),
-                kind: Some(CompletionItemKind::VALUE),
-                detail: if p.has_macros {
-                    Some("[macros]".to_string())
-                } else {
-                    None
-                },
-                documentation: if p.file.is_empty() {
-                    None
-                } else {
-                    Some(Documentation::String(file_basename(&p.file).to_string()))
-                },
-                text_edit: Some(CompletionTextEdit::Edit(TextEdit {
-                    range,
-                    new_text: format!(" {}", p.mml),
-                })),
-                filter_text: Some(format!("{}/{}", file_key, p.name)),
-                sort_text: Some(p.name.clone()),
-                insert_text_mode: Some(InsertTextMode::AS_IS),
-                ..CompletionItem::default()
-            }
+        .map(|p| CompletionItem {
+            label: p.name.clone(),
+            label_details: Some(CompletionItemLabelDetails {
+                detail: None,
+                description: Some(file_key.to_string()),
+            }),
+            kind: Some(CompletionItemKind::VALUE),
+            detail: if p.has_macros {
+                Some("[macros]".to_string())
+            } else {
+                None
+            },
+            documentation: if p.file.is_empty() {
+                None
+            } else {
+                Some(Documentation::String(file_basename(&p.file).to_string()))
+            },
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                range,
+                new_text: format!(" {}", p.mml),
+            })),
+            filter_text: Some(format!("{}/{}", file_key, p.name)),
+            sort_text: Some(p.name.clone()),
+            insert_text_mode: Some(InsertTextMode::AS_IS),
+            ..CompletionItem::default()
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Characterization tests — pin TODAY's behavior ahead of the
+// COMPLETION_CORE_PLAN.md rewrite. These exercise only the pure,
+// already-parsed-data half of this module (item construction, basename
+// grouping/labeling). `scan_instrument_files` (real WalkDir over the
+// filesystem) and `parse_instruments`/`run_info`/`Backend::complete_fm_instruments`
+// (spawn `ym2612_convert`, or require a live `tower_lsp::Client` for
+// `Backend::new`) are not exercised here — see the task report for why.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn patch(file: &str, name: &str, has_macros: bool, mml: &str) -> CachedPatch {
+        CachedPatch {
+            file: file.to_string(),
+            name: name.to_string(),
+            has_macros,
+            mml: mml.to_string(),
+        }
+    }
+
+    fn range_text_edit(item: &CompletionItem) -> &TextEdit {
+        match item.text_edit.as_ref().expect("expected a text_edit") {
+            CompletionTextEdit::Edit(edit) => edit,
+            other => panic!("expected CompletionTextEdit::Edit, got {other:?}"),
+        }
+    }
+
+    // ---------- file_basename / file_stem / path_basename ------------------
+
+    #[test]
+    fn file_basename_strips_directory() {
+        assert_eq!(file_basename("patches/lead/Lead.dmp"), "Lead.dmp");
+    }
+
+    #[test]
+    fn file_basename_no_directory_is_identity() {
+        assert_eq!(file_basename("Lead.dmp"), "Lead.dmp");
+    }
+
+    #[test]
+    fn file_basename_empty_is_unknown_placeholder() {
+        assert_eq!(file_basename(""), "(unknown)");
+    }
+
+    #[test]
+    fn file_stem_strips_extension_and_directory() {
+        assert_eq!(file_stem("patches/lead/Lead.dmp"), "Lead");
+    }
+
+    #[test]
+    fn file_stem_no_extension_is_basename() {
+        assert_eq!(file_stem("patches/Lead"), "Lead");
+    }
+
+    #[test]
+    fn path_basename_matches_file_basename() {
+        let p = PathBuf::from("patches/lead/Lead.dmp");
+        assert_eq!(path_basename(&p), "Lead.dmp");
+    }
+
+    // ---------- unique_file_count -------------------------------------------
+
+    #[test]
+    fn unique_file_count_dedupes_same_file() {
+        let patches = vec![
+            patch("a.dmp", "Patch 1", false, "@1 fm"),
+            patch("a.dmp", "Patch 2", false, "@1 fm"),
+            patch("b.dmp", "Patch 3", false, "@1 fm"),
+        ];
+        assert_eq!(unique_file_count(&patches), 2);
+    }
+
+    #[test]
+    fn unique_file_count_empty_is_zero() {
+        assert_eq!(unique_file_count(&[]), 0);
+    }
+
+    // ---------- FmInstrumentCache::is_valid ---------------------------------
+
+    #[test]
+    fn cache_valid_with_matching_roots_and_cmd_path_and_fresh_scan() {
+        let cache = FmInstrumentCache {
+            entries: Vec::new(),
+            last_scan: SystemTime::now(),
+            roots: vec![PathBuf::from("/proj")],
+            cmd_path: "/usr/bin/ym2612_convert".to_string(),
+        };
+        assert!(cache.is_valid(&[PathBuf::from("/proj")], "/usr/bin/ym2612_convert"));
+    }
+
+    #[test]
+    fn cache_invalid_when_cmd_path_differs() {
+        let cache = FmInstrumentCache {
+            entries: Vec::new(),
+            last_scan: SystemTime::now(),
+            roots: vec![PathBuf::from("/proj")],
+            cmd_path: "/usr/bin/ym2612_convert".to_string(),
+        };
+        assert!(!cache.is_valid(&[PathBuf::from("/proj")], "/other/ym2612_convert"));
+    }
+
+    #[test]
+    fn cache_invalid_when_roots_differ() {
+        let cache = FmInstrumentCache {
+            entries: Vec::new(),
+            last_scan: SystemTime::now(),
+            roots: vec![PathBuf::from("/proj")],
+            cmd_path: "/usr/bin/ym2612_convert".to_string(),
+        };
+        assert!(!cache.is_valid(&[PathBuf::from("/other")], "/usr/bin/ym2612_convert"));
+    }
+
+    #[test]
+    fn cache_invalid_when_scan_older_than_ttl() {
+        let cache = FmInstrumentCache {
+            entries: Vec::new(),
+            last_scan: SystemTime::UNIX_EPOCH,
+            roots: vec![PathBuf::from("/proj")],
+            cmd_path: "/usr/bin/ym2612_convert".to_string(),
+        };
+        assert!(!cache.is_valid(&[PathBuf::from("/proj")], "/usr/bin/ym2612_convert"));
+    }
+
+    // ---------- default_template_item ---------------------------------------
+
+    #[test]
+    fn default_template_item_shape() {
+        let item = default_template_item(3, 10, 12);
+        assert_eq!(item.label, "Default FM template");
+        assert_eq!(item.kind, Some(CompletionItemKind::SNIPPET));
+        assert_eq!(item.detail.as_deref(), Some("template"));
+        assert_eq!(item.insert_text_format, Some(InsertTextFormat::SNIPPET));
+        // `~` sorts after alphanumerics, so this always lands last among
+        // file-derived items.
+        assert_eq!(item.sort_text.as_deref(), Some("~default"));
+        assert_eq!(item.filter_text.as_deref(), Some("default fm template"));
+        let edit = range_text_edit(&item);
+        assert_eq!(edit.range.start, Position::new(3, 10));
+        assert_eq!(edit.range.end, Position::new(3, 12));
+        assert_eq!(edit.new_text, FM_DEFAULT_TEMPLATE);
+    }
+
+    // ---------- build_flat_items ---------------------------------------------
+
+    #[test]
+    fn flat_item_shows_basename_when_name_differs_from_stem() {
+        let patches = vec![patch("patches/lead.dmp", "Lead Synth", false, "@1 fm ...")];
+        let items = build_flat_items(&patches, 5, 4, 8);
+        assert_eq!(items.len(), 1);
+        let item = &items[0];
+        assert_eq!(item.label, "Lead Synth");
+        assert_eq!(
+            item.label_details
+                .as_ref()
+                .and_then(|d| d.description.clone()),
+            Some("lead.dmp".to_string())
+        );
+        assert_eq!(
+            item.documentation,
+            Some(Documentation::String("lead.dmp".to_string()))
+        );
+        assert_eq!(item.kind, Some(CompletionItemKind::VALUE));
+        assert_eq!(item.detail, None);
+        assert_eq!(item.filter_text.as_deref(), Some("Lead Synth lead.dmp"));
+        assert_eq!(item.sort_text.as_deref(), Some("Lead Synth"));
+        assert_eq!(item.insert_text_mode, Some(InsertTextMode::AS_IS));
+        let edit = range_text_edit(item);
+        assert_eq!(edit.range.start, Position::new(5, 4));
+        assert_eq!(edit.range.end, Position::new(5, 8));
+        // The inserted MML always gets a leading space prepended, even if
+        // the user already typed one after `fm` themselves.
+        assert_eq!(edit.new_text, " @1 fm ...");
+    }
+
+    #[test]
+    fn flat_item_suppresses_label_details_when_name_matches_stem() {
+        // Name equal to the file stem is considered redundant — no
+        // `label_details` — but `documentation` is unaffected by that
+        // check (it only cares whether `file` is empty), so it still
+        // shows the basename. This asymmetry is today's behavior.
+        let patches = vec![patch("patches/lead.dmp", "lead", false, "@1 fm ...")];
+        let items = build_flat_items(&patches, 0, 0, 0);
+        assert_eq!(items[0].label_details, None);
+        assert_eq!(
+            items[0].documentation,
+            Some(Documentation::String("lead.dmp".to_string()))
+        );
+    }
+
+    #[test]
+    fn flat_item_empty_file_suppresses_details_and_documentation() {
+        let patches = vec![patch("", "Default", false, "@1 fm ...")];
+        let items = build_flat_items(&patches, 0, 0, 0);
+        assert_eq!(items[0].label_details, None);
+        assert_eq!(items[0].documentation, None);
+    }
+
+    #[test]
+    fn flat_item_has_macros_sets_detail_tag() {
+        let patches = vec![patch("a.dmp", "Patch", true, "@1 fm ...")];
+        let items = build_flat_items(&patches, 0, 0, 0);
+        assert_eq!(items[0].detail.as_deref(), Some("[macros]"));
+    }
+
+    #[test]
+    fn flat_items_preserve_input_order() {
+        let patches = vec![
+            patch("b.dmp", "B", false, "mb"),
+            patch("a.dmp", "A", false, "ma"),
+        ];
+        let items = build_flat_items(&patches, 0, 0, 0);
+        assert_eq!(
+            items.iter().map(|i| i.label.as_str()).collect::<Vec<_>>(),
+            vec!["B", "A"]
+        );
+    }
+
+    // ---------- build_file_items (hierarchy mode) -----------------------------
+
+    #[test]
+    fn file_item_single_patch_inserts_mml_directly() {
+        let patches = vec![patch("patches/lead.dmp", "Lead", false, "@1 fm ...")];
+        let items = build_file_items(&patches, 2, 4, 6);
+        assert_eq!(items.len(), 1);
+        let item = &items[0];
+        // Single-patch files skip the two-step picker: label is the
+        // basename (not the patch name), and the edit inserts the MML
+        // body immediately, just like a flat item.
+        assert_eq!(item.label, "lead.dmp");
+        assert_eq!(item.kind, Some(CompletionItemKind::VALUE));
+        assert_eq!(item.sort_text.as_deref(), Some("lead.dmp"));
+        assert_eq!(item.insert_text_mode, Some(InsertTextMode::AS_IS));
+        assert_eq!(item.command, None);
+        let edit = range_text_edit(item);
+        assert_eq!(edit.new_text, " @1 fm ...");
+    }
+
+    #[test]
+    fn file_item_multi_patch_inserts_basename_slash_and_retriggers() {
+        let patches = vec![
+            patch("kit.dmp", "Kick", false, "mk"),
+            patch("kit.dmp", "Snare", false, "ms"),
+        ];
+        let items = build_file_items(&patches, 1, 4, 6);
+        assert_eq!(items.len(), 1, "one item per file, not per patch");
+        let item = &items[0];
+        assert_eq!(item.label, "kit.dmp");
+        assert_eq!(item.kind, Some(CompletionItemKind::FILE));
+        assert_eq!(
+            item.label_details
+                .as_ref()
+                .and_then(|d| d.description.clone()),
+            Some("2".to_string())
+        );
+        let edit = range_text_edit(item);
+        // The hierarchy file-item insert: leading space, basename,
+        // trailing slash, so the picker's second step reads `fm kit.dmp/`.
+        assert_eq!(edit.new_text, " kit.dmp/");
+        let cmd = item
+            .command
+            .as_ref()
+            .expect("expected trigger-suggest command");
+        assert_eq!(cmd.command, "editor.action.triggerSuggest");
+    }
+
+    #[test]
+    fn file_items_one_per_unique_file_mixed_counts() {
+        let patches = vec![
+            patch("solo.dmp", "Solo", false, "ms"),
+            patch("kit.dmp", "Kick", false, "mk"),
+            patch("kit.dmp", "Snare", false, "msn"),
+        ];
+        let items = build_file_items(&patches, 0, 0, 0);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].label, "solo.dmp");
+        assert_eq!(items[0].kind, Some(CompletionItemKind::VALUE));
+        assert_eq!(items[1].label, "kit.dmp");
+        assert_eq!(items[1].kind, Some(CompletionItemKind::FILE));
+    }
+
+    // ---------- build_patch_items (hierarchy step 2) ---------------------------
+
+    #[test]
+    fn patch_items_filter_by_basename_key() {
+        let patches = vec![
+            patch("kit.dmp", "Kick", false, "mk"),
+            patch("kit.dmp", "Snare", true, "msn"),
+            patch("other.dmp", "Lead", false, "ml"),
+        ];
+        let items = build_patch_items(&patches, "kit.dmp", 0, 4, 6);
+        assert_eq!(items.len(), 2);
+        assert!(items
+            .iter()
+            .all(|i| i.label == "Kick" || i.label == "Snare"));
+        let snare = items.iter().find(|i| i.label == "Snare").unwrap();
+        assert_eq!(snare.detail.as_deref(), Some("[macros]"));
+        assert_eq!(snare.filter_text.as_deref(), Some("kit.dmp/Snare"));
+        assert_eq!(snare.sort_text.as_deref(), Some("Snare"));
+        // Unlike `build_flat_items`, `label_details` here is unconditional
+        // on the file key — it does not check name-vs-stem equality.
+        assert_eq!(
+            snare
+                .label_details
+                .as_ref()
+                .and_then(|d| d.description.clone()),
+            Some("kit.dmp".to_string())
+        );
+    }
+
+    // ---------- build_items dispatcher -----------------------------------------
+
+    #[test]
+    fn dispatch_select_file_flat_mode_appends_default_template() {
+        let patches = vec![patch("a.dmp", "A", false, "ma")];
+        let kind = FmCompletionKind::SelectFile { fm_end_col: 4 };
+        let items = build_items(&patches, &kind, 0, 8, /* hierarchy */ false);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].label, "A");
+        assert_eq!(items[1].label, "Default FM template");
+    }
+
+    #[test]
+    fn dispatch_select_file_hierarchy_falls_back_to_flat_when_one_file() {
+        // Hierarchy mode is requested, but only one unique file exists —
+        // `build_items` falls back to the flat rendering (a two-step
+        // picker would be pointless for a single file).
+        let patches = vec![
+            patch("a.dmp", "Patch 1", false, "m1"),
+            patch("a.dmp", "Patch 2", false, "m2"),
+        ];
+        let kind = FmCompletionKind::SelectFile { fm_end_col: 4 };
+        let items = build_items(&patches, &kind, 0, 8, /* hierarchy */ true);
+        // 2 flat patch items + 1 default template, not a single grouped
+        // file item.
+        assert_eq!(items.len(), 3);
+        assert!(items.iter().any(|i| i.label == "Patch 1"));
+        assert!(items.iter().any(|i| i.label == "Patch 2"));
+        assert!(items.iter().any(|i| i.label == "Default FM template"));
+    }
+
+    #[test]
+    fn dispatch_select_file_hierarchy_groups_when_multiple_files() {
+        // Two files, each with more than one patch, so both collapse to
+        // a FILE-kind grouped item (not a per-patch VALUE item).
+        let patches = vec![
+            patch("a.dmp", "Patch 1a", false, "m1a"),
+            patch("a.dmp", "Patch 1b", false, "m1b"),
+            patch("b.dmp", "Patch 2a", false, "m2a"),
+            patch("b.dmp", "Patch 2b", false, "m2b"),
+        ];
+        let kind = FmCompletionKind::SelectFile { fm_end_col: 4 };
+        let items = build_items(&patches, &kind, 0, 8, /* hierarchy */ true);
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].kind, Some(CompletionItemKind::FILE));
+        assert_eq!(items[1].kind, Some(CompletionItemKind::FILE));
+        assert_eq!(items[2].label, "Default FM template");
+    }
+
+    #[test]
+    fn dispatch_select_patch_does_not_append_default_template() {
+        // Only the SelectFile step ever appends the default-template
+        // fallback; the patch-selection step (inside a chosen file) does
+        // not repeat it.
+        let patches = vec![
+            patch("kit.dmp", "Kick", false, "mk"),
+            patch("kit.dmp", "Snare", false, "msn"),
+        ];
+        let kind = FmCompletionKind::SelectPatch {
+            file_key: "kit.dmp".to_string(),
+            fm_end_col: 4,
+        };
+        let items = build_items(&patches, &kind, 0, 8, true);
+        assert_eq!(items.len(), 2);
+        assert!(!items.iter().any(|i| i.label == "Default FM template"));
+    }
 }
