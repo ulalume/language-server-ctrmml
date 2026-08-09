@@ -16,8 +16,7 @@
 
 use ctrmml_lang_core::{
     chord::{
-        render_chord as core_render_chord,
-        render_generic_chord as core_render_generic_chord,
+        render_chord as core_render_chord, render_generic_chord as core_render_generic_chord,
         render_generic_diatonic_dyad as core_render_generic_diatonic_dyad,
         render_stacked_chord as core_render_stacked_chord,
         render_stacked_generic_chord as core_render_stacked_generic_chord,
@@ -294,11 +293,7 @@ pub fn render_stacked_chord(
 /// `step` is 1..=6 for 2nd through 7th. Letters only; accidentals come
 /// from the ambient key signature at playback.
 #[wasm_bindgen]
-pub fn render_generic_diatonic_dyad(
-    root: char,
-    root_accidental: i32,
-    step: u32,
-) -> Option<String> {
+pub fn render_generic_diatonic_dyad(root: char, root_accidental: i32, step: u32) -> Option<String> {
     let acc = decode_root_accidental(root_accidental);
     core_render_generic_diatonic_dyad(root, acc, step as i32)
 }
@@ -398,7 +393,11 @@ pub fn scan_channel_context(
     track_line: u32,
 ) -> ChannelContextResult {
     let model = LinesModel::from_text(doc_text);
-    let track_line = if track_line == 0 { None } else { Some(track_line) };
+    let track_line = if track_line == 0 {
+        None
+    } else {
+        Some(track_line)
+    };
     let ctx = ctrmml_lang_core::scan_channel_context_at(
         &model,
         line,
@@ -503,10 +502,7 @@ impl PsgEnvelopeHandle {
     /// Explicit length for envelope node `index`, or `None` to fall
     /// back to the envelope's `default_length`.
     pub fn node_length(&self, index: u32) -> Option<u32> {
-        self.inner
-            .nodes
-            .get(index as usize)
-            .and_then(|n| n.length)
+        self.inner.nodes.get(index as usize).and_then(|n| n.length)
     }
 
     /// Effective duration in frames for envelope node `index`. Resolves
@@ -749,6 +745,85 @@ impl From<ctrmml_lang_core::HoverInfo> for HoverInfoWire {
 pub fn code_lens_json(text: &str) -> String {
     serde_json::to_string(&ctrmml_lang_core::code_lens(text))
         .expect("code lens entries serialize to JSON")
+}
+
+// ---------------------------------------------------------------------------
+// Completion — stateless two-call adapter for JavaScript / TypeScript
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Serialize)]
+struct JsonError<'a> {
+    error: &'a str,
+}
+
+fn json_error(message: &str) -> String {
+    serde_json::to_string(&JsonError { error: message })
+        .expect("completion error message serializes to JSON")
+}
+
+fn completion_trigger(trigger: &str) -> Option<char> {
+    trigger.chars().next()
+}
+
+/// Run the first stage of completion at the zero-based UTF-16 position.
+///
+/// `trigger` is either a one-character string or `""` when completion was
+/// invoked without a trigger character. `settings_json` is a serialized
+/// [`ctrmml_lang_core::CompletionSettings`]; omitted fields use their defaults.
+/// Returns a serialized [`ctrmml_lang_core::CompletionPlan`]. Malformed settings
+/// JSON does not trap: it returns `{ "error": "..." }` instead.
+#[wasm_bindgen]
+pub fn completion_plan_json(
+    text: &str,
+    line: u32,
+    character: u32,
+    trigger: &str,
+    settings_json: &str,
+) -> String {
+    let settings: ctrmml_lang_core::CompletionSettings = match serde_json::from_str(settings_json) {
+        Ok(settings) => settings,
+        Err(error) => return json_error(&format!("invalid settings_json: {error}")),
+    };
+    let plan = ctrmml_lang_core::completion_plan(
+        text,
+        ctrmml_lang_core::Pos { line, character },
+        completion_trigger(trigger),
+        &settings,
+    );
+    serde_json::to_string(&plan).expect("completion plan serializes to JSON")
+}
+
+/// Resolve a data-bearing completion at the zero-based UTF-16 position.
+///
+/// `trigger` and `settings_json` follow [`completion_plan_json`]. `data_json`
+/// is a serialized [`ctrmml_lang_core::DataPayload`]. Returns a serialized
+/// [`ctrmml_lang_core::CoreCompletionList`]. Malformed settings or payload JSON
+/// does not trap: it returns `{ "error": "..." }` instead.
+#[wasm_bindgen]
+pub fn completion_resolve_json(
+    text: &str,
+    line: u32,
+    character: u32,
+    trigger: &str,
+    settings_json: &str,
+    data_json: &str,
+) -> String {
+    let settings: ctrmml_lang_core::CompletionSettings = match serde_json::from_str(settings_json) {
+        Ok(settings) => settings,
+        Err(error) => return json_error(&format!("invalid settings_json: {error}")),
+    };
+    let data: ctrmml_lang_core::DataPayload = match serde_json::from_str(data_json) {
+        Ok(data) => data,
+        Err(error) => return json_error(&format!("invalid data_json: {error}")),
+    };
+    let list = ctrmml_lang_core::completion_resolve(
+        text,
+        ctrmml_lang_core::Pos { line, character },
+        completion_trigger(trigger),
+        &settings,
+        data,
+    );
+    serde_json::to_string(&list).expect("completion list serializes to JSON")
 }
 
 /// Extract the `@N <type>` instrument block that covers `anchor_line`
@@ -1053,7 +1128,7 @@ mod tests {
         // F major flats b (index 6).
         let ks = scan_key_sig("A _{F} c", 1, 8);
         assert_eq!(ks[6], -1); // b flat
-        // c, d, e, f, g, a remain natural (F major only affects b).
+                               // c, d, e, f, g, a remain natural (F major only affects b).
         assert_eq!(&ks[0..6], &[0, 0, 0, 0, 0, 0]);
     }
 
@@ -1115,6 +1190,91 @@ mod tests {
         assert_eq!(env.node_value(99), i32::MIN);
         assert_eq!(env.node_target(99), None);
         assert_eq!(env.node_length(99), None);
+    }
+
+    // ---- completion JSON adapter -------------------------------------------
+
+    const FULL_COMPLETION_SETTINGS: &str = r#"{
+        "arpeggio_enabled": false,
+        "arpeggio_pattern": "up",
+        "chord_stack_mode": "stack_up",
+        "fm_picker_hierarchy": false
+    }"#;
+
+    #[test]
+    fn completion_plan_done_round_trip() {
+        let json = completion_plan_json("", 0, 0, "", FULL_COMPLETION_SETTINGS);
+        let plan: ctrmml_lang_core::CompletionPlan = serde_json::from_str(&json).unwrap();
+        let ctrmml_lang_core::CompletionPlan::Done(list) = plan else {
+            panic!("command fallback should complete during planning");
+        };
+        assert!(list.is_incomplete);
+        assert_eq!(list.items.len(), 37);
+        assert_eq!(list.items[0].label, "cdefgabh");
+    }
+
+    #[test]
+    fn completion_plan_needs_fm_patches_shape() {
+        let json = completion_plan_json("@1 fm", 0, 5, "", FULL_COMPLETION_SETTINGS);
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"needs": {"fm_patches": {"fragment": null}}})
+        );
+    }
+
+    #[test]
+    fn completion_resolve_fm_patches_round_trip() {
+        let data = serde_json::json!({
+            "fm_patches": [{
+                "rel_path": "inst/bass.dmp",
+                "name": "Bass",
+                "mml": "@1 fm ; Bass\n; ALG  FB\n    4   7\n",
+                "has_macros": false
+            }]
+        });
+        let json = completion_resolve_json(
+            "@1 fm ",
+            0,
+            6,
+            " ",
+            FULL_COMPLETION_SETTINGS,
+            &data.to_string(),
+        );
+        let list: ctrmml_lang_core::CoreCompletionList = serde_json::from_str(&json).unwrap();
+        assert!(!list.is_incomplete);
+        assert_eq!(list.items.len(), 2);
+        assert_eq!(list.items[0].label, "inst/bass.dmp — Bass");
+        assert_eq!(list.items[1].label, "Default FM template");
+    }
+
+    #[test]
+    fn completion_settings_allow_empty_partial_object() {
+        let json = completion_plan_json("@1 fm", 0, 5, "", "{}");
+        let plan: ctrmml_lang_core::CompletionPlan = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            plan,
+            ctrmml_lang_core::CompletionPlan::NeedsData(ctrmml_lang_core::DataRequest::FmPatches {
+                fragment: None
+            })
+        );
+    }
+
+    #[test]
+    fn completion_malformed_json_returns_error_objects() {
+        let settings_error = completion_plan_json("", 0, 0, "", "{");
+        let settings_value: serde_json::Value = serde_json::from_str(&settings_error).unwrap();
+        assert!(settings_value["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("invalid settings_json:"));
+
+        let data_error = completion_resolve_json("@1 fm", 0, 5, "", FULL_COMPLETION_SETTINGS, "{");
+        let data_value: serde_json::Value = serde_json::from_str(&data_error).unwrap();
+        assert!(data_value["error"]
+            .as_str()
+            .unwrap()
+            .starts_with("invalid data_json:"));
     }
 
     // ---- block finder + track selector helpers ------------------------------
