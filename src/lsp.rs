@@ -1350,7 +1350,9 @@ mod tests {
 
         let other = code_lens_with_config("@1 fm\n", code_lens_config(ClientKind::Other));
         assert_eq!(other.len(), 1);
-        assert_eq!(other[0].title, "FM");
+        // Codicon markers are dropped, but the play glyph stays so the lens
+        // still reads as a button in clients that render titles verbatim.
+        assert_eq!(other[0].title, "▷ FM");
         assert_eq!(other[0].command_id.as_deref(), Some(CMD_PREVIEW_PATCH));
     }
 

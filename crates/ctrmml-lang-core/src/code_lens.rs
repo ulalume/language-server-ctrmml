@@ -63,6 +63,11 @@ pub enum IconStyle {
     #[default]
     VsCode,
     /// Plain text for clients that do not understand codicon markers.
+    ///
+    /// Actionable icons become a text glyph so the lens still reads as a
+    /// button (`▷ FM`) instead of a bare noun. `U+25B7 WHITE RIGHT-POINTING
+    /// TRIANGLE` is used rather than `U+25B6`: it has no emoji presentation
+    /// sequence, so clients render it as text in the editor font.
     None,
 }
 
@@ -70,7 +75,10 @@ impl IconStyle {
     fn title(self, icon: &str, label: &str) -> String {
         match self {
             Self::VsCode => format!("$({icon}) {label}"),
-            Self::None => label.to_string(),
+            Self::None => match icon {
+                "play" => format!("▷ {label}"),
+                _ => label.to_string(),
+            },
         }
     }
 }
@@ -359,17 +367,18 @@ mod tests {
             },
         );
         assert!(lenses.iter().all(|lens| !lens.title.contains("$(")));
+        // Play actions keep a text glyph so the lens still reads as a button.
         let titles: Vec<&str> = lenses.iter().map(|lens| lens.title.as_str()).collect();
         assert_eq!(
             titles,
             [
                 "Load",
                 "Save",
-                "FM",
-                "Square",
-                "Noise mode=0",
-                "Noise mode=1",
-                "Noise mode=2",
+                "▷ FM",
+                "▷ Square",
+                "▷ Noise mode=0",
+                "▷ Noise mode=1",
+                "▷ Noise mode=2",
             ]
         );
     }
