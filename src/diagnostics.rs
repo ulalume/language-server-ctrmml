@@ -2,12 +2,16 @@ use serde::Deserialize;
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range};
 
 #[derive(Deserialize)]
-pub(crate) struct HighlightMessage {
-    #[serde(rename = "type")]
-    pub(crate) kind: String,
-    #[allow(dead_code)]
-    pub(crate) ticks: u32,
-    pub(crate) positions: Vec<HighlightPosition>,
+#[serde(tag = "type")]
+pub(crate) enum PlaybackMessage {
+    #[serde(rename = "highlight")]
+    Highlight {
+        #[allow(dead_code)]
+        ticks: u32,
+        positions: Vec<HighlightPosition>,
+    },
+    #[serde(rename = "playback_error")]
+    PlaybackError { message: String },
 }
 
 #[derive(Deserialize)]
@@ -74,6 +78,19 @@ pub(crate) fn diagnostics_for_positions(
     }
 
     out
+}
+
+pub(crate) fn diagnostic_for_playback_error(message: String) -> Diagnostic {
+    Diagnostic {
+        range: Range {
+            start: Position::new(0, 0),
+            end: Position::new(0, 0),
+        },
+        severity: Some(DiagnosticSeverity::ERROR),
+        source: Some("ctrmml-playback".to_string()),
+        message,
+        ..Diagnostic::default()
+    }
 }
 
 pub(crate) fn diagnostics_for_check_report(text: &str, report: &CheckReport) -> Vec<Diagnostic> {
@@ -210,4 +227,20 @@ fn parse_error_line(line: &str) -> Option<(u32, u32, String)> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn playback_error_diagnostic_uses_document_start_and_playback_source() {
+        let diagnostic = diagnostic_for_playback_error("unsupported playback mode".to_string());
+
+        assert_eq!(diagnostic.range.start, Position::new(0, 0));
+        assert_eq!(diagnostic.range.end, Position::new(0, 0));
+        assert_eq!(diagnostic.severity, Some(DiagnosticSeverity::ERROR));
+        assert_eq!(diagnostic.source.as_deref(), Some("ctrmml-playback"));
+        assert_eq!(diagnostic.message, "unsupported playback mode");
+    }
 }
