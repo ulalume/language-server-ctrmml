@@ -24,7 +24,24 @@ pub(crate) struct Playback {
     pub(crate) uri: String,
     pub(crate) child: tokio::process::Child,
     pub(crate) update_tx: Option<watch::Sender<Option<String>>>,
-    pub(crate) hot_reload: bool,
+    mode: PlaybackMode,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PlaybackMode {
+    Document,
+    // Preview positions refer to synthesized MML, never to `uri`'s document.
+    Preview,
+}
+
+impl PlaybackMode {
+    fn hot_reload(self) -> bool {
+        self == Self::Document
+    }
+
+    fn publishes_highlights(self) -> bool {
+        self == Self::Document
+    }
 }
 
 impl Backend {
@@ -45,7 +62,8 @@ impl Backend {
             .cloned()
             .or_else(|| read_file_text(&uri))
             .ok_or_else(|| "failed to read mml text".to_string())?;
-        self.start_playback_inner(uri, text, start, true).await
+        self.start_playback_inner(uri, text, start, PlaybackMode::Document)
+            .await
     }
 
     /// Play a caller-supplied MML body (e.g. a synthesized patch
@@ -57,7 +75,8 @@ impl Backend {
         text: String,
         start: Option<(u32, u32)>,
     ) -> std::result::Result<(), String> {
-        self.start_playback_inner(uri, text, start, false).await
+        self.start_playback_inner(uri, text, start, PlaybackMode::Preview)
+            .await
     }
 
     async fn start_playback_inner(
@@ -65,7 +84,7 @@ impl Backend {
         uri: String,
         text: String,
         start: Option<(u32, u32)>,
-        hot_reload: bool,
+        mode: PlaybackMode,
     ) -> std::result::Result<(), String> {
         self.stop_playback().await;
 
@@ -78,7 +97,7 @@ impl Backend {
             .arg("--path")
             .arg(&path)
             .arg("--follow");
-        if hot_reload {
+        if mode.hot_reload() {
             cmd.arg("--hot-reload");
         }
         if let Some((line, col)) = start {
@@ -96,7 +115,7 @@ impl Backend {
             .stdin
             .take()
             .ok_or_else(|| format!("failed to capture {CTRMML_CMD_NAME} stdin"))?;
-        write_initial(&mut stdin, &text, hot_reload).await?;
+        write_initial(&mut stdin, &text, mode.hot_reload()).await?;
 
         // Hot-reload: spawn a dedicated writer task fed by a latest-wins
         // `watch` channel. `did_change` only does an O(1) `Sender::send`,
@@ -106,7 +125,7 @@ impl Backend {
         //
         // Non-hot-reload: the child wants EOF on stdin so it can proceed
         // past its initial-read; let `stdin` drop here.
-        let update_tx = if hot_reload {
+        let update_tx = if mode.hot_reload() {
             let (tx, mut rx) = watch::channel::<Option<String>>(None);
             tokio::spawn(async move {
                 while rx.changed().await.is_ok() {
@@ -143,7 +162,7 @@ impl Backend {
                 uri: uri.clone(),
                 child,
                 update_tx,
-                hot_reload,
+                mode,
             });
         }
 
@@ -162,22 +181,22 @@ impl Backend {
                     Ok(msg) => msg,
                     Err(_) => continue,
                 };
-                let diags: Vec<Diagnostic> = match msg {
-                    PlaybackMessage::Highlight { positions, .. } => {
-                        let text = docs
-                            .read()
-                            .await
-                            .get(&uri_clone)
-                            .cloned()
-                            .or_else(|| read_file_text(&uri_clone))
-                            .unwrap_or_default();
-                        diagnostics_for_positions(&text, &positions)
-                    }
-                    PlaybackMessage::PlaybackError { message } => {
-                        playback_error_published = true;
-                        vec![diagnostic_for_playback_error(message)]
-                    }
+                let text = match &msg {
+                    PlaybackMessage::Highlight { .. } if mode.publishes_highlights() => docs
+                        .read()
+                        .await
+                        .get(&uri_clone)
+                        .cloned()
+                        .or_else(|| read_file_text(&uri_clone))
+                        .unwrap_or_default(),
+                    _ => String::new(),
                 };
+                let Some(diags) = diagnostics_for_playback_message(mode, &text, &msg) else {
+                    continue;
+                };
+                if matches!(msg, PlaybackMessage::PlaybackError { .. }) {
+                    playback_error_published = true;
+                }
                 if let Ok(uri) = uri_clone.parse() {
                     let _ = client.publish_diagnostics(uri, diags, None).await;
                 }
@@ -202,7 +221,7 @@ impl Backend {
         let Some(playback) = slot.as_ref() else {
             return;
         };
-        if !playback.hot_reload || playback.uri != uri {
+        if !playback.mode.hot_reload() || playback.uri != uri {
             return;
         }
         if let Some(tx) = playback.update_tx.as_ref() {
@@ -259,9 +278,55 @@ fn parse_playback_message(line: &str) -> serde_json::Result<PlaybackMessage> {
     serde_json::from_str(line)
 }
 
+fn diagnostics_for_playback_message(
+    mode: PlaybackMode,
+    text: &str,
+    message: &PlaybackMessage,
+) -> Option<Vec<Diagnostic>> {
+    match message {
+        PlaybackMessage::Highlight { positions, .. } if mode.publishes_highlights() => {
+            Some(diagnostics_for_positions(text, positions))
+        }
+        PlaybackMessage::Highlight { .. } => None,
+        PlaybackMessage::PlaybackError { message } => {
+            Some(vec![diagnostic_for_playback_error(message.clone())])
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn highlight_message() -> PlaybackMessage {
+        parse_playback_message(
+            r#"{"type":"highlight","ticks":24,"positions":[{"line":0,"col":2}]}"#,
+        )
+        .expect("highlight JSON should parse")
+    }
+
+    #[test]
+    fn preview_playback_produces_no_document_highlight_diagnostics() {
+        let diagnostics =
+            diagnostics_for_playback_message(PlaybackMode::Preview, "A cdef", &highlight_message());
+
+        assert!(diagnostics.is_none());
+    }
+
+    #[test]
+    fn document_playback_still_produces_highlight_diagnostics() {
+        let diagnostics = diagnostics_for_playback_message(
+            PlaybackMode::Document,
+            "A cdef",
+            &highlight_message(),
+        )
+        .expect("document playback should publish highlight diagnostics");
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].source.as_deref(), Some("ctrmml-playback"));
+        assert_eq!(diagnostics[0].range.start.line, 0);
+        assert_eq!(diagnostics[0].range.start.character, 2);
+    }
 
     #[test]
     fn parses_playback_error_message() {
