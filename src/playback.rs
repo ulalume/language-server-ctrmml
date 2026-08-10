@@ -7,7 +7,9 @@ use tower_lsp::lsp_types::Diagnostic;
 
 use crate::backend::Backend;
 use crate::ctrmml_cmd::CTRMML_CMD_NAME;
-use crate::diagnostics::{diagnostics_for_positions, HighlightMessage};
+use crate::diagnostics::{
+    diagnostic_for_playback_error, diagnostics_for_positions, PlaybackMessage,
+};
 use crate::utils::{read_file_text, uri_to_path};
 
 /// A running `ctrmml-cmd play` subprocess.
@@ -151,32 +153,37 @@ impl Backend {
         let uri_clone = uri.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout).lines();
+            let mut playback_error_published = false;
             while let Ok(Some(line)) = reader.next_line().await {
                 if *seq.lock().await != token {
                     break;
                 }
-                let msg = match serde_json::from_str::<HighlightMessage>(&line) {
+                let msg = match parse_playback_message(&line) {
                     Ok(msg) => msg,
                     Err(_) => continue,
                 };
-                if msg.kind != "highlight" {
-                    continue;
-                }
-
-                let text = docs
-                    .read()
-                    .await
-                    .get(&uri_clone)
-                    .cloned()
-                    .or_else(|| read_file_text(&uri_clone))
-                    .unwrap_or_default();
-                let diags: Vec<Diagnostic> = diagnostics_for_positions(&text, &msg.positions);
+                let diags: Vec<Diagnostic> = match msg {
+                    PlaybackMessage::Highlight { positions, .. } => {
+                        let text = docs
+                            .read()
+                            .await
+                            .get(&uri_clone)
+                            .cloned()
+                            .or_else(|| read_file_text(&uri_clone))
+                            .unwrap_or_default();
+                        diagnostics_for_positions(&text, &positions)
+                    }
+                    PlaybackMessage::PlaybackError { message } => {
+                        playback_error_published = true;
+                        vec![diagnostic_for_playback_error(message)]
+                    }
+                };
                 if let Ok(uri) = uri_clone.parse() {
                     let _ = client.publish_diagnostics(uri, diags, None).await;
                 }
             }
 
-            if *seq.lock().await == token {
+            if !playback_error_published && *seq.lock().await == token {
                 if let Ok(uri) = uri_clone.parse() {
                     let _ = client.publish_diagnostics(uri, Vec::new(), None).await;
                 }
@@ -246,4 +253,26 @@ async fn write_update_frame(
     stdin.write_all(text.as_bytes()).await?;
     stdin.write_all(b"\n").await?;
     stdin.flush().await
+}
+
+fn parse_playback_message(line: &str) -> serde_json::Result<PlaybackMessage> {
+    serde_json::from_str(line)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_playback_error_message() {
+        let message = parse_playback_message(
+            r#"{"type":"playback_error","message":"PCM mixing is unsupported"}"#,
+        )
+        .expect("playback_error JSON should parse");
+
+        let PlaybackMessage::PlaybackError { message } = message else {
+            panic!("expected playback_error message");
+        };
+        assert_eq!(message, "PCM mixing is unsupported");
+    }
 }
