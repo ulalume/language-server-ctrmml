@@ -105,15 +105,37 @@ fn completion_field<T: DeserializeOwned>(
 pub(crate) fn apply_completion_client_defaults(
     settings: &mut CompletionSettings,
     hierarchy_explicit: bool,
-    client_name: Option<&str>,
+    client_kind: ClientKind,
 ) {
     if hierarchy_explicit {
         return;
     }
-    if let Some(name) = client_name {
+    settings.fm_picker_hierarchy = client_kind.is_vscode();
+}
+
+/// LSP client behavior relevant to server capabilities and presentation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum ClientKind {
+    VsCode,
+    #[default]
+    Other,
+}
+
+impl ClientKind {
+    pub(crate) fn from_name(client_name: Option<&str>) -> Self {
+        let Some(name) = client_name else {
+            return Self::Other;
+        };
         let name = name.to_lowercase();
-        settings.fm_picker_hierarchy =
-            name.contains("visual studio code") || name.contains("vscode");
+        if name.contains("visual studio code") || name.contains("vscode") {
+            Self::VsCode
+        } else {
+            Self::Other
+        }
+    }
+
+    pub(crate) const fn is_vscode(self) -> bool {
+        matches!(self, Self::VsCode)
     }
 }
 
@@ -191,10 +213,24 @@ mod tests {
         apply_completion_client_defaults(
             &mut settings,
             hierarchy_explicit,
-            Some("Visual Studio Code"),
+            ClientKind::from_name(Some("Visual Studio Code")),
         );
 
         assert!(!settings.fm_picker_hierarchy);
         assert!(hierarchy_explicit);
+    }
+
+    #[test]
+    fn client_kind_reuses_vscode_name_sniff() {
+        assert_eq!(
+            ClientKind::from_name(Some("Visual Studio Code")),
+            ClientKind::VsCode
+        );
+        assert_eq!(
+            ClientKind::from_name(Some("vscode-ctrmml")),
+            ClientKind::VsCode
+        );
+        assert_eq!(ClientKind::from_name(Some("Zed")), ClientKind::Other);
+        assert_eq!(ClientKind::from_name(None), ClientKind::Other);
     }
 }

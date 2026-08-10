@@ -9,6 +9,8 @@ use tower_lsp::lsp_types::{
     CodeAction, CodeActionKind, Command, Position, Range, TextEdit, Url, WorkspaceEdit,
 };
 
+use crate::config::ClientKind;
+
 pub(crate) struct CommandDef {
     pub(crate) id: &'static str,
     pub(crate) title: &'static str,
@@ -89,18 +91,26 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         id: CMD_QUICKROM_MENU,
         title: "ctrmml: quickrom...",
     },
-    // `mml.previewPatch` / `mml.savePatch` are not in this list on
+    // `mml.previewPatch` / `mml.savePatch` are not in this base list on
     // purpose. vscode-languageclient auto-registers a forwarder for
     // every advertised command, which collides with the client-side
     // handlers vscode-ctrmml installs (file dialogs, completion
     // trigger) — and the synchronous throw on duplicate registration
     // prevents the other lens commands from registering at all.
-    // The server still handles them via `execute_command` because the
+    // `command_ids` conditionally advertises preview to non-VS Code
+    // clients, where standards-conforming clients need it before they
+    // will execute the lens. Save still requires client-side file UI and
+    // remains unadvertised.
+    // The server still handles both via `execute_command` because the
     // match is by name, not by capability.
 ];
 
-pub(crate) fn command_ids() -> Vec<String> {
-    COMMANDS.iter().map(|entry| entry.id.to_string()).collect()
+pub(crate) fn command_ids(client_kind: ClientKind) -> Vec<String> {
+    let mut commands: Vec<String> = COMMANDS.iter().map(|entry| entry.id.to_string()).collect();
+    if !client_kind.is_vscode() {
+        commands.push(CMD_PREVIEW_PATCH.to_string());
+    }
+    commands
 }
 
 pub(crate) fn command_title(command_id: &str) -> &str {
@@ -209,5 +219,20 @@ fn command_action(title: &str, command: &str, arguments: Vec<Value>) -> CodeActi
             arguments: args,
         }),
         ..CodeAction::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preview_patch_is_advertised_only_outside_vscode() {
+        let vscode = command_ids(ClientKind::VsCode);
+        assert!(!vscode.iter().any(|command| command == CMD_PREVIEW_PATCH));
+
+        let other = command_ids(ClientKind::Other);
+        assert!(other.iter().any(|command| command == CMD_PREVIEW_PATCH));
+        assert!(!other.iter().any(|command| command == CMD_SAVE_PATCH));
     }
 }
