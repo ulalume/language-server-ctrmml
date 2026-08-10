@@ -19,7 +19,7 @@ use tower_lsp::{
 use crate::backend::Backend;
 use crate::completion::scan_pcm_paths;
 use crate::config::{
-    apply_completion_client_defaults, completion_settings_from_value, config_from_value,
+    apply_completion_client_defaults, completion_settings_from_value, config_from_value, ClientKind,
 };
 use crate::export::ExportFormat;
 use crate::fill_measure::{fetch_cursor_tick, fill_measure_code_action};
@@ -40,13 +40,16 @@ use ctrmml_lang_core::completion::{
 };
 use ctrmml_lang_core::transpose::Direction;
 use ctrmml_lang_core::{
-    build_preview_mml, code_lens, extract_instrument_block, hover_at, is_in_comment, token_at,
-    InstrumentType,
+    build_preview_mml, code_lens_with_config, extract_instrument_block, hover_at, is_in_comment,
+    token_at, CodeLensConfig, IconStyle, InstrumentType,
 };
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        let client_kind =
+            ClientKind::from_name(params.client_info.as_ref().map(|info| info.name.as_str()));
+        *self.client_kind.write().await = client_kind;
         let supports_completion_as_is = params
             .capabilities
             .text_document
@@ -82,11 +85,7 @@ impl LanguageServer for Backend {
 
         // Compatibility until native extensions send completion settings:
         // client-name sniffing may fill only an omitted hierarchy flag.
-        apply_completion_client_defaults(
-            &mut completion_settings,
-            hierarchy_explicit,
-            params.client_info.as_ref().map(|info| info.name.as_str()),
-        );
+        apply_completion_client_defaults(&mut completion_settings, hierarchy_explicit, client_kind);
         *self.completion_settings.write().await = completion_settings;
 
         Ok(InitializeResult {
@@ -122,7 +121,7 @@ impl LanguageServer for Backend {
                 }),
                 definition_provider: Some(OneOf::Left(true)),
                 execute_command_provider: Some(ExecuteCommandOptions {
-                    commands: command_ids(),
+                    commands: command_ids(client_kind),
                     ..ExecuteCommandOptions::default()
                 }),
                 code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
@@ -343,8 +342,10 @@ impl LanguageServer for Backend {
             .get(&uri)
             .cloned()
             .unwrap_or_default();
+        let client_kind = *self.client_kind.read().await;
+        let config = code_lens_config(client_kind);
         let mut out = Vec::new();
-        for lens in code_lens(&text) {
+        for lens in code_lens_with_config(&text, config) {
             // The lens's anchor span is the entire line; clients are free
             // to position the chip however they like.
             let line = lens.line;
@@ -619,33 +620,31 @@ impl LanguageServer for Backend {
                 // The LSP layer prepended the uri before forwarding; the
                 // lang-core side keeps the line as a string in LSP wire
                 // form (zero-based).
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
                 // lang-core emits the line as a string; vscode-ctrmml may
                 // forward it as a number once it grows its own typed
                 // wrapper. Accept either shape.
-                let line = args
-                    .get(1)
-                    .and_then(|v| {
-                        v.as_u64()
-                            .or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))
-                    })
-                    .unwrap_or(0) as u32;
-                let type_str = args.get(2).and_then(|v| v.as_str()).unwrap_or("");
-                let channel = args.get(3).and_then(|v| v.as_str()).unwrap_or("");
-                let ty = match InstrumentType::parse(type_str) {
+                let parsed = parse_preview_patch_args(&args);
+                let uri = match parsed.uri {
+                    Some(uri) => uri,
+                    None => match self.resolve_uri_arg(&args).await {
+                        Ok(uri) => uri,
+                        Err(err) => {
+                            let _ = self.client.show_message(MessageType::ERROR, err).await;
+                            return Ok(None);
+                        }
+                    },
+                };
+                let ty = match InstrumentType::parse(&parsed.instrument_type) {
                     Some(ty) => ty,
                     None => {
                         let _ = self
                             .client
                             .show_message(
                                 MessageType::ERROR,
-                                format!("previewPatch: unknown instrument type `{type_str}`"),
+                                format!(
+                                    "previewPatch: unknown instrument type `{}`",
+                                    parsed.instrument_type
+                                ),
                             )
                             .await;
                         return Ok(None);
@@ -659,17 +658,20 @@ impl LanguageServer for Backend {
                         .await;
                     return Ok(None);
                 };
-                let Some(block) = extract_instrument_block(&doc_text, line, ty) else {
+                let Some(block) = extract_instrument_block(&doc_text, parsed.line, ty) else {
                     let _ = self
                         .client
                         .show_message(
                             MessageType::ERROR,
-                            format!("previewPatch: no @N {type_str} block at line {line}"),
+                            format!(
+                                "previewPatch: no @N {} block at line {}",
+                                parsed.instrument_type, parsed.line
+                            ),
                         )
                         .await;
                     return Ok(None);
                 };
-                let preview = build_preview_mml(&doc_text, &block, channel);
+                let preview = build_preview_mml(&doc_text, &block, &parsed.channel);
                 if let Err(err) = self.start_playback_with_text(uri, preview, None).await {
                     let _ = self.client.show_message(MessageType::ERROR, err).await;
                 }
@@ -766,6 +768,50 @@ impl LanguageServer for Backend {
 
     async fn shutdown(&self) -> Result<()> {
         Ok(())
+    }
+}
+
+fn code_lens_config(client_kind: ClientKind) -> CodeLensConfig {
+    if client_kind.is_vscode() {
+        CodeLensConfig::default()
+    } else {
+        CodeLensConfig {
+            icon_style: IconStyle::None,
+            include_file_actions: false,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct PreviewPatchArgs {
+    uri: Option<String>,
+    line: u32,
+    instrument_type: String,
+    channel: String,
+}
+
+fn parse_preview_patch_args(args: &[Value]) -> PreviewPatchArgs {
+    let line = args
+        .get(1)
+        .and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_str().and_then(|line| line.parse::<u64>().ok()))
+        })
+        .unwrap_or(0) as u32;
+    PreviewPatchArgs {
+        uri: args.first().and_then(Value::as_str).map(str::to_string),
+        line,
+        instrument_type: args
+            .get(2)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        channel: args
+            .get(3)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
     }
 }
 
@@ -1291,5 +1337,41 @@ mod tests {
         };
         assert!(list.is_incomplete);
         assert_eq!(list.items.len(), 1);
+    }
+
+    #[test]
+    fn code_lens_policy_preserves_vscode_and_limits_other_clients_to_preview() {
+        let vscode = code_lens_with_config("@1 fm\n", code_lens_config(ClientKind::VsCode));
+        let vscode_titles: Vec<&str> = vscode.iter().map(|lens| lens.title.as_str()).collect();
+        assert_eq!(
+            vscode_titles,
+            ["$(folder-opened) Load", "$(save) Save", "$(play) FM"]
+        );
+
+        let other = code_lens_with_config("@1 fm\n", code_lens_config(ClientKind::Other));
+        assert_eq!(other.len(), 1);
+        assert_eq!(other[0].title, "FM");
+        assert_eq!(other[0].command_id.as_deref(), Some(CMD_PREVIEW_PATCH));
+    }
+
+    #[test]
+    fn preview_lens_arguments_round_trip_through_handler_parser() {
+        let lens = code_lens_with_config("@7 fm\n", code_lens_config(ClientKind::Other))
+            .into_iter()
+            .find(|lens| lens.command_id.as_deref() == Some(CMD_PREVIEW_PATCH))
+            .expect("FM preview lens");
+        assert_eq!(lens.arguments, ["0", "fm", "A", "7"]);
+
+        let mut wire_args = vec![Value::String("file:///song.mml".to_string())];
+        wire_args.extend(lens.arguments.into_iter().map(Value::String));
+        assert_eq!(
+            parse_preview_patch_args(&wire_args),
+            PreviewPatchArgs {
+                uri: Some("file:///song.mml".to_string()),
+                line: 0,
+                instrument_type: "fm".to_string(),
+                channel: "A".to_string(),
+            }
+        );
     }
 }

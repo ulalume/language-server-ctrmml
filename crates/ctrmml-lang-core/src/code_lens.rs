@@ -6,8 +6,7 @@
 //!    lenses anchored to `@N fm` / `@N psg` / `@N pcm` definitions. Command
 //!    IDs match what `web-ctrmml` already wires up (`mml.previewPatch`,
 //!    `mml.loadPatch`, `mml.savePatch`); other consumers (vscode-ctrmml,
-//!    zed-ctrmml) can either register matching handlers or display the
-//!    titles informationally.
+//!    zed-ctrmml) choose the icon syntax and whether file actions are useful.
 //! 2. **Track header labels** — for lines that start with a track selector
 //!    (`A`, `AB`, `*32`, …), an informational `FM1, FM2` style label so the
 //!    reader can tell which channels a section drives at a glance.
@@ -57,6 +56,42 @@ impl CodeLens {
     }
 }
 
+/// Icon syntax to use in command titles.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum IconStyle {
+    /// VS Code/Monaco codicon markers such as `$(play)`.
+    #[default]
+    VsCode,
+    /// Plain text for clients that do not understand codicon markers.
+    None,
+}
+
+impl IconStyle {
+    fn title(self, icon: &str, label: &str) -> String {
+        match self {
+            Self::VsCode => format!("$({icon}) {label}"),
+            Self::None => label.to_string(),
+        }
+    }
+}
+
+/// Consumer-specific code-lens rendering and command options.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CodeLensConfig {
+    pub icon_style: IconStyle,
+    /// Emit Load/Save actions, which require client-side file UI.
+    pub include_file_actions: bool,
+}
+
+impl Default for CodeLensConfig {
+    fn default() -> Self {
+        Self {
+            icon_style: IconStyle::VsCode,
+            include_file_actions: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PreviewType {
     Fm,
@@ -93,6 +128,11 @@ const CHANNEL_DESCRIPTIONS: &[&str] = &[
 
 /// Enumerate code lenses for `text`.
 pub fn code_lens(text: &str) -> Vec<CodeLens> {
+    code_lens_with_config(text, CodeLensConfig::default())
+}
+
+/// Enumerate code lenses for `text` using consumer-specific options.
+pub fn code_lens_with_config(text: &str, config: CodeLensConfig) -> Vec<CodeLens> {
     let lines: Vec<&str> = text.lines().collect();
     let mut out = Vec::new();
 
@@ -100,7 +140,13 @@ pub fn code_lens(text: &str) -> Vec<CodeLens> {
         let line_idx = idx as u32;
 
         if let Some(def) = find_definition(&lines, idx) {
-            emit_instrument_variants(line_idx, def.preview_type, def.instrument_number, &mut out);
+            emit_instrument_variants(
+                line_idx,
+                def.preview_type,
+                def.instrument_number,
+                config,
+                &mut out,
+            );
             continue;
         }
 
@@ -187,6 +233,7 @@ fn emit_instrument_variants(
     line: u32,
     ty: PreviewType,
     instrument_number: u32,
+    config: CodeLensConfig,
     out: &mut Vec<CodeLens>,
 ) {
     let n = instrument_number.to_string();
@@ -197,49 +244,53 @@ fn emit_instrument_variants(
 
     match ty {
         PreviewType::Fm => {
+            if config.include_file_actions {
+                out.push(CodeLens::cmd(
+                    line,
+                    config.icon_style.title("folder-opened", "Load"),
+                    load,
+                    vec![line_str.clone(), ty.arg().to_string()],
+                ));
+                out.push(CodeLens::cmd(
+                    line,
+                    config.icon_style.title("save", "Save"),
+                    save,
+                    vec![line_str.clone(), ty.arg().to_string()],
+                ));
+            }
             out.push(CodeLens::cmd(
                 line,
-                "$(folder-opened) Load",
-                load,
-                vec![line_str.clone(), ty.arg().to_string()],
-            ));
-            out.push(CodeLens::cmd(
-                line,
-                "$(save) Save",
-                save,
-                vec![line_str.clone(), ty.arg().to_string()],
-            ));
-            out.push(CodeLens::cmd(
-                line,
-                "$(play) FM",
+                config.icon_style.title("play", "FM"),
                 preview,
                 vec![line_str, ty.arg().to_string(), "A".to_string(), n],
             ));
         }
         PreviewType::Pcm => {
+            if config.include_file_actions {
+                out.push(CodeLens::cmd(
+                    line,
+                    config.icon_style.title("folder-opened", "Load"),
+                    load,
+                    vec![line_str.clone(), ty.arg().to_string()],
+                ));
+            }
             out.push(CodeLens::cmd(
                 line,
-                "$(folder-opened) Load",
-                load,
-                vec![line_str.clone(), ty.arg().to_string()],
-            ));
-            out.push(CodeLens::cmd(
-                line,
-                "$(play) pcm",
+                config.icon_style.title("play", "pcm"),
                 preview,
                 vec![line_str, ty.arg().to_string(), "F".to_string(), n],
             ));
         }
         PreviewType::Psg => {
-            for (title, channel) in [
-                ("$(play) Square", "G"),
-                ("$(play) Noise mode=0", "J"),
-                ("$(play) Noise mode=1", "J 'mode 1'"),
-                ("$(play) Noise mode=2", "J 'mode 2'"),
+            for (label, channel) in [
+                ("Square", "G"),
+                ("Noise mode=0", "J"),
+                ("Noise mode=1", "J 'mode 1'"),
+                ("Noise mode=2", "J 'mode 2'"),
             ] {
                 out.push(CodeLens::cmd(
                     line,
-                    title,
+                    config.icon_style.title("play", label),
                     preview,
                     vec![
                         line_str.clone(),
@@ -296,6 +347,48 @@ mod tests {
         let lenses = code_lens(text);
         let titles: Vec<&str> = lenses.iter().map(|l| l.title.as_str()).collect();
         assert_eq!(titles, ["$(folder-opened) Load", "$(play) pcm"]);
+    }
+
+    #[test]
+    fn plain_titles_have_no_codicon_markers() {
+        let lenses = code_lens_with_config(
+            "@1 fm\n@2 psg 15 14 13\n",
+            CodeLensConfig {
+                icon_style: IconStyle::None,
+                ..CodeLensConfig::default()
+            },
+        );
+        assert!(lenses.iter().all(|lens| !lens.title.contains("$(")));
+        let titles: Vec<&str> = lenses.iter().map(|lens| lens.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            [
+                "Load",
+                "Save",
+                "FM",
+                "Square",
+                "Noise mode=0",
+                "Noise mode=1",
+                "Noise mode=2",
+            ]
+        );
+    }
+
+    #[test]
+    fn file_actions_can_be_omitted_without_removing_preview() {
+        let lenses = code_lens_with_config(
+            "@1 fm\n@2 pcm \"path.wav\"\n",
+            CodeLensConfig {
+                include_file_actions: false,
+                ..CodeLensConfig::default()
+            },
+        );
+        assert_eq!(lenses.len(), 2);
+        assert!(lenses
+            .iter()
+            .all(|lens| lens.command_id.as_deref() == Some("mml.previewPatch")));
+        let titles: Vec<&str> = lenses.iter().map(|lens| lens.title.as_str()).collect();
+        assert_eq!(titles, ["$(play) FM", "$(play) pcm"]);
     }
 
     #[test]

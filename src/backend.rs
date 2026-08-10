@@ -6,7 +6,7 @@ use tower_lsp::Client;
 
 use ctrmml_lang_core::completion::CompletionSettings;
 
-use crate::config::Config;
+use crate::config::{ClientKind, Config};
 use crate::ctrmml_cmd::resolve_command_path;
 use crate::fm_completion::FmInstrumentCache;
 use crate::playback::Playback;
@@ -25,6 +25,7 @@ pub(crate) struct Backend {
     pub(crate) last_doc: Arc<RwLock<Option<String>>>,
     pub(crate) completion_settings: Arc<RwLock<CompletionSettings>>,
     pub(crate) supports_completion_as_is: Arc<RwLock<bool>>,
+    pub(crate) client_kind: Arc<RwLock<ClientKind>>,
 }
 
 struct CommandPathCache {
@@ -47,6 +48,7 @@ impl Backend {
             last_doc: Arc::new(RwLock::new(None)),
             completion_settings: Arc::new(RwLock::new(CompletionSettings::default())),
             supports_completion_as_is: Arc::new(RwLock::new(false)),
+            client_kind: Arc::new(RwLock::new(ClientKind::default())),
         }
     }
 

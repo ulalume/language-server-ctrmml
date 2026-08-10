@@ -48,7 +48,7 @@ pub use chord::{
     render_stacked_generic_diatonic_dyad, ChordDef, ChordSize, DyadDef, RootAccidental, CHORDS_3,
     CHORDS_4, CHORD_LETTERS, DYADS,
 };
-pub use code_lens::{code_lens, CodeLens};
+pub use code_lens::{code_lens, code_lens_with_config, CodeLens, CodeLensConfig, IconStyle};
 pub use completion::{
     byte_offset_to_utf16_character, completion_plan, completion_resolve,
     utf16_character_to_byte_offset, word_range_before_cursor, ArpeggioPattern, ChordStackMode,
