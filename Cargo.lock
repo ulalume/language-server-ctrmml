@@ -2107,7 +2107,7 @@ dependencies = [
 [[package]]
 name = "ym2612-format"
 version = "0.3.0"
-source = "git+https://github.com/ulalume/ym2612_format.git?tag=v0.3.0#c5722fc6ae838f6f9a161f06206a30c1d94af668"
+source = "git+https://github.com/ulalume/ym2612_format.git?tag=v0.3.0#5352892957ce695c36badcb48d7b0871006bf2b6"
 dependencies = [
  "cc",
  "serde",
