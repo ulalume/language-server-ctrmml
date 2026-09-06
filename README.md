@@ -8,6 +8,8 @@ Language Server for ctrmml.
 cargo build
 ```
 
+Building requires a C++20 compiler; the `ym2612_format` sources are compiled by the crate's build script.
+
 ## Run (stdio)
 
 ```sh
@@ -16,15 +18,11 @@ cargo run
 
 ## FM instrument completion
 
-This server provides FM instrument completion via `ym2612_convert`.
+This server provides FM instrument completion via the `ym2612_format` library, linked into the binary.
 
-- Workspace instrument files (.dmp, .fui, .fur, .gin, .ginpkg, etc.) are auto-scanned and cached.
+- Workspace instrument files (.dmp, .dmf, .fui, .fur, .gin, .ginpkg, .rym2612, .tfi, .vgi, .eif, .vgm, .vgz, .spat) are auto-scanned and cached.
 - Completing after `@N fm` inserts FM parameters as MML.
-- By default, `ym2612_convert` is auto-downloaded from https://github.com/ulalume/ym2612_convert (GitHub Releases).
-- Optional overrides:
-  - `ym2612_convert_path` in LSP initialization options
-  - `YM2612_CONVERT_PATH` environment variable
-  - `ym2612_convert` on PATH
+- The scanned extension set comes from the library's format list.
 
 ## Playback integration
 
