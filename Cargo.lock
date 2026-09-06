@@ -194,14 +194,14 @@ dependencies = [
 
 [[package]]
 name = "ctrmml-lang-core"
-version = "0.6.11"
+version = "0.7.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "ctrmml-lang-wasm"
-version = "0.6.11"
+version = "0.7.0"
 dependencies = [
  "ctrmml-lang-core",
  "serde",
@@ -211,7 +211,7 @@ dependencies = [
 
 [[package]]
 name = "ctrmml-lsp"
-version = "0.6.11"
+version = "0.7.0"
 dependencies = [
  "ctrmml-lang-core",
  "dirs",
