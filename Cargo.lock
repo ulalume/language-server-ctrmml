@@ -194,14 +194,14 @@ dependencies = [
 
 [[package]]
 name = "ctrmml-lang-core"
-version = "0.6.11"
+version = "0.7.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "ctrmml-lang-wasm"
-version = "0.6.11"
+version = "0.7.0"
 dependencies = [
  "ctrmml-lang-core",
  "serde",
@@ -211,7 +211,7 @@ dependencies = [
 
 [[package]]
 name = "ctrmml-lsp"
-version = "0.6.11"
+version = "0.7.0"
 dependencies = [
  "ctrmml-lang-core",
  "dirs",
@@ -226,6 +226,7 @@ dependencies = [
  "tower-lsp",
  "url",
  "walkdir",
+ "ym2612-format",
  "zip",
 ]
 
@@ -2101,6 +2102,16 @@ checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
 dependencies = [
  "libc",
  "rustix",
+]
+
+[[package]]
+name = "ym2612-format"
+version = "0.3.0"
+source = "git+https://github.com/ulalume/ym2612_format.git?tag=v0.3.0#5352892957ce695c36badcb48d7b0871006bf2b6"
+dependencies = [
+ "cc",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

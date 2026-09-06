@@ -25,15 +25,14 @@ use crate::export::ExportFormat;
 use crate::fill_measure::{fetch_cursor_tick, fill_measure_code_action};
 use crate::lsp_commands::{
     code_actions, command_ids, transpose_code_action, CMD_EXPORT_VGM, CMD_EXPORT_WAV,
-    CMD_MDSLINK_DIRECTORY, CMD_MDSLINK_FILE, CMD_MDSLINK_FROM_CONFIG, CMD_MDSLINK_MENU, CMD_PLAY,
-    CMD_PLAY_FROM_CURSOR, CMD_PREVIEW_PATCH, CMD_QUICKROM_DIRECTORY, CMD_QUICKROM_FILE,
-    CMD_QUICKROM_FROM_CONFIG, CMD_QUICKROM_MENU, CMD_SAVE_PATCH, CMD_STOP,
+    CMD_MDSLINK_DIRECTORY, CMD_MDSLINK_FILE, CMD_MDSLINK_FROM_CONFIG, CMD_MDSLINK_MENU,
+    CMD_PATCH_FORMATS, CMD_PLAY, CMD_PLAY_FROM_CURSOR, CMD_PREVIEW_PATCH, CMD_QUICKROM_DIRECTORY,
+    CMD_QUICKROM_FILE, CMD_QUICKROM_FROM_CONFIG, CMD_QUICKROM_MENU, CMD_SAVE_PATCH, CMD_STOP,
 };
 use crate::mdslink::MdslinkRunResult;
 use crate::note_hover::note_hover_text;
 use crate::quickrom::QuickromRunResult;
 use crate::utils::{is_mml_uri, line_at};
-use crate::ym2612_convert::convert_mml_to_file;
 use ctrmml_lang_core::completion::{
     completion_plan, completion_resolve, CompletionPlan, CoreCommand, CoreCompletionList, CoreItem,
     CoreItemKind, DataPayload, DataRequest, EditRange, InsertFormat, Pos,
@@ -676,6 +675,11 @@ impl LanguageServer for Backend {
                     let _ = self.client.show_message(MessageType::ERROR, err).await;
                 }
             }
+            CMD_PATCH_FORMATS => {
+                return Ok(Some(
+                    serde_json::to_value(ym2612_format::formats()).unwrap_or(Value::Null),
+                ));
+            }
             CMD_SAVE_PATCH => {
                 // Args: [uri, line, type, target_path, format?]. The client
                 // shows the save dialog so it knows where the user wants
@@ -735,17 +739,38 @@ impl LanguageServer for Backend {
                         .await;
                     return Ok(None);
                 };
-                let cmd_path = match self.ym2612_convert_path().await {
-                    Ok(p) => p,
+                let target = std::path::PathBuf::from(target_str);
+                let format = format_override.map(str::to_string).or_else(|| {
+                    target
+                        .extension()
+                        .and_then(|extension| extension.to_str())
+                        .map(str::to_ascii_lowercase)
+                });
+                let Some(format) = format else {
+                    let _ = self
+                        .client
+                        .show_message(MessageType::ERROR, "savePatch: missing target format")
+                        .await;
+                    return Ok(None);
+                };
+                let converted = ym2612_format::convert(
+                    block.mml_text.as_bytes(),
+                    "input.mml",
+                    Some("mml"),
+                    0,
+                    &format,
+                );
+                let data = match converted {
+                    Ok(data) => data,
                     Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
+                        let _ = self
+                            .client
+                            .show_message(MessageType::ERROR, format!("savePatch: {err}"))
+                            .await;
                         return Ok(None);
                     }
                 };
-                let target = std::path::PathBuf::from(target_str);
-                match convert_mml_to_file(&cmd_path, &block.mml_text, &target, format_override)
-                    .await
-                {
+                match tokio::fs::write(&target, data).await {
                     Ok(()) => {
                         let display = target_str
                             .rsplit(std::path::MAIN_SEPARATOR)
@@ -757,7 +782,10 @@ impl LanguageServer for Backend {
                             .await;
                     }
                     Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
+                        let _ = self
+                            .client
+                            .show_message(MessageType::ERROR, format!("savePatch: {err}"))
+                            .await;
                     }
                 }
             }
@@ -1201,6 +1229,24 @@ mod tests {
     use ctrmml_lang_core::completion::{CoreTextEdit, InsertSpec};
 
     use super::*;
+
+    #[test]
+    fn patch_format_values_carry_the_fields_clients_read() {
+        let formats = serde_json::to_value(ym2612_format::formats()).expect("serialize formats");
+        let formats = formats.as_array().expect("array").clone();
+        assert!(!formats.is_empty());
+        for format in &formats {
+            for field in ["format", "name", "extension"] {
+                assert!(format[field].is_string(), "{field} in {format}");
+            }
+            for field in ["can_read", "can_write", "is_text"] {
+                assert!(format[field].is_boolean(), "{field} in {format}");
+            }
+        }
+        assert!(formats
+            .iter()
+            .any(|format| format["can_write"] == serde_json::json!(true)));
+    }
 
     fn core_item(kind: CoreItemKind) -> CoreItem {
         CoreItem {

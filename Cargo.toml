@@ -5,7 +5,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.6.11"
+version = "0.7.0"
 
 [package]
 name = "ctrmml-lsp"
@@ -22,6 +22,7 @@ tower-lsp = "0.20.0"
 tower = "0.4"
 walkdir = "2.5.0"
 url = "2.5.0"
+ym2612-format = { git = "https://github.com/ulalume/ym2612_format.git", tag = "v0.3.0" }
 
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 flate2 = "1.0"

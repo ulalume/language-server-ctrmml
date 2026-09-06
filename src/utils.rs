@@ -1,4 +1,6 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 pub(crate) fn uri_to_path(uri: &str) -> Option<PathBuf> {
     let url = url::Url::parse(uri).ok()?;
@@ -35,15 +37,36 @@ pub(crate) fn is_wav(path: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Readable binary instrument formats, keyed by lowercase extension.
+fn fm_instrument_extensions() -> &'static HashSet<String> {
+    static EXTENSIONS: OnceLock<HashSet<String>> = OnceLock::new();
+    EXTENSIONS.get_or_init(|| {
+        ym2612_format::formats()
+            .into_iter()
+            .filter(|format| format.can_read && !format.is_text)
+            .flat_map(|format| format.extensions)
+            .map(|extension| extension.to_ascii_lowercase())
+            .collect()
+    })
+}
+
 pub(crate) fn is_fm_instrument(path: &std::path::Path) -> bool {
     path.extension()
         .and_then(|ext| ext.to_str())
-        .map(|ext| {
-            let lower = ext.to_ascii_lowercase();
-            matches!(
-                lower.as_str(),
-                "dmp" | "fui" | "fur" | "gin" | "rym2612" | "dmf" | "ginpkg"
-            )
-        })
+        .map(|ext| fm_instrument_extensions().contains(&ext.to_ascii_lowercase()))
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fm_instrument_extensions_come_from_the_format_list() {
+        assert!(is_fm_instrument(std::path::Path::new("lead.dmp")));
+        assert!(is_fm_instrument(std::path::Path::new("song.vgz")));
+        assert!(is_fm_instrument(std::path::Path::new("strings.TFI")));
+        assert!(!is_fm_instrument(std::path::Path::new("demo.mml")));
+        assert!(!is_fm_instrument(std::path::Path::new("notes.txt")));
+    }
 }
