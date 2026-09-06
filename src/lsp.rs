@@ -25,9 +25,9 @@ use crate::export::ExportFormat;
 use crate::fill_measure::{fetch_cursor_tick, fill_measure_code_action};
 use crate::lsp_commands::{
     code_actions, command_ids, transpose_code_action, CMD_EXPORT_VGM, CMD_EXPORT_WAV,
-    CMD_MDSLINK_DIRECTORY, CMD_MDSLINK_FILE, CMD_MDSLINK_FROM_CONFIG, CMD_MDSLINK_MENU, CMD_PLAY,
-    CMD_PLAY_FROM_CURSOR, CMD_PREVIEW_PATCH, CMD_QUICKROM_DIRECTORY, CMD_QUICKROM_FILE,
-    CMD_QUICKROM_FROM_CONFIG, CMD_QUICKROM_MENU, CMD_SAVE_PATCH, CMD_STOP,
+    CMD_MDSLINK_DIRECTORY, CMD_MDSLINK_FILE, CMD_MDSLINK_FROM_CONFIG, CMD_MDSLINK_MENU,
+    CMD_PATCH_FORMATS, CMD_PLAY, CMD_PLAY_FROM_CURSOR, CMD_PREVIEW_PATCH, CMD_QUICKROM_DIRECTORY,
+    CMD_QUICKROM_FILE, CMD_QUICKROM_FROM_CONFIG, CMD_QUICKROM_MENU, CMD_SAVE_PATCH, CMD_STOP,
 };
 use crate::mdslink::MdslinkRunResult;
 use crate::note_hover::note_hover_text;
@@ -675,6 +675,11 @@ impl LanguageServer for Backend {
                     let _ = self.client.show_message(MessageType::ERROR, err).await;
                 }
             }
+            CMD_PATCH_FORMATS => {
+                return Ok(Some(
+                    serde_json::to_value(ym2612_format::formats()).unwrap_or(Value::Null),
+                ));
+            }
             CMD_SAVE_PATCH => {
                 // Args: [uri, line, type, target_path, format?]. The client
                 // shows the save dialog so it knows where the user wants
@@ -1224,6 +1229,24 @@ mod tests {
     use ctrmml_lang_core::completion::{CoreTextEdit, InsertSpec};
 
     use super::*;
+
+    #[test]
+    fn patch_format_values_carry_the_fields_clients_read() {
+        let formats = serde_json::to_value(ym2612_format::formats()).expect("serialize formats");
+        let formats = formats.as_array().expect("array").clone();
+        assert!(!formats.is_empty());
+        for format in &formats {
+            for field in ["format", "name", "extension"] {
+                assert!(format[field].is_string(), "{field} in {format}");
+            }
+            for field in ["can_read", "can_write", "is_text"] {
+                assert!(format[field].is_boolean(), "{field} in {format}");
+            }
+        }
+        assert!(formats
+            .iter()
+            .any(|format| format["can_write"] == serde_json::json!(true)));
+    }
 
     fn core_item(kind: CoreItemKind) -> CoreItem {
         CoreItem {

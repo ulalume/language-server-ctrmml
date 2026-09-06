@@ -35,8 +35,11 @@ pub(crate) const CMD_QUICKROM_MENU: &str = "ctrmml.quickromMenu";
 /// and plays it via the existing playback infrastructure.
 pub(crate) const CMD_PREVIEW_PATCH: &str = "mml.previewPatch";
 /// Code-lens save command — converts the `@N fm` block to a patch
-/// file format (DMP / INS / TFI / …) via `ym2612_convert`.
+/// file format (DMP / INS / TFI / …).
 pub(crate) const CMD_SAVE_PATCH: &str = "mml.savePatch";
+/// Returns the ym2612_format descriptor list. Client-side plumbing for
+/// save dialogs; not in `COMMANDS`, so it stays out of code-action menus.
+pub(crate) const CMD_PATCH_FORMATS: &str = "ctrmml.patchFormats";
 
 pub(crate) const COMMANDS: &[CommandDef] = &[
     CommandDef {
@@ -225,6 +228,16 @@ fn command_action(title: &str, command: &str, arguments: Vec<Value>) -> CodeActi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn patch_formats_stays_out_of_the_command_lists() {
+        assert!(!COMMANDS.iter().any(|entry| entry.id == CMD_PATCH_FORMATS));
+        for client_kind in [ClientKind::VsCode, ClientKind::Other] {
+            assert!(!command_ids(client_kind)
+                .iter()
+                .any(|command| command == CMD_PATCH_FORMATS));
+        }
+    }
 
     #[test]
     fn preview_patch_is_advertised_only_outside_vscode() {
