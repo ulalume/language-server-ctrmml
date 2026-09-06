@@ -14,7 +14,6 @@ mod note_hover;
 mod playback;
 mod quickrom;
 mod utils;
-mod ym2612_convert;
 
 use serde_json::Value;
 use tower::Service;

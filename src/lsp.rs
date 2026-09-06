@@ -33,7 +33,6 @@ use crate::mdslink::MdslinkRunResult;
 use crate::note_hover::note_hover_text;
 use crate::quickrom::QuickromRunResult;
 use crate::utils::{is_mml_uri, line_at};
-use crate::ym2612_convert::convert_mml_to_file;
 use ctrmml_lang_core::completion::{
     completion_plan, completion_resolve, CompletionPlan, CoreCommand, CoreCompletionList, CoreItem,
     CoreItemKind, DataPayload, DataRequest, EditRange, InsertFormat, Pos,
@@ -735,17 +734,38 @@ impl LanguageServer for Backend {
                         .await;
                     return Ok(None);
                 };
-                let cmd_path = match self.ym2612_convert_path().await {
-                    Ok(p) => p,
+                let target = std::path::PathBuf::from(target_str);
+                let format = format_override.map(str::to_string).or_else(|| {
+                    target
+                        .extension()
+                        .and_then(|extension| extension.to_str())
+                        .map(str::to_ascii_lowercase)
+                });
+                let Some(format) = format else {
+                    let _ = self
+                        .client
+                        .show_message(MessageType::ERROR, "savePatch: missing target format")
+                        .await;
+                    return Ok(None);
+                };
+                let converted = ym2612_format::convert(
+                    block.mml_text.as_bytes(),
+                    "input.mml",
+                    Some("mml"),
+                    0,
+                    &format,
+                );
+                let data = match converted {
+                    Ok(data) => data,
                     Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
+                        let _ = self
+                            .client
+                            .show_message(MessageType::ERROR, format!("savePatch: {err}"))
+                            .await;
                         return Ok(None);
                     }
                 };
-                let target = std::path::PathBuf::from(target_str);
-                match convert_mml_to_file(&cmd_path, &block.mml_text, &target, format_override)
-                    .await
-                {
+                match tokio::fs::write(&target, data).await {
                     Ok(()) => {
                         let display = target_str
                             .rsplit(std::path::MAIN_SEPARATOR)
@@ -757,7 +777,10 @@ impl LanguageServer for Backend {
                             .await;
                     }
                     Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
+                        let _ = self
+                            .client
+                            .show_message(MessageType::ERROR, format!("savePatch: {err}"))
+                            .await;
                     }
                 }
             }
