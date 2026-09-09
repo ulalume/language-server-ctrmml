@@ -20,7 +20,7 @@ cargo run
 
 This server provides FM instrument completion via the `ym2612_format` library, linked into the binary.
 
-- Workspace instrument files (.dmp, .dmf, .fui, .fur, .gin, .ginpkg, .rym2612, .tfi, .vgi, .eif, .vgm, .vgz, .spat) are auto-scanned and cached.
+- Workspace instrument files (.dmp, .dmf, .fui, .fur, .gin, .ginpkg, .rym2612, .tfi, .vgi, .eif, .vgm, .vgz, .spat, .tyi, .y12, .dat, .ins) are auto-scanned and cached.
 - Completing after `@N fm` inserts FM parameters as MML.
 - The scanned extension set comes from the library's format list.
 
