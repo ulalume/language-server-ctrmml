@@ -87,8 +87,9 @@ pub fn extract_instrument_block(
 pub fn build_preview_mml(text: &str, block: &ExtractedBlock, channel: &str) -> String {
     let platform = detect_platform(text).unwrap_or_else(|| "megadrive".to_string());
     let preview_line = match block.instrument_type {
+        // A note-off stops the sample, so hold the note long enough for it to play out.
         InstrumentType::Pcm => format!(
-            "{channel} @{n} o4 l4 c",
+            "{channel} @{n} o4 l1 c^1^1^1",
             n = block.instrument_number,
             channel = channel,
         ),
@@ -173,7 +174,7 @@ mod tests {
     }
 
     #[test]
-    fn build_preview_for_pcm_uses_short_line() {
+    fn build_preview_for_pcm_holds_the_note() {
         let block = ExtractedBlock {
             instrument_number: 4,
             instrument_type: InstrumentType::Pcm,
@@ -182,7 +183,7 @@ mod tests {
             end_line: 0,
         };
         let preview = build_preview_mml("@4 pcm \"snare.wav\"\n", &block, "F");
-        assert!(preview.contains("F @4 o4 l4 c\n"));
+        assert!(preview.contains("F @4 o4 l1 c^1^1^1\n"));
     }
 
     #[test]
