@@ -1,5 +1,10 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use serde::Deserialize;
-use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range};
+use tokio::sync::Mutex;
+use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, Url};
+use tower_lsp::Client;
 
 #[derive(Deserialize)]
 #[serde(tag = "type")]
@@ -229,9 +234,270 @@ fn parse_error_line(line: &str) -> Option<(u32, u32, String)> {
     None
 }
 
+/// Per-URI diagnostic layers. `publishDiagnostics` replaces the whole set
+/// for a URI, so check results and playback markers are kept apart here
+/// and published merged.
+#[derive(Default)]
+pub(crate) struct DiagnosticStore {
+    entries: HashMap<String, DiagnosticLayers>,
+}
+
+#[derive(Default)]
+struct DiagnosticLayers {
+    check: Vec<Diagnostic>,
+    playback: Vec<Diagnostic>,
+    playback_expires_on_check: bool,
+}
+
+impl DiagnosticLayers {
+    fn merged(&self) -> Vec<Diagnostic> {
+        self.check
+            .iter()
+            .chain(self.playback.iter())
+            .cloned()
+            .collect()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.check.is_empty() && self.playback.is_empty()
+    }
+}
+
+impl DiagnosticStore {
+    /// Replace the check layer, returning the set to publish. Drops a
+    /// playback layer that a finished playback marked as expiring.
+    pub(crate) fn set_check(&mut self, uri: &str, diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
+        self.update(uri, |layers| {
+            if layers.playback_expires_on_check {
+                layers.playback.clear();
+                layers.playback_expires_on_check = false;
+            }
+            layers.check = diagnostics;
+        })
+    }
+
+    /// Replace the playback layer, returning the set to publish.
+    pub(crate) fn set_playback(
+        &mut self,
+        uri: &str,
+        diagnostics: Vec<Diagnostic>,
+    ) -> Vec<Diagnostic> {
+        self.update(uri, |layers| {
+            layers.playback = diagnostics;
+            layers.playback_expires_on_check = false;
+        })
+    }
+
+    /// Drop the playback layer, returning the set to publish.
+    pub(crate) fn clear_playback(&mut self, uri: &str) -> Vec<Diagnostic> {
+        self.update(uri, |layers| {
+            layers.playback.clear();
+            layers.playback_expires_on_check = false;
+        })
+    }
+
+    /// Leave the playback layer standing until the next check replaces it.
+    pub(crate) fn expire_playback_on_check(&mut self, uri: &str) {
+        if let Some(layers) = self.entries.get_mut(&store_key(uri)) {
+            layers.playback_expires_on_check = true;
+        }
+    }
+
+    fn update(&mut self, uri: &str, apply: impl FnOnce(&mut DiagnosticLayers)) -> Vec<Diagnostic> {
+        let key = store_key(uri);
+        let layers = self.entries.entry(key.clone()).or_default();
+        apply(layers);
+        let merged = layers.merged();
+        if layers.is_empty() {
+            self.entries.remove(&key);
+        }
+        merged
+    }
+}
+
+/// Clients spell the same document differently (raw command arguments vs
+/// `Url::to_string`), and separate keys would split the layers.
+fn store_key(uri: &str) -> String {
+    Url::parse(uri)
+        .map(|url| url.to_string())
+        .unwrap_or_else(|_| uri.to_string())
+}
+
+pub(crate) type DiagnosticStoreHandle = Arc<Mutex<DiagnosticStore>>;
+
+pub(crate) async fn publish_check_diagnostics(
+    client: &Client,
+    store: &DiagnosticStoreHandle,
+    uri: &str,
+    diagnostics: Vec<Diagnostic>,
+) {
+    let mut guard = store.lock().await;
+    let merged = guard.set_check(uri, diagnostics);
+    publish(client, uri, merged).await;
+}
+
+pub(crate) async fn publish_playback_diagnostics(
+    client: &Client,
+    store: &DiagnosticStoreHandle,
+    uri: &str,
+    diagnostics: Vec<Diagnostic>,
+) {
+    let mut guard = store.lock().await;
+    let merged = guard.set_playback(uri, diagnostics);
+    publish(client, uri, merged).await;
+}
+
+pub(crate) async fn clear_playback_diagnostics(
+    client: &Client,
+    store: &DiagnosticStoreHandle,
+    uri: &str,
+) {
+    let mut guard = store.lock().await;
+    let merged = guard.clear_playback(uri);
+    publish(client, uri, merged).await;
+}
+
+pub(crate) async fn expire_playback_diagnostics_on_check(store: &DiagnosticStoreHandle, uri: &str) {
+    store.lock().await.expire_playback_on_check(uri);
+}
+
+/// Callers hold the store lock across this await so publishes reach the
+/// client in the order their layers were computed.
+async fn publish(client: &Client, uri: &str, diagnostics: Vec<Diagnostic>) {
+    if let Ok(parsed) = uri.parse() {
+        client.publish_diagnostics(parsed, diagnostics, None).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn check_error(message: &str) -> Diagnostic {
+        Diagnostic {
+            severity: Some(DiagnosticSeverity::ERROR),
+            source: Some("ctrmml-check".to_string()),
+            message: message.to_string(),
+            ..Diagnostic::default()
+        }
+    }
+
+    fn playback_hint() -> Diagnostic {
+        Diagnostic {
+            severity: Some(DiagnosticSeverity::HINT),
+            source: Some("ctrmml-playback".to_string()),
+            message: "playback".to_string(),
+            ..Diagnostic::default()
+        }
+    }
+
+    #[test]
+    fn playback_layer_is_published_on_top_of_check_layer() {
+        let mut store = DiagnosticStore::default();
+        store.set_check("file:///a.mml", vec![check_error("missing sample")]);
+
+        let published = store.set_playback("file:///a.mml", vec![playback_hint()]);
+
+        let sources: Vec<_> = published
+            .iter()
+            .map(|diag| diag.source.as_deref().unwrap_or_default())
+            .collect();
+        assert_eq!(sources, ["ctrmml-check", "ctrmml-playback"]);
+    }
+
+    #[test]
+    fn clearing_playback_keeps_check_diagnostics() {
+        let mut store = DiagnosticStore::default();
+        store.set_check("file:///a.mml", vec![check_error("missing sample")]);
+        store.set_playback("file:///a.mml", vec![playback_hint()]);
+
+        let published = store.clear_playback("file:///a.mml");
+
+        assert_eq!(published.len(), 1);
+        assert_eq!(published[0].message, "missing sample");
+    }
+
+    #[test]
+    fn playback_error_keeps_check_diagnostics() {
+        let mut store = DiagnosticStore::default();
+        store.set_check("file:///a.mml", vec![check_error("missing sample")]);
+
+        let published = store.set_playback(
+            "file:///a.mml",
+            vec![diagnostic_for_playback_error("Playback error".to_string())],
+        );
+
+        assert_eq!(published.len(), 2);
+        assert_eq!(published[0].message, "missing sample");
+        assert_eq!(published[1].message, "Playback error");
+    }
+
+    #[test]
+    fn check_update_keeps_running_playback_markers() {
+        let mut store = DiagnosticStore::default();
+        store.set_playback("file:///a.mml", vec![playback_hint()]);
+
+        let published = store.set_check("file:///a.mml", vec![check_error("missing sample")]);
+
+        assert_eq!(published.len(), 2);
+        assert_eq!(published[1].source.as_deref(), Some("ctrmml-playback"));
+    }
+
+    #[test]
+    fn standing_playback_error_expires_on_next_check() {
+        let mut store = DiagnosticStore::default();
+        store.set_playback(
+            "file:///a.mml",
+            vec![diagnostic_for_playback_error("Playback error".to_string())],
+        );
+        store.expire_playback_on_check("file:///a.mml");
+
+        let published = store.set_check("file:///a.mml", vec![check_error("missing sample")]);
+
+        assert_eq!(published.len(), 1);
+        assert_eq!(published[0].message, "missing sample");
+    }
+
+    #[test]
+    fn a_new_playback_layer_is_not_expired_by_the_next_check() {
+        let mut store = DiagnosticStore::default();
+        store.set_playback(
+            "file:///a.mml",
+            vec![diagnostic_for_playback_error("Playback error".to_string())],
+        );
+        store.expire_playback_on_check("file:///a.mml");
+        store.set_playback("file:///a.mml", vec![playback_hint()]);
+
+        let published = store.set_check("file:///a.mml", vec![check_error("missing sample")]);
+
+        assert_eq!(published.len(), 2);
+        assert_eq!(published[1].source.as_deref(), Some("ctrmml-playback"));
+    }
+
+    #[test]
+    fn layers_share_one_entry_across_uri_spellings() {
+        let mut store = DiagnosticStore::default();
+        store.set_check("file:///tmp/a b.mml", vec![check_error("missing sample")]);
+
+        let published = store.set_playback("file:///tmp/a%20b.mml", vec![playback_hint()]);
+
+        assert_eq!(published.len(), 2);
+        assert_eq!(published[0].source.as_deref(), Some("ctrmml-check"));
+        assert_eq!(store.entries.len(), 1);
+    }
+
+    #[test]
+    fn empty_layers_drop_the_uri_entry() {
+        let mut store = DiagnosticStore::default();
+        store.set_check("file:///a.mml", vec![check_error("missing sample")]);
+        store.set_playback("file:///a.mml", vec![playback_hint()]);
+
+        store.set_check("file:///a.mml", Vec::new());
+        let published = store.clear_playback("file:///a.mml");
+
+        assert!(published.is_empty());
+        assert!(store.entries.is_empty());
+    }
 
     #[test]
     fn playback_error_diagnostic_uses_document_start_and_playback_source() {

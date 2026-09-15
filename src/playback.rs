@@ -3,12 +3,13 @@ use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, Command as TokioCommand};
 use tokio::sync::watch;
-use tower_lsp::lsp_types::Diagnostic;
+use tower_lsp::lsp_types::{Diagnostic, MessageType};
 
 use crate::backend::Backend;
 use crate::ctrmml_cmd::CTRMML_CMD_NAME;
 use crate::diagnostics::{
-    diagnostic_for_playback_error, diagnostics_for_positions, PlaybackMessage,
+    clear_playback_diagnostics, diagnostic_for_playback_error, diagnostics_for_positions,
+    expire_playback_diagnostics_on_check, publish_playback_diagnostics, PlaybackMessage,
 };
 use crate::utils::{read_file_text, uri_to_path};
 
@@ -39,7 +40,10 @@ impl PlaybackMode {
         self == Self::Document
     }
 
-    fn publishes_highlights(self) -> bool {
+    /// Only document playback maps onto the document's own text, so
+    /// only it may publish diagnostics for the document URI. Preview
+    /// playback reports through the client message path instead.
+    fn owns_document_diagnostics(self) -> bool {
         self == Self::Document
     }
 }
@@ -168,6 +172,7 @@ impl Backend {
 
         let client = self.client.clone();
         let docs = self.docs.clone();
+        let store = self.diagnostics.clone();
         let seq = self.playback_seq.clone();
         let uri_clone = uri.clone();
         tokio::spawn(async move {
@@ -182,7 +187,7 @@ impl Backend {
                     Err(_) => continue,
                 };
                 let text = match &msg {
-                    PlaybackMessage::Highlight { .. } if mode.publishes_highlights() => docs
+                    PlaybackMessage::Highlight { .. } if mode.owns_document_diagnostics() => docs
                         .read()
                         .await
                         .get(&uri_clone)
@@ -191,20 +196,29 @@ impl Backend {
                         .unwrap_or_default(),
                     _ => String::new(),
                 };
-                let Some(diags) = diagnostics_for_playback_message(mode, &text, &msg) else {
-                    continue;
-                };
-                if matches!(msg, PlaybackMessage::PlaybackError { .. }) {
-                    playback_error_published = true;
-                }
-                if let Ok(uri) = uri_clone.parse() {
-                    let _ = client.publish_diagnostics(uri, diags, None).await;
+                match playback_outcome(mode, &text, &msg) {
+                    PlaybackOutcome::Diagnostics(diags) => {
+                        if matches!(msg, PlaybackMessage::PlaybackError { .. }) {
+                            playback_error_published = true;
+                        }
+                        publish_playback_diagnostics(&client, &store, &uri_clone, diags).await;
+                    }
+                    PlaybackOutcome::Message(message) => {
+                        client.show_message(MessageType::ERROR, message).await;
+                    }
+                    PlaybackOutcome::Ignore => {}
                 }
             }
 
-            if !playback_error_published && *seq.lock().await == token {
-                if let Ok(uri) = uri_clone.parse() {
-                    let _ = client.publish_diagnostics(uri, Vec::new(), None).await;
+            if *seq.lock().await == token {
+                match playback_exit(mode, playback_error_published) {
+                    PlaybackExit::Clear => {
+                        clear_playback_diagnostics(&client, &store, &uri_clone).await;
+                    }
+                    PlaybackExit::ExpireOnNextCheck => {
+                        expire_playback_diagnostics_on_check(&store, &uri_clone).await;
+                    }
+                    PlaybackExit::Leave => {}
                 }
             }
         });
@@ -243,8 +257,8 @@ impl Backend {
             // we send SIGKILL.
             drop(playback.update_tx.take());
             let _ = playback.child.kill().await;
-            if let Ok(uri) = playback.uri.parse() {
-                let _ = self.client.publish_diagnostics(uri, Vec::new(), None).await;
+            if playback.mode.owns_document_diagnostics() {
+                clear_playback_diagnostics(&self.client, &self.diagnostics, &playback.uri).await;
             }
         }
     }
@@ -278,19 +292,45 @@ fn parse_playback_message(line: &str) -> serde_json::Result<PlaybackMessage> {
     serde_json::from_str(line)
 }
 
-fn diagnostics_for_playback_message(
-    mode: PlaybackMode,
-    text: &str,
-    message: &PlaybackMessage,
-) -> Option<Vec<Diagnostic>> {
+/// What a `ctrmml-cmd play` message does to the document's diagnostics.
+#[derive(Debug, PartialEq, Eq)]
+enum PlaybackOutcome {
+    /// Replace the playback layer of the document's diagnostics.
+    Diagnostics(Vec<Diagnostic>),
+    /// Report to the user without touching the document's diagnostics.
+    Message(String),
+    Ignore,
+}
+
+fn playback_outcome(mode: PlaybackMode, text: &str, message: &PlaybackMessage) -> PlaybackOutcome {
     match message {
-        PlaybackMessage::Highlight { positions, .. } if mode.publishes_highlights() => {
-            Some(diagnostics_for_positions(text, positions))
+        PlaybackMessage::Highlight { positions, .. } if mode.owns_document_diagnostics() => {
+            PlaybackOutcome::Diagnostics(diagnostics_for_positions(text, positions))
         }
-        PlaybackMessage::Highlight { .. } => None,
-        PlaybackMessage::PlaybackError { message } => {
-            Some(vec![diagnostic_for_playback_error(message.clone())])
+        PlaybackMessage::Highlight { .. } => PlaybackOutcome::Ignore,
+        PlaybackMessage::PlaybackError { message } if mode.owns_document_diagnostics() => {
+            PlaybackOutcome::Diagnostics(vec![diagnostic_for_playback_error(message.clone())])
         }
+        PlaybackMessage::PlaybackError { message } => PlaybackOutcome::Message(message.clone()),
+    }
+}
+
+/// What happens to the playback layer once the child exits.
+#[derive(Debug, PartialEq, Eq)]
+enum PlaybackExit {
+    Clear,
+    /// A playback error stays visible until the next check replaces it.
+    ExpireOnNextCheck,
+    Leave,
+}
+
+fn playback_exit(mode: PlaybackMode, playback_error_published: bool) -> PlaybackExit {
+    if !mode.owns_document_diagnostics() {
+        PlaybackExit::Leave
+    } else if playback_error_published {
+        PlaybackExit::ExpireOnNextCheck
+    } else {
+        PlaybackExit::Clear
     }
 }
 
@@ -305,27 +345,80 @@ mod tests {
         .expect("highlight JSON should parse")
     }
 
+    fn playback_error_message() -> PlaybackMessage {
+        parse_playback_message(r#"{"type":"playback_error","message":"Playback error: pcm"}"#)
+            .expect("playback_error JSON should parse")
+    }
+
     #[test]
     fn preview_playback_produces_no_document_highlight_diagnostics() {
-        let diagnostics =
-            diagnostics_for_playback_message(PlaybackMode::Preview, "A cdef", &highlight_message());
+        let outcome = playback_outcome(PlaybackMode::Preview, "A cdef", &highlight_message());
 
-        assert!(diagnostics.is_none());
+        assert_eq!(outcome, PlaybackOutcome::Ignore);
     }
 
     #[test]
     fn document_playback_still_produces_highlight_diagnostics() {
-        let diagnostics = diagnostics_for_playback_message(
-            PlaybackMode::Document,
-            "A cdef",
-            &highlight_message(),
-        )
-        .expect("document playback should publish highlight diagnostics");
+        let PlaybackOutcome::Diagnostics(diagnostics) =
+            playback_outcome(PlaybackMode::Document, "A cdef", &highlight_message())
+        else {
+            panic!("document playback should publish highlight diagnostics");
+        };
 
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].source.as_deref(), Some("ctrmml-playback"));
         assert_eq!(diagnostics[0].range.start.line, 0);
         assert_eq!(diagnostics[0].range.start.character, 2);
+    }
+
+    #[test]
+    fn preview_playback_error_is_reported_as_a_message() {
+        let outcome = playback_outcome(PlaybackMode::Preview, "", &playback_error_message());
+
+        assert_eq!(
+            outcome,
+            PlaybackOutcome::Message("Playback error: pcm".to_string())
+        );
+    }
+
+    #[test]
+    fn document_playback_error_becomes_a_diagnostic() {
+        let PlaybackOutcome::Diagnostics(diagnostics) =
+            playback_outcome(PlaybackMode::Document, "", &playback_error_message())
+        else {
+            panic!("document playback error should publish a diagnostic");
+        };
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].message, "Playback error: pcm");
+    }
+
+    #[test]
+    fn preview_playback_never_touches_document_diagnostics_on_exit() {
+        assert_eq!(
+            playback_exit(PlaybackMode::Preview, false),
+            PlaybackExit::Leave
+        );
+        assert_eq!(
+            playback_exit(PlaybackMode::Preview, true),
+            PlaybackExit::Leave
+        );
+    }
+
+    #[test]
+    fn document_playback_clears_its_own_markers_on_exit() {
+        assert_eq!(
+            playback_exit(PlaybackMode::Document, false),
+            PlaybackExit::Clear
+        );
+    }
+
+    #[test]
+    fn document_playback_error_outlives_the_child_until_the_next_check() {
+        assert_eq!(
+            playback_exit(PlaybackMode::Document, true),
+            PlaybackExit::ExpireOnNextCheck
+        );
     }
 
     #[test]

@@ -2,7 +2,9 @@ use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 
 use crate::backend::Backend;
 use crate::ctrmml_cmd::{output_message, run_ctrmml_cmd};
-use crate::diagnostics::{diagnostic_for_check, diagnostics_for_check_report, CheckReport};
+use crate::diagnostics::{
+    diagnostic_for_check, diagnostics_for_check_report, publish_check_diagnostics, CheckReport,
+};
 use crate::utils::{is_mml_uri, read_file_text, uri_to_path};
 
 impl Backend {
@@ -64,12 +66,7 @@ impl Backend {
             Vec::new()
         };
 
-        if let Ok(uri) = uri.parse() {
-            let _ = self
-                .client
-                .publish_diagnostics(uri, diagnostics, None)
-                .await;
-        }
+        publish_check_diagnostics(&self.client, &self.diagnostics, &uri, diagnostics).await;
 
         Ok(())
     }

@@ -8,6 +8,7 @@ use ctrmml_lang_core::completion::CompletionSettings;
 
 use crate::config::{ClientKind, Config};
 use crate::ctrmml_cmd::resolve_command_path;
+use crate::diagnostics::DiagnosticStoreHandle;
 use crate::fm_completion::FmInstrumentCache;
 use crate::playback::Playback;
 
@@ -18,6 +19,7 @@ pub(crate) struct Backend {
     pub(crate) config: Arc<RwLock<Config>>,
     command_path_cache: Arc<Mutex<Option<CommandPathCache>>>,
     pub(crate) fm_instrument_cache: Arc<Mutex<Option<FmInstrumentCache>>>,
+    pub(crate) diagnostics: DiagnosticStoreHandle,
     pub(crate) playback: Arc<Mutex<Option<Playback>>>,
     pub(crate) playback_seq: Arc<Mutex<u64>>,
     pub(crate) last_doc: Arc<RwLock<Option<String>>>,
@@ -40,6 +42,7 @@ impl Backend {
             config: Arc::new(RwLock::new(Config::default())),
             command_path_cache: Arc::new(Mutex::new(None)),
             fm_instrument_cache: Arc::new(Mutex::new(None)),
+            diagnostics: Arc::new(Mutex::new(Default::default())),
             playback: Arc::new(Mutex::new(None)),
             playback_seq: Arc::new(Mutex::new(0)),
             last_doc: Arc::new(RwLock::new(None)),
