@@ -35,13 +35,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             os_name: macos
             arch: arm64
             archive_ext: tar.gz
             bin_ext: ""
-          - os: macos-14
+          - os: macos-15
             target: x86_64-apple-darwin
             os_name: macos
             arch: x64
