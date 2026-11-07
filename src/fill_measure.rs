@@ -1,4 +1,4 @@
-//! Fill-measure code action — Phase 3.2.3 (full variant).
+//! Fill-measure code action.
 //!
 //! When the cursor sits on a track-content line, offer an "insert
 //! rests up to the next bar line" code action. The rest sequence is
@@ -7,10 +7,8 @@
 //! works correctly — `o4 c4 d4 [cursor]` in 4/4 inserts the two
 //! quarter rests needed to reach the next bar line.
 //!
-//! Cheap pre-checks run synchronously; the subprocess to `ctrmml-cmd`
-//! only fires when those pre-checks pass, so the typical
-//! cursor-in-header / cursor-in-FM-block case has zero subprocess
-//! cost.
+//! Offering the action only runs cheap checks; the subprocess runs when
+//! its edit is needed.
 
 use std::collections::HashMap;
 
@@ -19,12 +17,13 @@ use ctrmml_lang_core::{
     is_after_bar_line, scan_time_signature, track_selector::LineReader,
     utf16_character_to_byte_offset, BorrowedLinesModel, CursorTickData, TimeSignature,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use tower_lsp::lsp_types::{
     CodeAction, CodeActionKind, Position, Range, TextEdit, Url, WorkspaceEdit,
 };
 
-use crate::ctrmml_cmd::{output_message, run_ctrmml_cmd};
+use crate::ctrmml_cmd::run_ctrmml_cmd;
 use crate::utils::{line_at, uri_to_path};
 
 /// JSON payload from `ctrmml-cmd find-cursor-tick`.
@@ -59,7 +58,6 @@ pub(crate) async fn fetch_cursor_tick(
     .ok()?;
 
     if !output.status.success() {
-        let _ = output_message(&output);
         return None;
     }
 
@@ -73,8 +71,8 @@ pub(crate) async fn fetch_cursor_tick(
     })
 }
 
-/// Cheap synchronous pre-check: returns `Some((line_content, after_bar))`
-/// when the cursor position is a candidate for fill-measure.
+/// Cheap pre-check: the time signature and whether the cursor follows a
+/// bar line, when the position can take a fill.
 ///
 /// `None` when:
 /// - Cursor is inside an `@N fm` / `@N psg` block (digit data, no
@@ -82,8 +80,8 @@ pub(crate) async fn fetch_cursor_tick(
 /// - Cursor is outside any enclosing track selector (file header /
 ///   meta region).
 /// - `#timesig no` is set (measure lines explicitly disabled).
-fn pre_check<'a>(
-    doc_text: &'a str,
+fn pre_check(
+    doc_text: &str,
     line_zero_based: u32,
     character: u32,
 ) -> Option<(TimeSignature, bool)> {
@@ -97,9 +95,7 @@ fn pre_check<'a>(
     if find_psg_block_at(&model, line).is_some() {
         return None;
     }
-    if find_enclosing_track_selector(&model, line).is_none() {
-        return None;
-    }
+    find_enclosing_track_selector(&model, line)?;
     let time_sig = scan_time_signature(doc_text)?;
 
     let line_content = model.get_line_content(line);
@@ -107,73 +103,85 @@ fn pre_check<'a>(
     Some((time_sig, after_bar))
 }
 
-/// Async entry point. Runs the pre-check, then spawns `ctrmml-cmd
-/// find-cursor-tick` to get the cursor's playback tick + song PPQN,
-/// and finally builds a `CodeAction` whose `WorkspaceEdit` inserts
-/// the fill text at the cursor.
-///
-/// Returns `None` for any pre-check failure or subprocess error
-/// (compilation failed, cursor doesn't map to a compiled event).
-pub(crate) async fn fill_measure_code_action(
-    cmd_path: &str,
-    uri: &Url,
+/// The fill-measure action at an LSP position, still without its edit.
+pub(crate) fn fill_measure_action(
     doc_text: &str,
     line_zero_based: u32,
     character: u32,
 ) -> Option<CodeAction> {
     let (time_sig, after_bar) = pre_check(doc_text, line_zero_based, character)?;
+    let what = if after_bar {
+        "insert empty measure"
+    } else {
+        "fill measure with rests"
+    };
+    Some(CodeAction {
+        title: format!(
+            "ctrmml: {what} ({}/{})",
+            time_sig.numerator, time_sig.denominator
+        ),
+        kind: Some(CodeActionKind::REFACTOR_REWRITE),
+        ..CodeAction::default()
+    })
+}
 
+/// The edit inserting the rests up to the next bar line. Runs `ctrmml-cmd
+/// find-cursor-tick`; `None` when the position cannot take a fill, the
+/// song does not compile, or the cursor already sits on a bar line.
+pub(crate) async fn fill_measure_edit(
+    cmd_path: &str,
+    uri: &Url,
+    doc_text: &str,
+    line_zero_based: u32,
+    character: u32,
+) -> Option<WorkspaceEdit> {
+    let (time_sig, after_bar) = pre_check(doc_text, line_zero_based, character)?;
     let timing = fetch_cursor_tick(cmd_path, uri, doc_text, line_zero_based, character).await?;
-
     let rests = generate_measure_rests(timing.tick, timing.ppqn, Some(time_sig), after_bar);
     if rests.is_empty() {
-        // Already on a bar boundary and not "after-bar" — nothing to
-        // insert.
         return None;
     }
 
-    // Conventional shape: rests then a trailing `|` so the next bar
-    // marker is already in place. Same form for both the after-bar
-    // and mid-measure cases — only the action title differs.
-    let insert_text = format!("{rests} |");
-
-    let edit_position = Position {
+    // Rests then a trailing `|`, so the next bar marker is in place.
+    let position = Position {
         line: line_zero_based,
         character,
     };
     let text_edit = TextEdit {
         range: Range {
-            start: edit_position,
-            end: edit_position,
+            start: position,
+            end: position,
         },
-        new_text: insert_text,
+        new_text: format!("{rests} |"),
     };
     let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
     changes.insert(uri.clone(), vec![text_edit]);
-
-    let title = if after_bar {
-        format!(
-            "ctrmml: insert empty measure ({}/{})",
-            time_sig.numerator, time_sig.denominator
-        )
-    } else {
-        format!(
-            "ctrmml: fill measure with rests ({}/{})",
-            time_sig.numerator, time_sig.denominator
-        )
-    };
-
-    Some(CodeAction {
-        title,
-        kind: Some(CodeActionKind::REFACTOR_REWRITE),
-        edit: Some(WorkspaceEdit {
-            changes: Some(changes),
-            document_changes: None,
-            change_annotations: None,
-        }),
-        ..CodeAction::default()
+    Some(WorkspaceEdit {
+        changes: Some(changes),
+        document_changes: None,
+        change_annotations: None,
     })
 }
+
+/// Where a fill-measure action left for `codeAction/resolve` applies.
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct FillMeasureTarget {
+    pub(crate) uri: Url,
+    pub(crate) line: u32,
+    pub(crate) character: u32,
+}
+
+impl FillMeasureTarget {
+    pub(crate) fn into_data(self) -> Value {
+        json!({ FILL_MEASURE_DATA: self })
+    }
+
+    pub(crate) fn from_data(data: &Value) -> Option<Self> {
+        serde_json::from_value(data.get(FILL_MEASURE_DATA)?.clone()).ok()
+    }
+}
+
+const FILL_MEASURE_DATA: &str = "fillMeasure";
 
 #[cfg(test)]
 mod tests {
@@ -224,6 +232,29 @@ mod tests {
         let doc = "A 'あ' cdef |\n";
         let (_, after_bar) = pre_check(doc, 0, 13).expect("pre-check should pass");
         assert!(after_bar);
+    }
+
+    #[test]
+    fn action_titles_follow_the_bar_position() {
+        let after = fill_measure_action("A o4 cdef |\n", 0, 11).expect("action");
+        assert_eq!(after.title, "ctrmml: insert empty measure (4/4)");
+        assert!(after.edit.is_none());
+        let mid = fill_measure_action("A o4 cdef\n", 0, 9).expect("action");
+        assert_eq!(mid.title, "ctrmml: fill measure with rests (4/4)");
+    }
+
+    #[test]
+    fn resolve_data_round_trips() {
+        let target = || FillMeasureTarget {
+            uri: Url::parse("file:///song.mml").expect("uri"),
+            line: 3,
+            character: 7,
+        };
+        assert_eq!(
+            FillMeasureTarget::from_data(&target().into_data()),
+            Some(target())
+        );
+        assert_eq!(FillMeasureTarget::from_data(&json!({ "other": 1 })), None);
     }
 
     #[test]

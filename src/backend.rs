@@ -27,6 +27,7 @@ pub(crate) struct Session {
     pub(crate) config: Config,
     pub(crate) completion_settings: CompletionSettings,
     pub(crate) supports_completion_as_is: bool,
+    pub(crate) supports_code_action_resolve: bool,
 }
 
 /// Server state. Cloning shares it, so handlers can hand work to tasks.

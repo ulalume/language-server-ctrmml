@@ -2,7 +2,8 @@ use serde_json::Value;
 use tower_lsp::{
     jsonrpc::Result,
     lsp_types::{
-        CodeActionOrCommand, CodeActionParams, CodeActionProviderCapability, CodeLens,
+        CodeAction, CodeActionContext, CodeActionKind, CodeActionOptions, CodeActionOrCommand,
+        CodeActionParams, CodeActionProviderCapability, CodeActionTriggerKind, CodeLens,
         CodeLensOptions, CodeLensParams, Command, CompletionItem, CompletionItemKind,
         CompletionItemLabelDetails, CompletionList, CompletionOptions, CompletionParams,
         CompletionResponse, CompletionTextEdit, DidChangeTextDocumentParams,
@@ -27,7 +28,9 @@ use crate::config::{
 };
 use crate::diagnostics::publish_check_diagnostics;
 use crate::export::ExportFormat;
-use crate::fill_measure::{fetch_cursor_tick, fill_measure_code_action};
+use crate::fill_measure::{
+    fetch_cursor_tick, fill_measure_action, fill_measure_edit, FillMeasureTarget,
+};
 use crate::lsp_commands::{
     code_actions, command_ids, transpose_code_action, CMD_EXPORT_VGM, CMD_EXPORT_WAV,
     CMD_MDSLINK_DIRECTORY, CMD_MDSLINK_FILE, CMD_MDSLINK_FROM_CONFIG, CMD_MDSLINK_MENU,
@@ -62,6 +65,18 @@ impl LanguageServer for Backend {
             .and_then(|completion| completion.completion_item.as_ref())
             .and_then(|item| item.insert_text_mode_support.as_ref())
             .is_some_and(|support| support.value_set.contains(&InsertTextMode::AS_IS));
+        let supports_code_action_resolve = params
+            .capabilities
+            .text_document
+            .as_ref()
+            .and_then(|text_document| text_document.code_action.as_ref())
+            .is_some_and(|code_action| {
+                code_action.data_support == Some(true)
+                    && code_action
+                        .resolve_support
+                        .as_ref()
+                        .is_some_and(|support| support.properties.iter().any(|p| p == "edit"))
+            });
 
         let mut roots = Vec::new();
         if let Some(folders) = params.workspace_folders {
@@ -95,6 +110,7 @@ impl LanguageServer for Backend {
             config,
             completion_settings,
             supports_completion_as_is,
+            supports_code_action_resolve,
         });
 
         Ok(InitializeResult {
@@ -133,7 +149,14 @@ impl LanguageServer for Backend {
                     commands: command_ids(client_kind),
                     ..ExecuteCommandOptions::default()
                 }),
-                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+                code_action_provider: Some(if supports_code_action_resolve {
+                    CodeActionProviderCapability::Options(CodeActionOptions {
+                        resolve_provider: Some(true),
+                        ..CodeActionOptions::default()
+                    })
+                } else {
+                    CodeActionProviderCapability::Simple(true)
+                }),
                 code_lens_provider: Some(CodeLensOptions {
                     resolve_provider: Some(false),
                 }),
@@ -394,21 +417,23 @@ impl LanguageServer for Backend {
                     }
                 }
             }
-            // Fill-measure spawns a `ctrmml-cmd find-cursor-tick`
-            // subprocess to compute the cursor's playback tick;
-            // pre-checks inside the function gate that so the typical
-            // outside-track / inside-FM case skips the spawn.
-            if let Ok(cmd_path) = self.command_path().await {
-                if let Some(action) = fill_measure_code_action(
-                    &cmd_path,
-                    &params.text_document.uri,
-                    &text,
-                    params.range.start.line,
-                    params.range.start.character,
-                )
-                .await
-                {
+            // Fill-measure's edit needs a `ctrmml-cmd find-cursor-tick`
+            // run, so it is computed only when the client resolves the
+            // action or the user asked for actions explicitly.
+            if let Some(mut action) = fill_measure_action(&text, start.line, start.character) {
+                let target = FillMeasureTarget {
+                    uri: params.text_document.uri.clone(),
+                    line: start.line,
+                    character: start.character,
+                };
+                if self.session().supports_code_action_resolve {
+                    action.data = Some(target.into_data());
                     actions.push(action);
+                } else if is_explicit_request(&params.context) {
+                    action.edit = self.fill_measure_edit(&target, &text).await;
+                    if action.edit.is_some() {
+                        actions.push(action);
+                    }
                 }
             }
         }
@@ -419,6 +444,16 @@ impl LanguageServer for Backend {
                 .map(CodeActionOrCommand::CodeAction)
                 .collect(),
         ))
+    }
+
+    async fn code_action_resolve(&self, mut action: CodeAction) -> Result<CodeAction> {
+        let Some(target) = action.data.as_ref().and_then(FillMeasureTarget::from_data) else {
+            return Ok(action);
+        };
+        if let Some(text) = self.document_text(target.uri.as_str()).await {
+            action.edit = self.fill_measure_edit(&target, &text).await;
+        }
+        Ok(action)
     }
 
     async fn execute_command(&self, params: ExecuteCommandParams) -> Result<Option<Value>> {
@@ -785,6 +820,31 @@ impl LanguageServer for Backend {
     }
 }
 
+impl Backend {
+    async fn fill_measure_edit(
+        &self,
+        target: &FillMeasureTarget,
+        text: &str,
+    ) -> Option<tower_lsp::lsp_types::WorkspaceEdit> {
+        let cmd_path = self.command_path().await.ok()?;
+        fill_measure_edit(&cmd_path, &target.uri, text, target.line, target.character).await
+    }
+}
+
+/// Whether the user asked for code actions (rather than the client asking
+/// on a cursor move), or asked for refactorings by kind.
+fn is_explicit_request(context: &CodeActionContext) -> bool {
+    let rewrite = CodeActionKind::REFACTOR_REWRITE;
+    let rewrite = rewrite.as_str();
+    context.trigger_kind == Some(CodeActionTriggerKind::INVOKED)
+        || context.only.as_ref().is_some_and(|kinds| {
+            kinds.iter().any(|kind| {
+                let kind = kind.as_str();
+                rewrite == kind || rewrite.starts_with(&format!("{kind}."))
+            })
+        })
+}
+
 fn code_lens_config(client_kind: ClientKind) -> CodeLensConfig {
     if client_kind.is_vscode() {
         CodeLensConfig::default()
@@ -1119,6 +1179,32 @@ mod tests {
     use ctrmml_lang_core::completion::{CoreTextEdit, InsertSpec};
 
     use super::*;
+
+    #[test]
+    fn fill_measure_runs_on_explicit_requests_only() {
+        let context = |trigger_kind, only: Option<Vec<CodeActionKind>>| CodeActionContext {
+            diagnostics: Vec::new(),
+            only,
+            trigger_kind,
+        };
+        assert!(!is_explicit_request(&context(
+            Some(CodeActionTriggerKind::AUTOMATIC),
+            None
+        )));
+        assert!(!is_explicit_request(&context(None, None)));
+        assert!(is_explicit_request(&context(
+            Some(CodeActionTriggerKind::INVOKED),
+            None
+        )));
+        assert!(is_explicit_request(&context(
+            None,
+            Some(vec![CodeActionKind::REFACTOR])
+        )));
+        assert!(!is_explicit_request(&context(
+            None,
+            Some(vec![CodeActionKind::QUICKFIX])
+        )));
+    }
 
     #[test]
     fn patch_format_values_carry_the_fields_clients_read() {
