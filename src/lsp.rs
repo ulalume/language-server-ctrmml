@@ -29,7 +29,7 @@ use crate::config::{configured_settings, initialization};
 use crate::diagnostics::publish_check_diagnostics;
 use crate::export::ExportFormat;
 use crate::fill_measure::{
-    fetch_cursor_tick, fill_measure_action, fill_measure_edit, FillMeasureTarget,
+    fetch_cursor_tick, fill_measure_action, fill_measure_edit, name_by_edit, FillMeasureTarget,
 };
 use crate::link::{relative_path_display, LinkSource, LinkTool};
 use crate::lsp_commands::{
@@ -475,8 +475,10 @@ impl LanguageServer for Backend {
                     action.data = Some(target.into_data());
                     actions.push(action);
                 } else if is_explicit_request(&params.context) {
-                    action.edit = self.fill_measure_edit(&target, &text).await;
-                    if action.edit.is_some() {
+                    if let Some((edit, closes_only)) = self.fill_measure_edit(&target, &text).await
+                    {
+                        name_by_edit(&mut action, &text, start.line, start.character, closes_only);
+                        action.edit = Some(edit);
                         actions.push(action);
                     }
                 }
@@ -496,7 +498,10 @@ impl LanguageServer for Backend {
             return Ok(action);
         };
         if let Some(text) = self.document_text(target.uri.as_str()).await {
-            action.edit = self.fill_measure_edit(&target, &text).await;
+            action.edit = self
+                .fill_measure_edit(&target, &text)
+                .await
+                .map(|(edit, _)| edit);
         }
         Ok(action)
     }
@@ -671,7 +676,7 @@ impl Backend {
         &self,
         target: &FillMeasureTarget,
         text: &str,
-    ) -> Option<tower_lsp::lsp_types::WorkspaceEdit> {
+    ) -> Option<(tower_lsp::lsp_types::WorkspaceEdit, bool)> {
         let cmd_path = self.command_path().await.ok()?;
         fill_measure_edit(&cmd_path, &target.uri, text, target.line, target.character).await
     }

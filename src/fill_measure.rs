@@ -74,25 +74,52 @@ pub(crate) fn fill_measure_action(
     let what = if plan.after_bar_line {
         "insert empty measure"
     } else {
-        "fill measure with rests"
+        "fill measure"
     };
     Some(CodeAction {
-        title: format!("ctrmml: {what} ({}/{})", plan.numerator, plan.denominator),
+        title: action_title(what, &plan),
         kind: Some(CodeActionKind::REFACTOR_REWRITE),
         ..CodeAction::default()
     })
 }
 
-/// The edit filling the measure. Runs `ctrmml-cmd find-cursor-tick`;
-/// `None` when the position cannot take a fill or the song does not
-/// compile.
+/// Names a mid-measure action by its computed edit: closing a measure that
+/// is already full, or filling the rest of it.
+pub(crate) fn name_by_edit(
+    action: &mut CodeAction,
+    doc_text: &str,
+    line: u32,
+    character: u32,
+    closes_only: bool,
+) {
+    let Some(plan) = fill_measure_plan(doc_text, line, character) else {
+        return;
+    };
+    if plan.after_bar_line {
+        return;
+    }
+    let what = if closes_only {
+        "close measure"
+    } else {
+        "fill measure with rests"
+    };
+    action.title = action_title(what, &plan);
+}
+
+fn action_title(what: &str, plan: &ctrmml_lang_core::FillMeasurePlan) -> String {
+    format!("ctrmml: {what} ({}/{})", plan.numerator, plan.denominator)
+}
+
+/// The edit filling the measure, and whether it only closes a full
+/// measure. Runs `ctrmml-cmd find-cursor-tick`; `None` when the position
+/// cannot take a fill or the song does not compile.
 pub(crate) async fn fill_measure_edit(
     cmd_path: &str,
     uri: &Url,
     doc_text: &str,
     line_zero_based: u32,
     character: u32,
-) -> Option<WorkspaceEdit> {
+) -> Option<(WorkspaceEdit, bool)> {
     fill_measure_plan(doc_text, line_zero_based, character)?;
     let timing = fetch_cursor_tick(cmd_path, uri, doc_text, line_zero_based, character).await?;
     let fill = core_fill_measure_edit(
@@ -102,6 +129,7 @@ pub(crate) async fn fill_measure_edit(
         timing.tick,
         timing.ppqn,
     )?;
+    let closes_only = fill.rests.is_empty();
     let range = fill.edit.range;
     let text_edit = TextEdit {
         range: Range {
@@ -112,11 +140,14 @@ pub(crate) async fn fill_measure_edit(
     };
     let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
     changes.insert(uri.clone(), vec![text_edit]);
-    Some(WorkspaceEdit {
-        changes: Some(changes),
-        document_changes: None,
-        change_annotations: None,
-    })
+    Some((
+        WorkspaceEdit {
+            changes: Some(changes),
+            document_changes: None,
+            change_annotations: None,
+        },
+        closes_only,
+    ))
 }
 
 /// Where a fill-measure action left for `codeAction/resolve` applies.
@@ -149,7 +180,15 @@ mod tests {
         assert_eq!(after.title, "ctrmml: insert empty measure (4/4)");
         assert!(after.edit.is_none());
         let mid = fill_measure_action("A o4 cdef\n", 0, 9).expect("action");
-        assert_eq!(mid.title, "ctrmml: fill measure with rests (4/4)");
+        assert_eq!(mid.title, "ctrmml: fill measure (4/4)");
+        let mut named = mid.clone();
+        name_by_edit(&mut named, "A o4 cdef\n", 0, 9, true);
+        assert_eq!(named.title, "ctrmml: close measure (4/4)");
+        name_by_edit(&mut named, "A o4 cdef\n", 0, 9, false);
+        assert_eq!(named.title, "ctrmml: fill measure with rests (4/4)");
+        let mut after_bar = after.clone();
+        name_by_edit(&mut after_bar, "A o4 cdef |\n", 0, 11, true);
+        assert_eq!(after_bar.title, "ctrmml: insert empty measure (4/4)");
         assert!(fill_measure_action("#timesig no\nA cdef |\n", 1, 8).is_none());
     }
 
