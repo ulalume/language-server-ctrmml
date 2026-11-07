@@ -1,7 +1,11 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{atomic::AtomicU64, Arc, OnceLock},
+};
 
 use serde_json::Value;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, OnceCell, RwLock};
 use tower_lsp::Client;
 
 use ctrmml_lang_core::completion::CompletionSettings;
@@ -11,45 +15,53 @@ use crate::ctrmml_cmd::resolve_command_path;
 use crate::diagnostics::DiagnosticStoreHandle;
 use crate::fm_completion::FmInstrumentCache;
 use crate::playback::Playback;
+use crate::utils::read_file_text;
 
+/// Client facts and settings fixed by `initialize`.
+#[derive(Default)]
+pub(crate) struct Session {
+    pub(crate) client_kind: ClientKind,
+    pub(crate) roots: Vec<PathBuf>,
+    pub(crate) config: Config,
+    pub(crate) completion_settings: CompletionSettings,
+    pub(crate) supports_completion_as_is: bool,
+}
+
+/// Server state. Cloning shares it, so handlers can hand work to tasks.
+#[derive(Clone)]
 pub(crate) struct Backend {
     pub(crate) client: Client,
     pub(crate) docs: Arc<RwLock<HashMap<String, String>>>,
-    pub(crate) roots: Arc<RwLock<Vec<PathBuf>>>,
-    pub(crate) config: Arc<RwLock<Config>>,
-    command_path_cache: Arc<Mutex<Option<CommandPathCache>>>,
+    session: Arc<OnceLock<Session>>,
+    command_path: Arc<OnceCell<String>>,
     pub(crate) fm_instrument_cache: Arc<Mutex<Option<FmInstrumentCache>>>,
     pub(crate) diagnostics: DiagnosticStoreHandle,
     pub(crate) playback: Arc<Mutex<Option<Playback>>>,
-    pub(crate) playback_seq: Arc<Mutex<u64>>,
+    pub(crate) playback_seq: Arc<AtomicU64>,
     pub(crate) last_doc: Arc<RwLock<Option<String>>>,
-    pub(crate) completion_settings: Arc<RwLock<CompletionSettings>>,
-    pub(crate) supports_completion_as_is: Arc<RwLock<bool>>,
-    pub(crate) client_kind: Arc<RwLock<ClientKind>>,
-}
-
-struct CommandPathCache {
-    config_path: Option<String>,
-    resolved_path: String,
 }
 
 impl Backend {
     pub(crate) fn new(client: Client) -> Self {
         Self {
             client,
-            docs: Arc::new(RwLock::new(HashMap::new())),
-            roots: Arc::new(RwLock::new(Vec::new())),
-            config: Arc::new(RwLock::new(Config::default())),
-            command_path_cache: Arc::new(Mutex::new(None)),
-            fm_instrument_cache: Arc::new(Mutex::new(None)),
-            diagnostics: Arc::new(Mutex::new(Default::default())),
-            playback: Arc::new(Mutex::new(None)),
-            playback_seq: Arc::new(Mutex::new(0)),
-            last_doc: Arc::new(RwLock::new(None)),
-            completion_settings: Arc::new(RwLock::new(CompletionSettings::default())),
-            supports_completion_as_is: Arc::new(RwLock::new(false)),
-            client_kind: Arc::new(RwLock::new(ClientKind::default())),
+            docs: Arc::default(),
+            session: Arc::default(),
+            command_path: Arc::default(),
+            fm_instrument_cache: Arc::default(),
+            diagnostics: Arc::default(),
+            playback: Arc::default(),
+            playback_seq: Arc::default(),
+            last_doc: Arc::default(),
         }
+    }
+
+    pub(crate) fn session(&self) -> &Session {
+        self.session.get_or_init(Session::default)
+    }
+
+    pub(crate) fn start_session(&self, session: Session) {
+        let _ = self.session.set(session);
     }
 
     pub(crate) async fn resolve_uri_arg(
@@ -65,23 +77,23 @@ impl Backend {
         Err("no active document".to_string())
     }
 
-    pub(crate) async fn command_path(&self) -> std::result::Result<String, String> {
-        let config_path = self.config.read().await.command_path.clone();
-        {
-            let cache = self.command_path_cache.lock().await;
-            if let Some(cached) = cache.as_ref() {
-                if cached.config_path == config_path {
-                    return Ok(cached.resolved_path.clone());
-                }
-            }
+    /// The open document's text, else the file's.
+    pub(crate) async fn document_text(&self, uri: &str) -> Option<String> {
+        if let Some(text) = self.docs.read().await.get(uri) {
+            return Some(text.clone());
         }
+        let uri = uri.to_string();
+        tokio::task::spawn_blocking(move || read_file_text(&uri))
+            .await
+            .ok()
+            .flatten()
+    }
 
-        let resolved = resolve_command_path(config_path.clone()).await?;
-        let mut cache = self.command_path_cache.lock().await;
-        *cache = Some(CommandPathCache {
-            config_path,
-            resolved_path: resolved.clone(),
-        });
-        Ok(resolved)
+    /// The `ctrmml-cmd` to run, resolved once per session.
+    pub(crate) async fn command_path(&self) -> std::result::Result<String, String> {
+        self.command_path
+            .get_or_try_init(|| resolve_command_path(self.session().config.command_path.clone()))
+            .await
+            .cloned()
     }
 }

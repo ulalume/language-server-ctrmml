@@ -1,4 +1,5 @@
 use std::process::Stdio;
+use std::sync::atomic::Ordering;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, Command as TokioCommand};
@@ -59,12 +60,8 @@ impl Backend {
         start: Option<(u32, u32)>,
     ) -> std::result::Result<(), String> {
         let text = self
-            .docs
-            .read()
+            .document_text(&uri)
             .await
-            .get(&uri)
-            .cloned()
-            .or_else(|| read_file_text(&uri))
             .ok_or_else(|| "failed to read mml text".to_string())?;
         self.start_playback_inner(uri, text, start, PlaybackMode::Document)
             .await
@@ -154,11 +151,7 @@ impl Backend {
             .take()
             .ok_or_else(|| format!("failed to capture {CTRMML_CMD_NAME} stdout"))?;
 
-        let token = {
-            let mut seq = self.playback_seq.lock().await;
-            *seq += 1;
-            *seq
-        };
+        let token = self.playback_seq.fetch_add(1, Ordering::SeqCst) + 1;
 
         {
             let mut slot = self.playback.lock().await;
@@ -179,7 +172,7 @@ impl Backend {
             let mut reader = BufReader::new(stdout).lines();
             let mut playback_error_published = false;
             while let Ok(Some(line)) = reader.next_line().await {
-                if *seq.lock().await != token {
+                if seq.load(Ordering::SeqCst) != token {
                     break;
                 }
                 let msg = match parse_playback_message(&line) {
@@ -210,7 +203,7 @@ impl Backend {
                 }
             }
 
-            if *seq.lock().await == token {
+            if seq.load(Ordering::SeqCst) == token {
                 match playback_exit(mode, playback_error_published) {
                     PlaybackExit::Clear => {
                         clear_playback_diagnostics(&client, &store, &uri_clone).await;
@@ -246,10 +239,7 @@ impl Backend {
     }
 
     pub(crate) async fn stop_playback(&self) {
-        {
-            let mut seq = self.playback_seq.lock().await;
-            *seq += 1;
-        }
+        self.playback_seq.fetch_add(1, Ordering::SeqCst);
         let mut slot = self.playback.lock().await;
         if let Some(mut playback) = slot.take() {
             // Drop the watch sender first so the writer task exits and

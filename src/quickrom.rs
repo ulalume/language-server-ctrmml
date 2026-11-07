@@ -42,7 +42,7 @@ impl Backend {
         uri: String,
     ) -> std::result::Result<QuickromRunResult, String> {
         let start_path = uri_to_path(&uri).ok_or_else(|| "invalid file uri".to_string())?;
-        let roots = self.roots.read().await.clone();
+        let roots = self.session().roots.clone();
         let start_dir = if start_path.is_dir() {
             start_path.clone()
         } else {

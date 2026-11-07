@@ -1,8 +1,9 @@
 use std::{
-    env, fs, io,
+    env, fs,
+    io::{self, Cursor},
     path::{Path, PathBuf},
     process::{Output, Stdio},
-    time::{Duration, SystemTime},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use dirs::cache_dir;
@@ -15,47 +16,38 @@ use zip::ZipArchive;
 
 const CTRMML_CMD_REPO: &str = "ulalume/ctrmml-cmd";
 pub(crate) const CTRMML_CMD_NAME: &str = "ctrmml-cmd";
-const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(30 * 60);
-const UPDATE_CHECK_FILENAME: &str = "last_update_check";
+/// The ctrmml-cmd release downloaded when none is configured or on PATH.
+pub(crate) const CTRMML_CMD_VERSION: &str = "v0.0.69";
 
-#[derive(serde::Deserialize)]
-struct GithubRelease {
-    tag_name: String,
-    assets: Vec<GithubAsset>,
-}
-
-#[derive(serde::Deserialize)]
-struct GithubAsset {
-    name: String,
-    browser_download_url: String,
-}
-
+/// Resolve the command to run, in order: the configured path,
+/// `CTRMML_CMD_PATH`, `ctrmml-cmd` on PATH, then the pinned release
+/// (downloaded into the cache on first use).
 pub(crate) async fn resolve_command_path(
     config_path: Option<String>,
 ) -> std::result::Result<String, String> {
-    if let Some(path) = config_path {
-        if let Some(existing) = resolve_existing_command(&path) {
-            return Ok(existing);
-        }
-    }
-
-    if let Ok(path) = env::var("CTRMML_CMD_PATH") {
-        if !path.is_empty() {
-            if let Some(existing) = resolve_existing_command(&path) {
-                return Ok(existing);
-            }
-        }
-    }
-
-    if let Some(path) = which_in_path(CTRMML_CMD_NAME) {
+    let local = tokio::task::spawn_blocking(move || local_command_path(config_path))
+        .await
+        .map_err(|e| format!("failed to look up {CTRMML_CMD_NAME}: {e}"))?;
+    if let Some(path) = local {
         return Ok(path);
     }
+    download_ctrmml_cmd()
+        .await
+        .map(|path| path.to_string_lossy().into_owned())
+}
 
-    match download_ctrmml_cmd().await {
-        Ok(Some(path)) => Ok(path.to_string_lossy().to_string()),
-        Ok(None) => Ok(CTRMML_CMD_NAME.to_string()),
-        Err(err) => Err(err),
+fn local_command_path(config_path: Option<String>) -> Option<String> {
+    if let Some(path) = config_path.as_deref().and_then(resolve_existing_command) {
+        return Some(path);
     }
+    if let Some(path) = env::var("CTRMML_CMD_PATH")
+        .ok()
+        .filter(|path| !path.is_empty())
+        .and_then(|path| resolve_existing_command(&path))
+    {
+        return Some(path);
+    }
+    which_in_path(CTRMML_CMD_NAME)
 }
 
 pub(crate) async fn run_ctrmml_cmd<F>(
@@ -74,6 +66,7 @@ where
     }
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
+    cmd.kill_on_drop(true);
 
     let mut child = cmd
         .spawn()
@@ -135,108 +128,6 @@ fn which_in_path(cmd: &str) -> Option<String> {
     None
 }
 
-fn cache_base_dir() -> PathBuf {
-    cache_dir().unwrap_or_else(env::temp_dir).join("ctrmml-cmd")
-}
-
-fn update_check_path() -> PathBuf {
-    cache_base_dir().join(UPDATE_CHECK_FILENAME)
-}
-
-fn read_last_update_check() -> Option<SystemTime> {
-    let contents = fs::read_to_string(update_check_path()).ok()?;
-    let secs = contents.trim().parse::<u64>().ok()?;
-    Some(SystemTime::UNIX_EPOCH + Duration::from_secs(secs))
-}
-
-fn update_check_due() -> bool {
-    match read_last_update_check() {
-        Some(last) => last
-            .elapsed()
-            .map(|elapsed| elapsed >= UPDATE_CHECK_INTERVAL)
-            .unwrap_or(true),
-        None => true,
-    }
-}
-
-fn record_update_check() {
-    let secs = match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
-        Ok(duration) => duration.as_secs(),
-        Err(_) => return,
-    };
-    let path = update_check_path();
-    if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    let _ = fs::write(path, secs.to_string());
-}
-
-fn cached_bin_name() -> String {
-    if env::consts::OS == "windows" {
-        format!("{CTRMML_CMD_NAME}.exe")
-    } else {
-        CTRMML_CMD_NAME.to_string()
-    }
-}
-
-fn find_cached_binary() -> Option<PathBuf> {
-    let base = cache_base_dir();
-    let mut best: Option<(SystemTime, PathBuf)> = None;
-    let bin_name = cached_bin_name();
-
-    let entries = fs::read_dir(base).ok()?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let candidate = path.join(&bin_name);
-        if candidate.is_file() {
-            let modified = fs::metadata(&candidate)
-                .and_then(|meta| meta.modified())
-                .unwrap_or(SystemTime::UNIX_EPOCH);
-            let replace = match &best {
-                Some((current, _)) => modified > *current,
-                None => true,
-            };
-            if replace {
-                best = Some((modified, candidate));
-            }
-        } else if env::consts::OS == "windows" {
-            let alt = path.join(CTRMML_CMD_NAME);
-            if alt.is_file() {
-                let modified = fs::metadata(&alt)
-                    .and_then(|meta| meta.modified())
-                    .unwrap_or(SystemTime::UNIX_EPOCH);
-                let replace = match &best {
-                    Some((current, _)) => modified > *current,
-                    None => true,
-                };
-                if replace {
-                    best = Some((modified, alt));
-                }
-            }
-        }
-    }
-
-    best.map(|(_, path)| path)
-}
-
-async fn fetch_latest_release(client: &HttpClient) -> std::result::Result<GithubRelease, String> {
-    let url = format!("https://api.github.com/repos/{CTRMML_CMD_REPO}/releases/latest");
-    let release = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("failed to fetch release: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("failed to fetch release: {e}"))?
-        .json::<GithubRelease>()
-        .await
-        .map_err(|e| format!("failed to parse release: {e}"))?;
-    Ok(release)
-}
-
 fn resolve_existing_command(path: &str) -> Option<String> {
     let candidate = Path::new(path);
     if candidate.is_file() {
@@ -251,7 +142,37 @@ fn resolve_existing_command(path: &str) -> Option<String> {
     None
 }
 
-fn platform_asset_parts() -> std::result::Result<(String, String, String), String> {
+fn cache_base_dir() -> PathBuf {
+    cache_dir()
+        .unwrap_or_else(env::temp_dir)
+        .join(CTRMML_CMD_NAME)
+}
+
+fn cached_bin_name() -> String {
+    if cfg!(windows) {
+        format!("{CTRMML_CMD_NAME}.exe")
+    } else {
+        CTRMML_CMD_NAME.to_string()
+    }
+}
+
+/// The most recently installed cached release, any version.
+fn newest_cached_binary(base: &Path, bin_name: &str) -> Option<PathBuf> {
+    fs::read_dir(base)
+        .ok()?
+        .flatten()
+        .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+        .map(|entry| entry.path().join(bin_name))
+        .filter(|candidate| candidate.is_file())
+        .max_by_key(|candidate| {
+            fs::metadata(candidate)
+                .and_then(|meta| meta.modified())
+                .unwrap_or(UNIX_EPOCH)
+        })
+}
+
+fn platform_asset_parts() -> std::result::Result<(&'static str, &'static str, &'static str), String>
+{
     let os = match env::consts::OS {
         "macos" => "macos",
         "linux" => "linux",
@@ -264,162 +185,231 @@ fn platform_asset_parts() -> std::result::Result<(String, String, String), Strin
         other => return Err(format!("unsupported architecture {other}")),
     };
     let ext = if os == "windows" { "zip" } else { "tar.gz" };
-    Ok((os.to_string(), arch.to_string(), ext.to_string()))
+    Ok((os, arch, ext))
 }
 
-fn extract_zip(archive_path: &Path, out_dir: &Path) -> std::result::Result<(), String> {
-    let file = fs::File::open(archive_path).map_err(|e| format!("failed to open zip: {e}"))?;
-    let mut zip = ZipArchive::new(file).map_err(|e| format!("invalid zip: {e}"))?;
-    for i in 0..zip.len() {
-        let mut entry = zip
-            .by_index(i)
-            .map_err(|e| format!("zip read failed: {e}"))?;
-        let out_path = out_dir.join(entry.name());
-        if entry.is_dir() {
-            fs::create_dir_all(&out_path).map_err(|e| format!("failed to create dir: {e}"))?;
-        } else {
-            if let Some(parent) = out_path.parent() {
-                fs::create_dir_all(parent).map_err(|e| format!("failed to create dir: {e}"))?;
-            }
-            let mut out =
-                fs::File::create(&out_path).map_err(|e| format!("failed to create file: {e}"))?;
-            io::copy(&mut entry, &mut out).map_err(|e| format!("failed to extract file: {e}"))?;
+/// The pinned release from the cache, downloading it first if needed. A
+/// failed download falls back to the newest cached release.
+async fn download_ctrmml_cmd() -> std::result::Result<PathBuf, String> {
+    let base = cache_base_dir();
+    let version_dir = base.join(format!("{CTRMML_CMD_NAME}-{CTRMML_CMD_VERSION}"));
+    let bin_name = cached_bin_name();
+    let bin_path = version_dir.join(&bin_name);
+    let existing = bin_path.clone();
+    if tokio::task::spawn_blocking(move || existing.is_file())
+        .await
+        .unwrap_or(false)
+    {
+        return Ok(bin_path);
+    }
+
+    let result = fetch_and_install(&base, &version_dir, &bin_name).await;
+    match result {
+        Ok(path) => Ok(path),
+        Err(err) => {
+            let (base, bin_name) = (base.clone(), bin_name.clone());
+            tokio::task::spawn_blocking(move || newest_cached_binary(&base, &bin_name))
+                .await
+                .ok()
+                .flatten()
+                .ok_or(err)
         }
     }
-    Ok(())
 }
 
-fn extract_targz(archive_path: &Path, out_dir: &Path) -> std::result::Result<(), String> {
-    let file = fs::File::open(archive_path).map_err(|e| format!("failed to open tar.gz: {e}"))?;
-    let decoder = GzDecoder::new(file);
-    let mut archive = Archive::new(decoder);
-    archive
-        .unpack(out_dir)
-        .map_err(|e| format!("failed to unpack tar.gz: {e}"))?;
-    Ok(())
-}
-
-#[cfg(unix)]
-fn make_executable(path: &Path) -> std::result::Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
-    let mut perms = fs::metadata(path)
-        .map_err(|e| format!("failed to read permissions: {e}"))?
-        .permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(path, perms).map_err(|e| format!("failed to set permissions: {e}"))?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn make_executable(_path: &Path) -> std::result::Result<(), String> {
-    Ok(())
-}
-
-async fn download_ctrmml_cmd() -> std::result::Result<Option<PathBuf>, String> {
-    let cached_path = find_cached_binary();
-    if cached_path.is_some() && !update_check_due() {
-        return Ok(cached_path);
-    }
-
+async fn fetch_and_install(
+    base: &Path,
+    version_dir: &Path,
+    bin_name: &str,
+) -> std::result::Result<PathBuf, String> {
     let (os, arch, ext) = platform_asset_parts()?;
+    let version = CTRMML_CMD_VERSION.trim_start_matches('v');
+    let asset_name = format!("{CTRMML_CMD_NAME}-{version}-{os}-{arch}.{ext}");
+    let url = format!(
+        "https://github.com/{CTRMML_CMD_REPO}/releases/download/{CTRMML_CMD_VERSION}/{asset_name}"
+    );
     let client = HttpClient::builder()
         .user_agent("ctrmml-lsp")
         .build()
         .map_err(|e| format!("failed to build http client: {e}"))?;
-
-    let release = match fetch_latest_release(&client).await {
-        Ok(release) => {
-            record_update_check();
-            release
-        }
-        Err(err) => {
-            if let Some(path) = cached_path.as_ref() {
-                record_update_check();
-                return Ok(Some(path.clone()));
-            }
-            return Err(err);
-        }
-    };
-
-    let version = release.tag_name.trim_start_matches('v');
-    let asset_name = format!(
-        "{name}-{version}-{os}-{arch}.{ext}",
-        name = CTRMML_CMD_NAME,
-        version = version,
-        os = os,
-        arch = arch,
-        ext = ext,
-    );
-    let asset = match release.assets.iter().find(|asset| asset.name == asset_name) {
-        Some(asset) => asset,
-        None => {
-            if let Some(path) = cached_path.as_ref() {
-                return Ok(Some(path.clone()));
-            }
-            return Err(format!("no asset found matching {asset_name}"));
-        }
-    };
-
-    let base = cache_base_dir();
-    let version_dir = base.join(format!("{CTRMML_CMD_NAME}-{}", release.tag_name));
-    let bin_name = if os == "windows" {
-        format!("{CTRMML_CMD_NAME}.exe")
-    } else {
-        CTRMML_CMD_NAME.to_string()
-    };
-    let bin_path = version_dir.join(&bin_name);
-    if bin_path.is_file() {
-        return Ok(Some(bin_path));
-    }
-
-    fs::create_dir_all(&version_dir).map_err(|e| format!("failed to create cache dir: {e}"))?;
-
-    let tmp_path = version_dir.join(format!("download.{ext}"));
-    let bytes = match client
-        .get(&asset.browser_download_url)
+    let bytes = client
+        .get(&url)
         .send()
         .await
-        .map_err(|e| format!("failed to download asset: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("failed to download asset: {e}"))?
+        .and_then(|response| response.error_for_status())
+        .map_err(|e| format!("failed to download {asset_name}: {e}"))?
         .bytes()
         .await
-    {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            if let Some(path) = cached_path.as_ref() {
-                return Ok(Some(path.clone()));
-            }
-            return Err(format!("failed to read asset: {e}"));
-        }
-    };
-    fs::write(&tmp_path, &bytes).map_err(|e| format!("failed to write asset: {e}"))?;
+        .map_err(|e| format!("failed to download {asset_name}: {e}"))?;
 
-    if ext == "zip" {
-        if let Err(err) = extract_zip(&tmp_path, &version_dir) {
-            if let Some(path) = cached_path.as_ref() {
-                return Ok(Some(path.clone()));
-            }
-            return Err(err);
+    let (base, version_dir, bin_name) = (
+        base.to_path_buf(),
+        version_dir.to_path_buf(),
+        bin_name.to_string(),
+    );
+    tokio::task::spawn_blocking(move || {
+        install(&bytes, ext == "zip", &base, &version_dir, &bin_name)
+            .map_err(|e| format!("failed to install {asset_name}: {e}"))
+    })
+    .await
+    .map_err(|e| format!("failed to install {CTRMML_CMD_NAME}: {e}"))?
+}
+
+/// Extract `archive` into a private staging directory, then move it into
+/// place as `version_dir` in one rename, so other runs never see a
+/// partial install.
+fn install(
+    archive: &[u8],
+    is_zip: bool,
+    base: &Path,
+    version_dir: &Path,
+    bin_name: &str,
+) -> io::Result<PathBuf> {
+    fs::create_dir_all(base)?;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or_default();
+    let staging = base.join(format!(".install-{}-{nonce}", std::process::id()));
+    fs::create_dir(&staging)?;
+
+    let staged = extract(archive, is_zip, &staging).and_then(|()| {
+        let bin = staging.join(bin_name);
+        if !bin.is_file() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{bin_name} is missing from the archive"),
+            ));
         }
-    } else {
-        if let Err(err) = extract_targz(&tmp_path, &version_dir) {
-            if let Some(path) = cached_path.as_ref() {
-                return Ok(Some(path.clone()));
+        make_executable(&bin)
+    });
+    let bin_path = version_dir.join(bin_name);
+    let installed = staged.and_then(|()| {
+        if version_dir.exists() && !bin_path.is_file() {
+            fs::remove_dir_all(version_dir)?;
+        }
+        fs::rename(&staging, version_dir)
+    });
+    match installed {
+        Ok(()) => Ok(bin_path),
+        Err(err) => {
+            let _ = fs::remove_dir_all(&staging);
+            // Another run may have installed the same release meanwhile.
+            if bin_path.is_file() {
+                Ok(bin_path)
+            } else {
+                Err(err)
             }
-            return Err(err);
         }
     }
-    let _ = fs::remove_file(&tmp_path);
+}
 
-    if !bin_path.is_file() {
-        if let Some(path) = cached_path.as_ref() {
-            return Ok(Some(path.clone()));
-        }
-        return Err(format!(
-            "ctrmml-cmd binary not found after extracting {asset_name}"
-        ));
+fn extract(archive: &[u8], is_zip: bool, out_dir: &Path) -> io::Result<()> {
+    if !is_zip {
+        return Archive::new(GzDecoder::new(archive)).unpack(out_dir);
     }
-    make_executable(&bin_path)?;
-    Ok(Some(bin_path))
+    let mut zip = ZipArchive::new(Cursor::new(archive))?;
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i)?;
+        let Some(relative) = entry.enclosed_name().map(Path::to_path_buf) else {
+            continue;
+        };
+        let out_path = out_dir.join(relative);
+        if entry.is_dir() {
+            fs::create_dir_all(&out_path)?;
+            continue;
+        }
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        io::copy(&mut entry, &mut fs::File::create(&out_path)?)?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn make_executable(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = fs::metadata(path)?.permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(path, perms)
+}
+
+#[cfg(not(unix))]
+fn make_executable(_path: &Path) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use super::*;
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos();
+        let dir =
+            env::temp_dir().join(format!("ctrmml-cmd-{label}-{}-{nonce}", std::process::id()));
+        fs::create_dir_all(&dir).expect("create test directory");
+        dir
+    }
+
+    fn zip_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for (name, data) in entries {
+            writer
+                .start_file(*name, zip::write::FileOptions::default())
+                .expect("start zip entry");
+            writer.write_all(data).expect("write zip entry");
+        }
+        writer.finish().expect("finish zip").into_inner()
+    }
+
+    #[test]
+    fn zip_entries_outside_the_target_are_skipped() {
+        let root = temp_dir("zip-slip");
+        let out = root.join("out");
+        fs::create_dir_all(&out).expect("create out");
+        let archive = zip_bytes(&[("../escaped", b"x"), ("ctrmml-cmd", b"bin")]);
+
+        extract(&archive, true, &out).expect("extract");
+
+        assert!(out.join("ctrmml-cmd").is_file());
+        assert!(!root.join("escaped").exists());
+        fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[test]
+    fn install_moves_a_complete_release_into_place() {
+        let base = temp_dir("install");
+        let version_dir = base.join("ctrmml-cmd-v0");
+        let archive = zip_bytes(&[("ctrmml-cmd", b"bin"), ("LICENSE", b"text")]);
+
+        let bin = install(&archive, true, &base, &version_dir, "ctrmml-cmd").expect("install");
+
+        assert_eq!(bin, version_dir.join("ctrmml-cmd"));
+        assert!(bin.is_file());
+        let leftovers: Vec<_> = fs::read_dir(&base)
+            .expect("read base")
+            .flatten()
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with('.'))
+            .collect();
+        assert!(leftovers.is_empty());
+        fs::remove_dir_all(base).expect("remove test directory");
+    }
+
+    #[test]
+    fn an_archive_without_the_binary_installs_nothing() {
+        let base = temp_dir("install-missing");
+        let version_dir = base.join("ctrmml-cmd-v0");
+        let archive = zip_bytes(&[("README", b"text")]);
+
+        assert!(install(&archive, true, &base, &version_dir, "ctrmml-cmd").is_err());
+        assert!(!version_dir.exists());
+        assert_eq!(fs::read_dir(&base).expect("read base").count(), 0);
+        fs::remove_dir_all(base).expect("remove test directory");
+    }
 }

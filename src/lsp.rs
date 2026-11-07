@@ -16,10 +16,11 @@ use tower_lsp::{
     LanguageServer,
 };
 
-use crate::backend::Backend;
+use crate::backend::{Backend, Session};
 use crate::completion::scan_pcm_paths;
 use crate::config::{
-    apply_completion_client_defaults, completion_settings_from_value, config_from_value, ClientKind,
+    apply_completion_client_defaults, completion_settings_from_value, config_from_value,
+    ClientKind, Config,
 };
 use crate::export::ExportFormat;
 use crate::fill_measure::{fetch_cursor_tick, fill_measure_code_action};
@@ -49,7 +50,6 @@ impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         let client_kind =
             ClientKind::from_name(params.client_info.as_ref().map(|info| info.name.as_str()));
-        *self.client_kind.write().await = client_kind;
         let supports_completion_as_is = params
             .capabilities
             .text_document
@@ -58,7 +58,6 @@ impl LanguageServer for Backend {
             .and_then(|completion| completion.completion_item.as_ref())
             .and_then(|item| item.insert_text_mode_support.as_ref())
             .is_some_and(|support| support.value_set.contains(&InsertTextMode::AS_IS));
-        *self.supports_completion_as_is.write().await = supports_completion_as_is;
 
         let mut roots = Vec::new();
         if let Some(folders) = params.workspace_folders {
@@ -72,13 +71,13 @@ impl LanguageServer for Backend {
                 roots.push(path);
             }
         }
-        *self.roots.write().await = roots;
 
+        let mut config = Config::default();
         let mut completion_settings = Default::default();
         let mut hierarchy_explicit = false;
         if let Some(options) = params.initialization_options {
-            if let Some(config) = config_from_value(&options) {
-                *self.config.write().await = config;
+            if let Some(options_config) = config_from_value(&options) {
+                config = options_config;
             }
             (completion_settings, hierarchy_explicit) = completion_settings_from_value(&options);
         }
@@ -86,7 +85,13 @@ impl LanguageServer for Backend {
         // Compatibility until native extensions send completion settings:
         // client-name sniffing may fill only an omitted hierarchy flag.
         apply_completion_client_defaults(&mut completion_settings, hierarchy_explicit, client_kind);
-        *self.completion_settings.write().await = completion_settings;
+        self.start_session(Session {
+            client_kind,
+            roots,
+            config,
+            completion_settings,
+            supports_completion_as_is,
+        });
 
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
@@ -278,8 +283,8 @@ impl LanguageServer for Backend {
             .get(&uri)
             .cloned()
             .unwrap_or_default();
-        let roots = self.roots.read().await.clone();
-        let settings = self.completion_settings.read().await.clone();
+        let roots = self.session().roots.clone();
+        let settings = self.session().completion_settings.clone();
         let pos = Pos {
             line: position.line,
             character: position.character,
@@ -318,7 +323,7 @@ impl LanguageServer for Backend {
                 completion_resolve(&text, pos, trigger, &settings, payload)
             }
         };
-        let supports_as_is = *self.supports_completion_as_is.read().await;
+        let supports_as_is = self.session().supports_completion_as_is;
         Ok(Some(core_completion_response(list, supports_as_is)))
     }
 
@@ -334,8 +339,7 @@ impl LanguageServer for Backend {
             .get(&uri)
             .cloned()
             .unwrap_or_default();
-        let client_kind = *self.client_kind.read().await;
-        let config = code_lens_config(client_kind);
+        let config = code_lens_config(self.session().client_kind);
         let mut out = Vec::new();
         for lens in code_lens_with_config(&text, config) {
             // The lens's anchor span is the entire line; clients are free
@@ -468,8 +472,7 @@ impl LanguageServer for Backend {
                 };
                 match self.run_export(uri, ExportFormat::Vgm).await {
                     Ok(path) => {
-                        let roots = self.roots.read().await.clone();
-                        let display = relative_path_display(&path, &roots);
+                        let display = relative_path_display(&path, &self.session().roots);
                         let _ = self
                             .client
                             .show_message(MessageType::INFO, format!("exported {display}"))
@@ -490,8 +493,7 @@ impl LanguageServer for Backend {
                 };
                 match self.run_export(uri, ExportFormat::Wav).await {
                     Ok(path) => {
-                        let roots = self.roots.read().await.clone();
-                        let display = relative_path_display(&path, &roots);
+                        let display = relative_path_display(&path, &self.session().roots);
                         let _ = self
                             .client
                             .show_message(MessageType::INFO, format!("exported {display}"))
@@ -1004,11 +1006,11 @@ async fn handle_mdslink_result(
 ) {
     match result {
         Ok(result) => {
-            let roots = backend.roots.read().await.clone();
-            let seq = relative_path_display(&result.outputs.seq_output, &roots);
-            let pcm = relative_path_display(&result.outputs.pcm_output, &roots);
-            let inc = relative_path_display(&result.outputs.asm_header_output, &roots);
-            let header = relative_path_display(&result.outputs.c_header_output, &roots);
+            let roots = &backend.session().roots;
+            let seq = relative_path_display(&result.outputs.seq_output, roots);
+            let pcm = relative_path_display(&result.outputs.pcm_output, roots);
+            let inc = relative_path_display(&result.outputs.asm_header_output, roots);
+            let header = relative_path_display(&result.outputs.c_header_output, roots);
             let mut message = format!("mdslink outputs: {seq}, {pcm}, {inc}, {header}");
             if let Some(warning) = result.warning {
                 message.push_str(";\n\n**warning**: ");
@@ -1031,8 +1033,8 @@ async fn handle_quickrom_result(
 ) {
     match result {
         Ok(result) => {
-            let roots = backend.roots.read().await.clone();
-            let rom = relative_path_display(&result.rom_output, &roots);
+            let roots = &backend.session().roots;
+            let rom = relative_path_display(&result.rom_output, roots);
             let mut message = format!("quickrom output: {rom}");
             if let Some(warning) = result.warning {
                 message.push_str(";\n\n**warning**: ");
