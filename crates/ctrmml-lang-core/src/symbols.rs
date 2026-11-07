@@ -9,7 +9,9 @@ use crate::completion::{
     byte_offset_to_utf16_character, utf16_character_to_byte_offset, EditRange, Pos,
 };
 use crate::docs::CHANNEL_DESCRIPTIONS;
-use crate::instrument_header::{instrument_header_at, parse_at_number, strip_keyword};
+use crate::instrument_header::{
+    instrument_header_at, instrument_name, parse_at_number, strip_keyword,
+};
 use crate::string_model::BorrowedLinesModel;
 use crate::text_scan::{is_in_comment, token_at};
 use crate::track_selector::{parse_leading_track_selector, LineReader};
@@ -122,11 +124,7 @@ pub fn document_symbols(text: &str) -> Vec<DocumentSymbol> {
                 .instrument_type()
                 .and_then(|ty| find_block_at(&model, number, ty))
                 .map_or(header.keyword_line, |block| block.end_line);
-            let comment = line
-                .split_once(';')
-                .map(|(_, comment)| comment.trim())
-                .filter(|comment| !comment.is_empty());
-            let detail = match (header.keyword, comment) {
+            let detail = match (header.keyword, instrument_name(line)) {
                 ("", None) => None,
                 ("", Some(comment)) => Some(comment.to_string()),
                 (keyword, None) => Some(keyword.to_string()),

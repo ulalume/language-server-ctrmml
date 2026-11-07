@@ -768,10 +768,22 @@ pub fn document_symbols_json(text: &str) -> String {
 
 /// Enumerate code-lens entries for `text` as a JSON array. Each entry is
 /// `{ line, title, command_id, arguments }` where `command_id` is `null`
-/// for informational labels.
+/// for informational labels; see `ctrmml_lang_core::code_lens` for the
+/// argument layout. `options_json` is `{ "code_lens_icons": "codicon" |
+/// "text", "code_lens_file_actions": bool }` (both optional, defaults
+/// `"codicon"` and `true`; `""` means all defaults). Malformed options
+/// return `{ "error": "..." }`.
 #[wasm_bindgen]
-pub fn code_lens_json(text: &str) -> String {
-    serde_json::to_string(&ctrmml_lang_core::code_lens(text))
+pub fn code_lens_json(text: &str, options_json: &str) -> String {
+    let config: ctrmml_lang_core::CodeLensConfig = if options_json.trim().is_empty() {
+        Default::default()
+    } else {
+        match serde_json::from_str(options_json) {
+            Ok(config) => config,
+            Err(error) => return json_error(&format!("invalid options_json: {error}")),
+        }
+    };
+    serde_json::to_string(&ctrmml_lang_core::code_lens_with_config(text, config))
         .expect("code lens entries serialize to JSON")
 }
 
@@ -1178,6 +1190,30 @@ mod tests {
         assert_eq!(symbols[0]["kind"], "instrument");
         assert_eq!(symbols[1]["kind"], "track");
         assert_eq!(symbols[1]["range"]["end"]["character"], 8);
+    }
+
+    #[test]
+    fn code_lens_options_pick_icons_and_file_actions() {
+        let titles = |options: &str| -> Vec<String> {
+            let lenses: serde_json::Value =
+                serde_json::from_str(&code_lens_json("@1 fm\n", options)).expect("lens JSON");
+            lenses
+                .as_array()
+                .expect("lens array")
+                .iter()
+                .map(|lens| lens["title"].as_str().unwrap_or("").to_string())
+                .collect()
+        };
+        assert_eq!(
+            titles(""),
+            ["$(folder-opened) Load", "$(save) Save", "$(play) FM"]
+        );
+        assert_eq!(
+            titles(r#"{"codeLensIcons": "text", "code_lens_file_actions": false, "other": 1}"#),
+            ["▷ FM"]
+        );
+        assert!(code_lens_json("", "{").starts_with("{\"error\""));
+        assert!(code_lens_json("", r#"{"code_lens_icons": "emoji"}"#).starts_with("{\"error\""));
     }
 
     #[test]

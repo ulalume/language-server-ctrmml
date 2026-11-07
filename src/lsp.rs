@@ -1041,7 +1041,7 @@ mod tests {
             .into_iter()
             .find(|lens| lens.command_id.as_deref() == Some(CMD_PREVIEW_PATCH))
             .expect("FM preview lens");
-        assert_eq!(lens.arguments, ["0", "fm", "A", "7"]);
+        assert_eq!(lens.arguments, ["0", "fm", "A", "7", "0", "5"]);
 
         let mut wire_args = vec![Value::String("file:///song.mml".to_string())];
         wire_args.extend(lens.arguments.into_iter().map(Value::String));

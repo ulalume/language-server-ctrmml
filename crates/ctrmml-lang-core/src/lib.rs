@@ -65,8 +65,8 @@ pub use diagnostics::{
 pub use fill_measure::{fill_measure_edit, fill_measure_plan, FillMeasureEdit, FillMeasurePlan};
 pub use hover::{hover_at, hover_at_utf16, HoverInfo};
 pub use instrument_header::{
-    instrument_header_at, instrument_header_for_keyword_line, parse_at_number, InstrumentHeader,
-    InstrumentType,
+    instrument_header_at, instrument_header_for_keyword_line, instrument_name, parse_at_number,
+    InstrumentHeader, InstrumentType,
 };
 pub use instrument_preview::{build_preview_mml, extract_instrument_block, ExtractedBlock};
 pub use key_sig::{default_key_sig, parse_key_sig, scale_for_name, scan_key_sig_at, KeySig};
