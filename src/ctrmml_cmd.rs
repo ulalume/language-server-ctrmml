@@ -17,7 +17,7 @@ use zip::ZipArchive;
 const CTRMML_CMD_REPO: &str = "ulalume/ctrmml-cmd";
 pub(crate) const CTRMML_CMD_NAME: &str = "ctrmml-cmd";
 /// The ctrmml-cmd release downloaded when none is configured or on PATH.
-pub(crate) const CTRMML_CMD_VERSION: &str = "v0.0.68";
+pub(crate) const CTRMML_CMD_VERSION: &str = "v0.0.70";
 
 /// Resolve the command to run, in order: the configured path,
 /// `CTRMML_CMD_PATH`, `ctrmml-cmd` on PATH, then the pinned release
