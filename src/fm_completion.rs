@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::SystemTime;
 
 use ctrmml_lang_core::completion::FmPatchData;
@@ -23,7 +24,7 @@ struct CachedPatch {
     file: String,
     name: String,
     has_macros: bool,
-    mml: String,
+    mml: Arc<str>,
 }
 
 impl FmInstrumentCache {
@@ -86,7 +87,7 @@ fn parse_instruments(files: &[PathBuf]) -> Vec<CachedPatch> {
                 file: path.clone(),
                 name: patch.name,
                 has_macros: patch.has_macros,
-                mml: body,
+                mml: body.into(),
             });
         }
     }
@@ -186,7 +187,7 @@ mod tests {
             file: file.to_string(),
             name: name.to_string(),
             has_macros,
-            mml: mml.to_string(),
+            mml: mml.into(),
         }
     }
 
@@ -340,7 +341,7 @@ mod tests {
         assert_eq!(core.len(), 2);
         assert_eq!(core[0].rel_path, "patches/lead.dmp");
         assert_eq!(core[0].name.as_deref(), Some("Lead"));
-        assert_eq!(core[0].mml, " 1,2,3 ");
+        assert_eq!(&*core[0].mml, " 1,2,3 ");
         assert!(core[0].has_macros);
         assert_eq!(core[1].rel_path, "../shared/bass.fui");
         assert_eq!(core[1].name, None);

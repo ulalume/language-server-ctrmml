@@ -5,6 +5,8 @@
 
 mod types;
 
+use std::collections::{HashMap, HashSet};
+
 pub use types::{
     ArpeggioPattern, ChordStackMode, CompletionPlan, CompletionSettings, CoreCommand,
     CoreCompletionList, CoreItem, CoreItemKind, CoreTextEdit, CursorTickData, DataPayload,
@@ -599,18 +601,11 @@ fn resolve_pcm_paths(text: &str, pos: Pos, paths: Vec<String>) -> CoreCompletion
             character: byte_offset_to_utf16_character(line, cursor),
         },
     );
-    let mut seen = Vec::new();
+    let mut seen = HashSet::new();
     let items = paths
         .into_iter()
         .filter(|path| path.starts_with(&context.path_prefix))
-        .filter(|path| {
-            if seen.contains(path) {
-                false
-            } else {
-                seen.push(path.clone());
-                true
-            }
-        })
+        .filter(|path| seen.insert(path.clone()))
         .map(|path| CoreItem {
             label: path.clone(),
             label_description: None,
@@ -645,17 +640,10 @@ fn resolve_pcm_instruments(text: &str, pos: Pos, paths: Vec<String>) -> CoreComp
         return CoreCompletionList::empty();
     };
     let range = end_of_line_range(line, pos.line, start);
-    let mut seen = Vec::new();
+    let mut seen = HashSet::new();
     let mut items: Vec<CoreItem> = paths
         .into_iter()
-        .filter(|path| {
-            if seen.contains(path) {
-                false
-            } else {
-                seen.push(path.clone());
-                true
-            }
-        })
+        .filter(|path| seen.insert(path.clone()))
         .map(|path| CoreItem {
             label: path.clone(),
             label_description: None,
@@ -734,7 +722,7 @@ fn resolve_fm_patches(
         .iter()
         .filter(|patch| !patch.rel_path.is_empty() && !patch.mml.trim().is_empty())
         .collect();
-    let mut patch_counts = std::collections::HashMap::new();
+    let mut patch_counts = HashMap::new();
     for patch in &patches {
         *patch_counts
             .entry(patch.rel_path.as_str())
@@ -765,7 +753,7 @@ fn resolve_fm_patches(
 
 fn render_fm_flat_items(
     patches: &[&FmPatchData],
-    patch_counts: &std::collections::HashMap<&str, usize>,
+    patch_counts: &HashMap<&str, usize>,
     range: EditRange,
     additional_edits: &[CoreTextEdit],
 ) -> Vec<CoreItem> {
@@ -823,22 +811,15 @@ fn render_fm_flat_item(
 
 fn render_fm_file_items(
     patches: &[&FmPatchData],
-    patch_counts: &std::collections::HashMap<&str, usize>,
+    patch_counts: &HashMap<&str, usize>,
     range: EditRange,
     additional_edits: &[CoreTextEdit],
 ) -> Vec<CoreItem> {
-    let mut rel_paths = Vec::new();
+    let mut rel_paths = HashSet::new();
     patches
         .iter()
         .copied()
-        .filter(|patch| {
-            if rel_paths.contains(&patch.rel_path.as_str()) {
-                false
-            } else {
-                rel_paths.push(patch.rel_path.as_str());
-                true
-            }
-        })
+        .filter(|patch| rel_paths.insert(patch.rel_path.as_str()))
         .filter_map(|patch| {
             let rel_path = patch.rel_path.as_str();
             let count = patch_counts.get(rel_path).copied().unwrap_or_default();
@@ -1782,7 +1763,7 @@ mod tests {
         let patch = FmPatchData {
             rel_path: "inst/bass.dmp".to_string(),
             name: Some("Bass".to_string()),
-            mml: "@1 fm ; Bass\n; ALG  FB\n    4   7\n".to_string(),
+            mml: "@1 fm ; Bass\n; ALG  FB\n    4   7\n".into(),
             has_macros: false,
         };
         let flat = completion_resolve(
@@ -1821,7 +1802,7 @@ mod tests {
         let patch = FmPatchData {
             rel_path: "banks/kit.dmp".to_string(),
             name: Some("Kick".to_string()),
-            mml: "@1 fm ; Kick\n  4 7\n".to_string(),
+            mml: "@1 fm ; Kick\n  4 7\n".into(),
             has_macros: false,
         };
 
@@ -1849,7 +1830,7 @@ mod tests {
         let patch = FmPatchData {
             rel_path: "banks/kit.dmp".to_string(),
             name: Some("Kick".to_string()),
-            mml: "@1 fm ; Kick\n  4 7\n".to_string(),
+            mml: "@1 fm ; Kick\n  4 7\n".into(),
             has_macros: false,
         };
 
@@ -1877,7 +1858,7 @@ mod tests {
         let patch = |rel_path: &str, mml: &str| FmPatchData {
             rel_path: rel_path.to_string(),
             name: None,
-            mml: mml.to_string(),
+            mml: mml.into(),
             has_macros: false,
         };
         let list = completion_resolve(
@@ -1928,13 +1909,13 @@ mod tests {
                 FmPatchData {
                     rel_path: "banks/kit.dmp".to_string(),
                     name: Some("Kick".to_string()),
-                    mml: "@1 fm ; Kick\n  4 7\n".to_string(),
+                    mml: "@1 fm ; Kick\n  4 7\n".into(),
                     has_macros: false,
                 },
                 FmPatchData {
                     rel_path: "banks/kit.dmp".to_string(),
                     name: Some("Snare".to_string()),
-                    mml: "@1 fm ; Snare\n  3 2\n".to_string(),
+                    mml: "@1 fm ; Snare\n  3 2\n".into(),
                     has_macros: false,
                 },
             ]),
@@ -1967,19 +1948,19 @@ mod tests {
                 FmPatchData {
                     rel_path: "inst/bass.dmp".to_string(),
                     name: Some("Bass".to_string()),
-                    mml: "@1 fm ; Bass\n; ALG  FB\n    4   7\n".to_string(),
+                    mml: "@1 fm ; Bass\n; ALG  FB\n    4   7\n".into(),
                     has_macros: false,
                 },
                 FmPatchData {
                     rel_path: "inst/multi.dmp".to_string(),
                     name: Some("Pad".to_string()),
-                    mml: "@1 fm ; Pad\n; ALG  FB\n    2   0\n".to_string(),
+                    mml: "@1 fm ; Pad\n; ALG  FB\n    2   0\n".into(),
                     has_macros: false,
                 },
                 FmPatchData {
                     rel_path: "inst/multi.dmp".to_string(),
                     name: Some("Brass".to_string()),
-                    mml: "@1 fm ; Brass\n; ALG  FB\n    6   1\n".to_string(),
+                    mml: "@1 fm ; Brass\n; ALG  FB\n    6   1\n".into(),
                     has_macros: true,
                 },
             ]),

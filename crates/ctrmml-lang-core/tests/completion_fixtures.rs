@@ -1290,7 +1290,7 @@ fn core_data(data: &Data) -> DataPayload {
                 .map(|patch| FmPatchData {
                     rel_path: patch.rel_path.clone(),
                     name: patch.name.clone(),
-                    mml: patch.mml.clone(),
+                    mml: patch.mml.as_str().into(),
                     has_macros: patch.has_macros,
                 })
                 .collect(),

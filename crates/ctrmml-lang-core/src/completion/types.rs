@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 
 /// Zero-based document position. `character` is measured in UTF-16 code units.
@@ -284,8 +286,8 @@ pub struct FmPatchData {
     pub rel_path: String,
     /// Patch name within a multi-patch file, when present.
     pub name: Option<String>,
-    /// Converted `@N fm` body.
-    pub mml: String,
+    /// Converted `@N fm` body, shared with the host's cache.
+    pub mml: Arc<str>,
     /// Whether the converted body contains macros.
     pub has_macros: bool,
 }
