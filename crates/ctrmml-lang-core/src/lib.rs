@@ -28,6 +28,7 @@ pub mod octave_scan;
 pub mod preview_note;
 pub mod psg_parser;
 pub mod string_model;
+pub mod symbols;
 pub mod text_scan;
 pub mod timesig;
 pub mod track_selector;
@@ -76,6 +77,7 @@ pub use psg_parser::{
     total_duration, PsgEnvelope, PsgNode, TimePoint,
 };
 pub use string_model::{BorrowedLinesModel, LinesModel};
+pub use symbols::{definition_at, document_symbols, DocumentSymbol, SymbolKind};
 pub use text_scan::{
     double_quote_bounds, is_at_number, is_in_comment, is_in_key_sig, single_quote_bounds, token_at,
     tokenize_outside_double_quotes,

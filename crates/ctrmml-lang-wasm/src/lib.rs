@@ -745,6 +745,24 @@ pub fn hover_at_json(text: &str, line: u32, col: u32) -> String {
         .expect("hover info serializes to JSON")
 }
 
+/// The definition of the `@N`, `@EN`, `@MN`, `@PN` or `*N` reference at the
+/// 0-based `line` and UTF-16 `character`: `{ start: { line, character },
+/// end }` covering the defining name, or `"null"`.
+#[wasm_bindgen]
+pub fn definition_at_json(text: &str, line: u32, character: u32) -> String {
+    serde_json::to_string(&ctrmml_lang_core::definition_at(text, line, character))
+        .expect("definition range serializes to JSON")
+}
+
+/// The document outline as a JSON array of `{ name, detail, kind, range,
+/// selection_range }`; `kind` is `"meta"`, `"instrument"`, `"envelope"` or
+/// `"track"`, `detail` may be `null`, ranges are 0-based UTF-16.
+#[wasm_bindgen]
+pub fn document_symbols_json(text: &str) -> String {
+    serde_json::to_string(&ctrmml_lang_core::document_symbols(text))
+        .expect("document symbols serialize to JSON")
+}
+
 /// Enumerate code-lens entries for `text` as a JSON array. Each entry is
 /// `{ line, title, command_id, arguments }` where `command_id` is `null`
 /// for informational labels.
@@ -1130,6 +1148,29 @@ mod tests {
                 "noise_mode": 0
             })
         );
+    }
+
+    #[test]
+    fn definition_and_symbol_json_shapes() {
+        let text = "@1 fm ; Bass\nA 'あ' @1\n";
+        let definition: serde_json::Value =
+            serde_json::from_str(&definition_at_json(text, 1, 7)).expect("definition JSON");
+        assert_eq!(
+            definition,
+            serde_json::json!({
+                "start": {"line": 0, "character": 0},
+                "end": {"line": 0, "character": 2}
+            })
+        );
+        assert_eq!(definition_at_json(text, 1, 0), "null");
+
+        let symbols: serde_json::Value =
+            serde_json::from_str(&document_symbols_json(text)).expect("symbols JSON");
+        assert_eq!(symbols[0]["name"], "@1");
+        assert_eq!(symbols[0]["detail"], "fm Bass");
+        assert_eq!(symbols[0]["kind"], "instrument");
+        assert_eq!(symbols[1]["kind"], "track");
+        assert_eq!(symbols[1]["range"]["end"]["character"], 8);
     }
 
     #[test]

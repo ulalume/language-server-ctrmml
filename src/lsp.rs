@@ -8,11 +8,12 @@ use tower_lsp::{
         CompletionItemLabelDetails, CompletionList, CompletionOptions, CompletionParams,
         CompletionResponse, CompletionTextEdit, DidChangeTextDocumentParams,
         DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-        Documentation, ExecuteCommandOptions, ExecuteCommandParams, GotoDefinitionParams,
-        GotoDefinitionResponse, Hover, HoverContents, HoverParams, HoverProviderCapability,
-        InitializeParams, InitializeResult, InsertTextFormat, InsertTextMode, Location,
-        MarkupContent, MarkupKind, MessageActionItem, MessageType, OneOf, Position, Range,
-        SaveOptions, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
+        DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, Documentation,
+        ExecuteCommandOptions, ExecuteCommandParams, GotoDefinitionParams, GotoDefinitionResponse,
+        Hover, HoverContents, HoverParams, HoverProviderCapability, InitializeParams,
+        InitializeResult, InsertTextFormat, InsertTextMode, Location, MarkupContent, MarkupKind,
+        MessageActionItem, MessageType, OneOf, Position, Range, SaveOptions, ServerCapabilities,
+        SymbolKind as LspSymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind,
         TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit,
     },
     LanguageServer,
@@ -47,9 +48,9 @@ use ctrmml_lang_core::completion::{
 use ctrmml_lang_core::docs::COMPLETION_TRIGGER_CHARACTERS;
 use ctrmml_lang_core::transpose::Direction;
 use ctrmml_lang_core::{
-    build_preview_mml, byte_offset_to_utf16_character, code_lens_with_config,
-    extract_instrument_block, hover_at, instrument_header::strip_keyword, is_in_comment, token_at,
-    utf16_character_to_byte_offset, CodeLensConfig, ExtractedBlock, IconStyle, InstrumentType,
+    build_preview_mml, byte_offset_to_utf16_character, code_lens_with_config, definition_at,
+    document_symbols, extract_instrument_block, hover_at, utf16_character_to_byte_offset,
+    CodeLensConfig, ExtractedBlock, IconStyle, InstrumentType, SymbolKind,
 };
 
 #[tower_lsp::async_trait]
@@ -137,6 +138,7 @@ impl LanguageServer for Backend {
                     ..CompletionOptions::default()
                 }),
                 definition_provider: Some(OneOf::Left(true)),
+                document_symbol_provider: Some(OneOf::Left(true)),
                 execute_command_provider: Some(ExecuteCommandOptions {
                     commands: command_ids(client_kind),
                     ..ExecuteCommandOptions::default()
@@ -260,20 +262,32 @@ impl LanguageServer for Backend {
         let Some(text) = docs.get(&uri) else {
             return Ok(None);
         };
-        let line = line_at(text, position.line);
-        let col = utf16_character_to_byte_offset(line, position.character);
-        if is_in_comment(line, col) {
-            return Ok(None);
-        }
-        let Some(range) =
-            definition_target_at(line, col).and_then(|target| find_definition(text, &target))
-        else {
+        let Some(range) = definition_at(text, position.line, position.character) else {
             return Ok(None);
         };
         Ok(Some(GotoDefinitionResponse::Scalar(Location {
             uri: params.text_document_position_params.text_document.uri,
-            range,
+            range: core_edit_range(range),
         })))
+    }
+
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
+        let uri = params.text_document.uri.to_string();
+        if !is_mml_uri(&uri) {
+            return Ok(None);
+        }
+        let docs = self.docs.read().await;
+        let Some(text) = docs.get(&uri) else {
+            return Ok(None);
+        };
+        let symbols = document_symbols(text)
+            .into_iter()
+            .map(lsp_document_symbol)
+            .collect();
+        Ok(Some(DocumentSymbolResponse::Nested(symbols)))
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -779,48 +793,23 @@ fn core_edit_range(range: EditRange) -> Range {
     }
 }
 
-/// A `prefix<digits>` reference: `@N` instruments, `@EN` / `@MN` / `@PN`
-/// definitions and `*N` tracks.
-struct DefinitionTarget {
-    prefix: &'static str,
-    digits: String,
-}
-
-fn definition_target_at(line: &str, col: usize) -> Option<DefinitionTarget> {
-    let (token, _start, _end) = token_at(line, col)?;
-    let prefix = ["@E", "@M", "@P", "@", "*"].into_iter().find(|prefix| {
-        token
-            .strip_prefix(prefix)
-            .is_some_and(|rest| rest.starts_with(|ch: char| ch.is_ascii_digit()))
-    })?;
-    let digits = token[prefix.len()..]
-        .chars()
-        .take_while(|ch| ch.is_ascii_digit())
-        .collect();
-    Some(DefinitionTarget { prefix, digits })
-}
-
-/// The first line that defines `target`: `prefix<digits>` at the start of
-/// the line, followed by whitespace, `;` or the end of the line.
-fn find_definition(text: &str, target: &DefinitionTarget) -> Option<Range> {
-    for (idx, line) in text.lines().enumerate() {
-        let start = line.len() - line.trim_start().len();
-        let Some(rest) = strip_keyword(&line[start..], target.prefix) else {
-            continue;
-        };
-        let Some(after) = rest.strip_prefix(target.digits.as_str()) else {
-            continue;
-        };
-        if !after.is_empty() && !after.starts_with(|ch: char| ch.is_whitespace() || ch == ';') {
-            continue;
-        }
-        let end = start + target.prefix.len() + target.digits.len();
-        return Some(Range {
-            start: Position::new(idx as u32, byte_offset_to_utf16_character(line, start)),
-            end: Position::new(idx as u32, byte_offset_to_utf16_character(line, end)),
-        });
+#[allow(deprecated)]
+fn lsp_document_symbol(symbol: ctrmml_lang_core::DocumentSymbol) -> DocumentSymbol {
+    DocumentSymbol {
+        name: symbol.name,
+        detail: symbol.detail,
+        kind: match symbol.kind {
+            SymbolKind::Meta => LspSymbolKind::PROPERTY,
+            SymbolKind::Instrument => LspSymbolKind::STRUCT,
+            SymbolKind::Envelope => LspSymbolKind::ARRAY,
+            SymbolKind::Track => LspSymbolKind::FUNCTION,
+        },
+        tags: None,
+        deprecated: None,
+        range: core_edit_range(symbol.range),
+        selection_range: core_edit_range(symbol.selection_range),
+        children: None,
     }
-    None
 }
 
 #[cfg(test)]
@@ -1027,34 +1016,23 @@ mod tests {
         assert_eq!(other[0].command_id.as_deref(), Some(CMD_PREVIEW_PATCH));
     }
 
-    fn definition(text: &str, line: &str, col: usize) -> Option<Range> {
-        find_definition(text, &definition_target_at(line, col)?)
-    }
-
     #[test]
-    fn definitions_are_found_by_prefix_and_number() {
-        let text = "@10 fm\n@1 psg 15\n@E1 1 2\n*3 c d\nA @1 @E1 *3\n";
-        let line = "A @1 @E1 *3";
-        assert_eq!(definition(text, line, 3).map(|r| r.start.line), Some(1));
-        assert_eq!(definition(text, line, 6).map(|r| r.start.line), Some(2));
-        assert_eq!(definition(text, line, 10).map(|r| r.start.line), Some(3));
+    fn document_symbols_map_to_lsp_kinds() {
+        let symbols: Vec<DocumentSymbol> = document_symbols("#title x\n@1 fm\n@M1 0\nA c\n")
+            .into_iter()
+            .map(lsp_document_symbol)
+            .collect();
+        let kinds: Vec<LspSymbolKind> = symbols.iter().map(|symbol| symbol.kind).collect();
         assert_eq!(
-            definition(text, line, 3).map(|r| (r.start.character, r.end.character)),
-            Some((0, 2))
+            kinds,
+            [
+                LspSymbolKind::PROPERTY,
+                LspSymbolKind::STRUCT,
+                LspSymbolKind::ARRAY,
+                LspSymbolKind::FUNCTION
+            ]
         );
-    }
-
-    #[test]
-    fn definition_ranges_count_utf16_units() {
-        // `あ` is one UTF-16 unit and three bytes.
-        let text = "\u{3000}@1 fm\nA @1\n";
-        let range = definition(text, "A @1", 3).expect("definition");
-        assert_eq!((range.start.character, range.end.character), (1, 3));
-    }
-
-    #[test]
-    fn a_definition_needs_a_boundary_after_its_number() {
-        assert_eq!(definition("@1fm\nA @1\n", "A @1", 3), None);
+        assert_eq!(symbols[1].selection_range.end, Position::new(1, 2));
     }
 
     #[test]
