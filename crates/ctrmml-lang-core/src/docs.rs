@@ -996,6 +996,19 @@ pub fn command_entry(key: &str, signed: bool) -> Option<(&'static str, &'static 
     Some((entry.label, entry.doc))
 }
 
+/// Mega Drive (MDSDRV) channel names of tracks `A`..`P`, by track id.
+pub const CHANNEL_DESCRIPTIONS: &[&str] = &[
+    "FM1", "FM2", "FM3", "FM4", "FM5", "FM6", // A..F
+    "PSG1", "PSG2", "PSG3",  // G..I
+    "Noise", // J
+    "PCM2", "PCM3", // K..L
+    "Dummy", "Dummy", "Dummy", "Dummy", // M..P
+];
+
+/// Characters that open completion.
+pub const COMPLETION_TRIGGER_CHARACTERS: &[&str] =
+    &["#", "@", "\"", " ", "'", "/", ".", "{", "+", "-", "=", "|"];
+
 /// Title shown at the top of every track-selector hover bubble and the
 /// "Tracks" entry in the Help Panel. Decoupled from the actual letter
 /// the user is typing so the hover doesn't read `A — Select tracks…`
@@ -1054,6 +1067,8 @@ pub struct AllDocs {
     pub track_doc_numeric: &'static str,
     pub track_doc_letters: &'static str,
     pub fm_default_template: &'static str,
+    pub channel_descriptions: &'static [&'static str],
+    pub completion_trigger_characters: &'static [&'static str],
 }
 
 pub fn all_docs() -> AllDocs {
@@ -1078,5 +1093,7 @@ pub fn all_docs() -> AllDocs {
         track_doc_numeric: TRACK_DOC_NUMERIC,
         track_doc_letters: TRACK_DOC_LETTERS,
         fm_default_template: FM_DEFAULT_TEMPLATE,
+        channel_descriptions: CHANNEL_DESCRIPTIONS,
+        completion_trigger_characters: COMPLETION_TRIGGER_CHARACTERS,
     }
 }

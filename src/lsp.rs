@@ -44,6 +44,7 @@ use ctrmml_lang_core::completion::{
     completion_plan, completion_resolve, CompletionPlan, CoreCommand, CoreCompletionList, CoreItem,
     CoreItemKind, DataPayload, DataRequest, EditRange, InsertFormat, Pos,
 };
+use ctrmml_lang_core::docs::COMPLETION_TRIGGER_CHARACTERS;
 use ctrmml_lang_core::transpose::Direction;
 use ctrmml_lang_core::{
     build_preview_mml, byte_offset_to_utf16_character, code_lens_with_config,
@@ -127,20 +128,12 @@ impl LanguageServer for Backend {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 completion_provider: Some(CompletionOptions {
                     resolve_provider: Some(false),
-                    trigger_characters: Some(vec![
-                        "#".into(),
-                        "@".into(),
-                        "\"".into(),
-                        " ".into(),
-                        "'".into(),
-                        "/".into(),
-                        ".".into(),
-                        "{".into(),
-                        "+".into(),
-                        "-".into(),
-                        "=".into(),
-                        "|".into(),
-                    ]),
+                    trigger_characters: Some(
+                        COMPLETION_TRIGGER_CHARACTERS
+                            .iter()
+                            .map(|character| character.to_string())
+                            .collect(),
+                    ),
                     ..CompletionOptions::default()
                 }),
                 definition_provider: Some(OneOf::Left(true)),

@@ -15,6 +15,7 @@
 
 use serde::Serialize;
 
+use crate::docs::CHANNEL_DESCRIPTIONS;
 use crate::instrument_header::{instrument_header_at, InstrumentType};
 use crate::string_model::BorrowedLinesModel;
 use crate::track_selector::{parse_leading_track_selector, LineReader};
@@ -101,18 +102,6 @@ impl Default for CodeLensConfig {
         }
     }
 }
-
-// Channel descriptions for Mega Drive / MDSDRV. Mirrors
-// `web-ctrmml/src/ui/piano-roll-colors.ts CHANNEL_DESCRIPTIONS`. Platform-
-// independent emission is future work — at the moment ctrmml only targets
-// MD/MDSDRV so a fixed table is fine.
-const CHANNEL_DESCRIPTIONS: &[&str] = &[
-    "FM1", "FM2", "FM3", "FM4", "FM5", "FM6", // A..F
-    "PSG1", "PSG2", "PSG3",  // G..I
-    "Noise", // J
-    "PCM2", "PCM3", // K..L
-    "Dummy", "Dummy", "Dummy", "Dummy", // M..P
-];
 
 /// Enumerate code lenses for `text`.
 pub fn code_lens(text: &str) -> Vec<CodeLens> {

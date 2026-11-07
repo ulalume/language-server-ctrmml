@@ -948,6 +948,22 @@ mod tests {
     }
 
     #[test]
+    fn docs_json_carries_channel_names_and_trigger_characters() {
+        let docs: serde_json::Value = serde_json::from_str(&docs_json()).expect("docs JSON");
+        assert_eq!(docs["channel_descriptions"][9], "Noise");
+        assert_eq!(
+            docs["channel_descriptions"].as_array().map(Vec::len),
+            Some(16)
+        );
+        assert_eq!(
+            docs["completion_trigger_characters"]
+                .as_array()
+                .map(Vec::len),
+            Some(12)
+        );
+    }
+
+    #[test]
     fn hover_json_keeps_its_shape() {
         let value: serde_json::Value =
             serde_json::from_str(&hover_at_json("A @1 c", 0, 2)).expect("hover JSON");
