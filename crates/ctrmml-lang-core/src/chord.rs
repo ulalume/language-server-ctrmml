@@ -305,25 +305,6 @@ fn root_index(root_letter_lower: char) -> Option<usize> {
     CHORD_LETTERS.iter().position(|&c| c == effective)
 }
 
-/// Resolve root index + the root pitch in semitones after applying the
-/// user-typed accidental or the ambient key signature.
-///
-/// Returns `(root_idx, root_adjusted_sem)`.
-fn root_state(
-    root_letter_lower: char,
-    root_accidental: Option<RootAccidental>,
-    key_sig: &KeySig,
-) -> Option<(usize, i32)> {
-    let root_idx = root_index(root_letter_lower)?;
-    let effective_root = CHORD_LETTERS[root_idx];
-    let root_sem = chord_natural_semitones(effective_root)?;
-    let root_acc = match root_accidental {
-        Some(a) => a.as_i32(),
-        None => key_sig.get_or_zero(effective_root) as i32,
-    };
-    Some((root_idx, root_sem + root_acc))
-}
-
 /// Render the accidental glyph **for a non-root tone**, given its accidental
 /// offset and the ambient key signature.
 ///
@@ -341,95 +322,147 @@ fn non_root_accidental_glyph(acc: i32, letter: char, key_sig: &KeySig) -> &'stat
     }
 }
 
-/// Generic diatonic chord: stack letters by thirds (every other letter),
-/// no key-sig-aware accidentals. Returns `None` for unknown root letters.
-///
-/// If the user typed an explicit root accidental, preserve it on the root
-/// only.
-///
-/// Port of `renderGenericChord` in `web-ctrmml/src/mml/chord.ts`.
-pub fn render_generic_chord(
-    root_letter_lower: char,
-    root_accidental: Option<RootAccidental>,
-    size: ChordSize,
-) -> Option<String> {
-    let root_idx = root_index(root_letter_lower)?;
-    let steps = size.steps();
-    let mut parts: Vec<String> = Vec::with_capacity(steps.len());
-    for (i, s) in steps.iter().enumerate() {
-        let letter = CHORD_LETTERS[(root_idx + *s as usize) % CHORD_LETTERS.len()];
-        if i == 0 {
-            let mut p = String::new();
-            p.push(letter);
-            p.push_str(accidental_char(root_accidental));
-            parts.push(p);
-        } else {
-            parts.push(letter.to_string());
-        }
-    }
-    Some(parts.join("/"))
-}
-
-/// Render a named chord as a ctrmml branch expression (e.g. `"c/e-/g"`).
-///
-/// Every chord tone's pitch equals the root pitch (user-typed accidental
-/// or the ambient key-sig value) plus the named interval. Non-root tones
-/// emit an accidental only when it differs from the ambient key signature
-/// spelling.
-///
-/// Port of `renderChord` in `web-ctrmml/src/mml/chord.ts`.
-pub fn render_chord(
-    root_letter_lower: char,
-    root_accidental: Option<RootAccidental>,
-    def: &ChordDef,
-    key_sig: &KeySig,
-) -> Option<String> {
-    let (root_idx, root_adjusted_sem) = root_state(root_letter_lower, root_accidental, key_sig)?;
-
-    let mut parts: Vec<String> = Vec::with_capacity(def.letter_steps.len());
-    for (k, &step) in def.letter_steps.iter().enumerate() {
-        let letter_idx = (root_idx + step as usize) % CHORD_LETTERS.len();
-        let letter = CHORD_LETTERS[letter_idx];
-        let letter_sem = chord_natural_semitones(letter)?;
-        let mut acc = root_adjusted_sem + def.intervals[k] - letter_sem;
-        if acc > 6 {
-            acc -= 12;
-        }
-        if acc < -6 {
-            acc += 12;
-        }
-
-        let mut note_text = String::new();
-        if k == 0 {
-            note_text.push(letter);
-            if root_accidental.is_some() {
-                note_text.push_str(accidental_char(root_accidental));
-            } else {
-                note_text.push_str(non_root_accidental_glyph(acc, letter, key_sig));
-            }
-        } else {
-            let spelled = spell_tone(letter, acc, 0)?;
-            note_text.push(spelled.letter);
-            note_text.push_str(non_root_accidental_glyph(
-                spelled.accidental,
-                spelled.letter,
-                key_sig,
-            ));
-        }
-        parts.push(note_text);
-    }
-    Some(parts.join("/"))
-}
-
+/// A chord tone before rendering: a natural letter and its accidental
+/// (positive = sharp).
 #[derive(Debug, Clone, Copy)]
-struct StackedTone {
+struct Tone {
     letter: char,
-    /// Accidental relative to the natural letter (positive = sharp).
     acc: i32,
 }
 
+/// Which letters and accidentals make up a chord.
+enum Shape<'a> {
+    /// Letters `steps` above the root, each taking the key signature's
+    /// accidental (the root keeps a typed one).
+    Diatonic(&'a [i32]),
+    /// A named chord: letters and semitone intervals from its definition.
+    Named(&'a ChordDef),
+}
+
+/// How chord tones are written.
+enum Voicing<'a> {
+    /// Letters joined by `/`.
+    Plain,
+    /// Bottom-up with `>` / `<` per branch; see [`render_stacked_chord`].
+    Stacked {
+        channel_octaves: &'a [i32],
+        compensate: bool,
+    },
+}
+
+/// Resolve the chord tones for a root (`'h'` reads as `'b'`).
+fn chord_tones(
+    root_letter_lower: char,
+    root_accidental: Option<RootAccidental>,
+    shape: Shape,
+    key_sig: &KeySig,
+) -> Option<Vec<Tone>> {
+    let root_idx = root_index(root_letter_lower)?;
+    let letter_at = |step: i32| CHORD_LETTERS[(root_idx + step as usize) % CHORD_LETTERS.len()];
+    let root_letter = CHORD_LETTERS[root_idx];
+    let root_acc = match root_accidental {
+        Some(a) => a.as_i32(),
+        None => key_sig.get_or_zero(root_letter) as i32,
+    };
+    let tones = match shape {
+        Shape::Diatonic(steps) => steps
+            .iter()
+            .enumerate()
+            .map(|(k, &step)| {
+                let letter = letter_at(step);
+                let acc = if k == 0 {
+                    root_acc
+                } else {
+                    key_sig.get_or_zero(letter) as i32
+                };
+                Tone { letter, acc }
+            })
+            .collect(),
+        Shape::Named(def) => {
+            let root_pitch = chord_natural_semitones(root_letter)? + root_acc;
+            def.letter_steps
+                .iter()
+                .zip(def.intervals)
+                .map(|(&step, &interval)| {
+                    let letter = letter_at(step);
+                    let mut acc =
+                        root_pitch + interval - chord_natural_semitones(letter).unwrap_or(0);
+                    if acc > 6 {
+                        acc -= 12;
+                    }
+                    if acc < -6 {
+                        acc += 12;
+                    }
+                    Tone { letter, acc }
+                })
+                .collect()
+        }
+    };
+    Some(tones)
+}
+
+/// Write `tones` as a ctrmml branch expression. The root keeps a typed
+/// accidental verbatim; other tones are respelled into single accidentals
+/// and carry one only where it differs from the key signature.
+fn render_tones(
+    tones: &[Tone],
+    root_accidental: Option<RootAccidental>,
+    key_sig: &KeySig,
+    voicing: Voicing,
+) -> String {
+    match voicing {
+        Voicing::Plain => tones
+            .iter()
+            .enumerate()
+            .map(|(k, tone)| {
+                let spelled = if k == 0 {
+                    SpelledTone {
+                        letter: tone.letter,
+                        accidental: tone.acc,
+                        octave: 0,
+                    }
+                } else {
+                    spell_tone(tone.letter, tone.acc, 0).expect("chord tones use natural letters")
+                };
+                let mut text = spelled.letter.to_string();
+                text.push_str(tone_glyph(k, &spelled, root_accidental, key_sig));
+                text
+            })
+            .collect::<Vec<_>>()
+            .join("/"),
+        Voicing::Stacked {
+            channel_octaves,
+            compensate,
+        } => stack_tones(tones, root_accidental, key_sig, channel_octaves, compensate),
+    }
+}
+
+fn tone_glyph(
+    k: usize,
+    spelled: &SpelledTone,
+    root_accidental: Option<RootAccidental>,
+    key_sig: &KeySig,
+) -> &'static str {
+    if k == 0 && root_accidental.is_some() {
+        accidental_char(root_accidental)
+    } else {
+        non_root_accidental_glyph(spelled.accidental, spelled.letter, key_sig)
+    }
+}
+
+fn render(
+    root_letter_lower: char,
+    root_accidental: Option<RootAccidental>,
+    shape: Shape,
+    key_sig: &KeySig,
+    voicing: Voicing,
+) -> Option<String> {
+    let tones = chord_tones(root_letter_lower, root_accidental, shape, key_sig)?;
+    Some(render_tones(&tones, root_accidental, key_sig, voicing))
+}
+
 fn stack_tones(
-    tones: &[StackedTone],
+    tones: &[Tone],
     root_accidental: Option<RootAccidental>,
     key_sig: &KeySig,
     channel_octaves: &[i32],
@@ -447,9 +480,7 @@ fn stack_tones(
     let mut parts: Vec<String> = Vec::with_capacity(tones.len());
     let mut prev_pitch: i32 = -1;
     for (k, tone) in tones.iter().enumerate() {
-        let theoretical_letter = tone.letter;
-        let theoretical_acc = tone.acc;
-        let letter_sem = chord_natural_semitones(theoretical_letter).unwrap_or(0);
+        let letter_sem = chord_natural_semitones(tone.letter).unwrap_or(0);
 
         // Natural-letter octave (without the accidental) is what the `>` / `<`
         // prefix needs to shift the channel to; the accidental is emitted as a
@@ -458,13 +489,13 @@ fn stack_tones(
         let target_pitch: i32;
         if k == 0 {
             target_oct = chans[0];
-            target_pitch = (target_oct - 1) * 12 + letter_sem + theoretical_acc;
+            target_pitch = (target_oct - 1) * 12 + letter_sem + tone.acc;
         } else {
             // `Math.floor((prevPitch - letterSem) / 12) + 1`. `div_euclid`
             // matches `Math.floor` for the positive divisor 12, where Rust's
             // built-in `/` would truncate toward zero on negative dividends.
             let mut t_oct = (prev_pitch - letter_sem).div_euclid(12) + 1;
-            let mut t_pitch = (t_oct - 1) * 12 + letter_sem + theoretical_acc;
+            let mut t_pitch = (t_oct - 1) * 12 + letter_sem + tone.acc;
             while t_pitch < prev_pitch {
                 t_oct += 1;
                 t_pitch += 12;
@@ -475,57 +506,83 @@ fn stack_tones(
 
         let spelled = if k == 0 {
             SpelledTone {
-                letter: theoretical_letter,
-                accidental: theoretical_acc,
+                letter: tone.letter,
+                accidental: tone.acc,
                 octave: target_oct,
             }
         } else {
-            spell_tone(theoretical_letter, theoretical_acc, target_oct)
-                .expect("stacked tones use natural chord letters")
+            spell_tone(tone.letter, tone.acc, target_oct).expect("chord tones use natural letters")
         };
 
         let shift = spelled.octave - chans[k];
         chans[k] = spelled.octave;
 
         let mut note_text = String::with_capacity(shift.unsigned_abs() as usize + 2);
-        let (glyph, count) = if shift > 0 {
-            ('>', shift as usize)
-        } else {
-            ('<', shift.unsigned_abs() as usize)
-        };
-        for _ in 0..count {
+        let glyph = if shift > 0 { '>' } else { '<' };
+        for _ in 0..shift.unsigned_abs() {
             note_text.push(glyph);
         }
         note_text.push(spelled.letter);
-        if k == 0 && root_accidental.is_some() {
-            note_text.push_str(accidental_char(root_accidental));
-        } else {
-            note_text.push_str(non_root_accidental_glyph(
-                spelled.accidental,
-                spelled.letter,
-                key_sig,
-            ));
-        }
+        note_text.push_str(tone_glyph(k, &spelled, root_accidental, key_sig));
         parts.push(note_text);
         prev_pitch = target_pitch;
     }
 
     if compensate {
-        for k in 0..parts.len() {
-            let diff = chans[k] - original[k];
-            if diff > 0 {
-                for _ in 0..diff {
-                    parts[k].push('<');
-                }
-            } else if diff < 0 {
-                for _ in 0..(-diff) {
-                    parts[k].push('>');
-                }
+        for (part, (now, before)) in parts.iter_mut().zip(chans.iter().zip(&original)) {
+            let diff = now - before;
+            let glyph = if diff > 0 { '<' } else { '>' };
+            for _ in 0..diff.unsigned_abs() {
+                part.push(glyph);
             }
         }
     }
 
     parts.join("/")
+}
+
+/// Generic diatonic chord: stack letters by thirds (every other letter),
+/// no key-sig-aware accidentals. Returns `None` for unknown root letters.
+///
+/// If the user typed an explicit root accidental, preserve it on the root
+/// only.
+///
+/// Port of `renderGenericChord` in `web-ctrmml/src/mml/chord.ts`.
+pub fn render_generic_chord(
+    root_letter_lower: char,
+    root_accidental: Option<RootAccidental>,
+    size: ChordSize,
+) -> Option<String> {
+    render(
+        root_letter_lower,
+        root_accidental,
+        Shape::Diatonic(size.steps()),
+        &KeySig::new(),
+        Voicing::Plain,
+    )
+}
+
+/// Render a named chord as a ctrmml branch expression (e.g. `"c/e-/g"`).
+///
+/// Every chord tone's pitch equals the root pitch (user-typed accidental
+/// or the ambient key-sig value) plus the named interval. Non-root tones
+/// emit an accidental only when it differs from the ambient key signature
+/// spelling.
+///
+/// Port of `renderChord` in `web-ctrmml/src/mml/chord.ts`.
+pub fn render_chord(
+    root_letter_lower: char,
+    root_accidental: Option<RootAccidental>,
+    def: &ChordDef,
+    key_sig: &KeySig,
+) -> Option<String> {
+    render(
+        root_letter_lower,
+        root_accidental,
+        Shape::Named(def),
+        key_sig,
+        Voicing::Plain,
+    )
 }
 
 /// Named chord, stacked bottom-up using `>` / `<` per branch. Pitch of each
@@ -544,33 +601,16 @@ pub fn render_stacked_chord(
     channel_octaves: &[i32],
     compensate: bool,
 ) -> Option<String> {
-    let (root_idx, root_adjusted_sem) = root_state(root_letter_lower, root_accidental, key_sig)?;
-
-    let tones: Vec<StackedTone> = def
-        .letter_steps
-        .iter()
-        .enumerate()
-        .map(|(k, &step)| {
-            let letter = CHORD_LETTERS[(root_idx + step as usize) % CHORD_LETTERS.len()];
-            let mut acc =
-                root_adjusted_sem + def.intervals[k] - chord_natural_semitones(letter).unwrap_or(0);
-            if acc > 6 {
-                acc -= 12;
-            }
-            if acc < -6 {
-                acc += 12;
-            }
-            StackedTone { letter, acc }
-        })
-        .collect();
-
-    Some(stack_tones(
-        &tones,
+    render(
+        root_letter_lower,
         root_accidental,
+        Shape::Named(def),
         key_sig,
-        channel_octaves,
-        compensate,
-    ))
+        Voicing::Stacked {
+            channel_octaves,
+            compensate,
+        },
+    )
 }
 
 /// Generic diatonic dyad: root letter + the letter `step` positions away.
@@ -587,14 +627,13 @@ pub fn render_generic_diatonic_dyad(
     if !(1..=6).contains(&step) {
         return None;
     }
-    let root_idx = root_index(root_letter_lower)?;
-    let upper_letter = CHORD_LETTERS[(root_idx + step as usize) % CHORD_LETTERS.len()];
-    let mut out = String::with_capacity(4);
-    out.push(root_letter_lower);
-    out.push_str(accidental_char(root_accidental));
-    out.push('/');
-    out.push(upper_letter);
-    Some(out)
+    render(
+        root_letter_lower,
+        root_accidental,
+        Shape::Diatonic(&[0, step]),
+        &KeySig::new(),
+        Voicing::Plain,
+    )
 }
 
 /// Stacked variant of [`render_generic_diatonic_dyad`] using `>` / `<` to
@@ -610,29 +649,16 @@ pub fn render_stacked_generic_diatonic_dyad(
     if !(1..=6).contains(&step) {
         return None;
     }
-    let root_idx = root_index(root_letter_lower)?;
-    let upper_letter = CHORD_LETTERS[(root_idx + step as usize) % CHORD_LETTERS.len()];
-    let root_acc = match root_accidental {
-        Some(a) => a.as_i32(),
-        None => key_sig.get_or_zero(root_letter_lower) as i32,
-    };
-    let tones = [
-        StackedTone {
-            letter: root_letter_lower,
-            acc: root_acc,
-        },
-        StackedTone {
-            letter: upper_letter,
-            acc: key_sig.get_or_zero(upper_letter) as i32,
-        },
-    ];
-    Some(stack_tones(
-        &tones,
+    render(
+        root_letter_lower,
         root_accidental,
+        Shape::Diatonic(&[0, step]),
         key_sig,
-        channel_octaves,
-        compensate,
-    ))
+        Voicing::Stacked {
+            channel_octaves,
+            compensate,
+        },
+    )
 }
 
 /// Diatonic chord by letter only (no forced interval table), stacked
@@ -649,33 +675,16 @@ pub fn render_stacked_generic_chord(
     channel_octaves: &[i32],
     compensate: bool,
 ) -> Option<String> {
-    let root_idx = root_index(root_letter_lower)?;
-    let steps = size.steps();
-    let tones: Vec<StackedTone> = steps
-        .iter()
-        .enumerate()
-        .map(|(k, &step)| {
-            let letter = CHORD_LETTERS[(root_idx + step as usize) % CHORD_LETTERS.len()];
-            let default_acc = key_sig.get_or_zero(letter) as i32;
-            let acc = if k == 0 {
-                match root_accidental {
-                    Some(a) => a.as_i32(),
-                    None => default_acc,
-                }
-            } else {
-                default_acc
-            };
-            StackedTone { letter, acc }
-        })
-        .collect();
-
-    Some(stack_tones(
-        &tones,
+    render(
+        root_letter_lower,
         root_accidental,
+        Shape::Diatonic(size.steps()),
         key_sig,
-        channel_octaves,
-        compensate,
-    ))
+        Voicing::Stacked {
+            channel_octaves,
+            compensate,
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -870,6 +879,18 @@ mod tests {
         // b4 to f needs a `>` so the upper tone stays above b4.
         assert_eq!(
             render_stacked_generic_diatonic_dyad('b', None, 4, &ks(), &[4, 4], false).as_deref(),
+            Some("b/>f")
+        );
+    }
+
+    #[test]
+    fn h_dyads_render_like_b() {
+        assert_eq!(
+            render_generic_diatonic_dyad('h', None, 4).as_deref(),
+            Some("b/f")
+        );
+        assert_eq!(
+            render_stacked_generic_diatonic_dyad('h', None, 4, &ks(), &[4, 4], false).as_deref(),
             Some("b/>f")
         );
     }
