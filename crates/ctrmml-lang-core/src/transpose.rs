@@ -15,7 +15,7 @@ use crate::brace_state::BraceState;
 use crate::chord::chord_natural_semitones;
 use crate::key_sig::{parse_key_sig, scan_key_sig_at, KeySig};
 use crate::octave_scan::scan_brace_state_at;
-use crate::text_scan::{floor_char_boundary, is_in_comment, is_in_key_sig, is_in_string};
+use crate::text_scan::{floor_char_boundary, LineContext};
 use crate::track_selector::{find_enclosing_track_selector, line_carries_track_mml, LineReader};
 
 // ---------------------------------------------------------------------------
@@ -233,12 +233,21 @@ pub fn transpose_selection(
     let sel_text = sel_lines.join("\n");
     // Byte offset of the selection start within its full line. Matches the
     // clamped `from` above so per-byte `abs_col` lookups into the full line
-    // (is_in_comment / is_in_string / is_in_key_sig) stay aligned.
+    // contexts stay aligned.
     let col_offset = full_lines
         .first()
         .map(|full| floor_char_boundary(full, (selection.start_column as usize).saturating_sub(1)))
         .unwrap_or(0);
     let bytes = sel_text.as_bytes();
+    let contexts: Vec<LineContext> = full_lines
+        .iter()
+        .map(|line| LineContext::new(line))
+        .collect();
+    let in_comment =
+        |line: usize, col: usize| contexts.get(line).is_some_and(|c| c.in_comment(col));
+    let in_string = |line: usize, col: usize| contexts.get(line).is_some_and(|c| c.in_string(col));
+    let in_key_sig =
+        |line: usize, col: usize| contexts.get(line).is_some_and(|c| c.in_key_sig(col));
 
     // Per-line track classification. Non-MML lines (`#title`, `@N`
     // instrument definitions and their indented bodies, `;` comments) must
@@ -278,13 +287,11 @@ pub fn transpose_selection(
         } else {
             col_in_line
         };
-        let full_line = full_lines.get(line_idx).map(String::as_str).unwrap_or("");
-
         // Non-track lines (`#title …`, `@N …`, instrument-body
         // continuations, blank lines, etc.) and `;` line-comments are
         // skipped wholesale — their text is not MML and must never
         // feed the note detector.
-        if !line_is_track[line_idx] || is_in_comment(full_line, abs_col) {
+        if !line_is_track[line_idx] || in_comment(line_idx, abs_col) {
             let remain = sel_lines[line_idx].len() - col_in_line;
             i += remain;
             col_in_line += remain;
@@ -295,13 +302,13 @@ pub fn transpose_selection(
         // `'fm3 0001'`) are opaque strings — skip every byte the
         // line-level scan flags as inside one. This also covers the
         // case where the selection itself begins inside a string.
-        if is_in_string(full_line, abs_col) {
+        if in_string(line_idx, abs_col) {
             i += 1;
             col_in_line += 1;
             continue;
         }
 
-        if is_in_key_sig(full_line, abs_col) {
+        if in_key_sig(line_idx, abs_col) {
             i += 1;
             col_in_line += 1;
             continue;
@@ -534,11 +541,10 @@ pub fn transpose_selection(
                 } else {
                     low_col_in_sel
                 };
-                let full_line = full_lines.get(low_line).map(String::as_str).unwrap_or("");
                 // Mirror lift: non-track lines and `;` line-comments are
                 // skipped wholesale; `'…'`/`"…"` strings are skipped byte
                 // by byte (interleaved MML may follow on the same line).
-                if !line_is_track[low_line] || is_in_comment(full_line, abs_col) {
+                if !line_is_track[low_line] || in_comment(low_line, abs_col) {
                     let line_end = bytes[*j..]
                         .iter()
                         .position(|&b| b == b'\n')
@@ -552,8 +558,8 @@ pub fn transpose_selection(
                 // `'…'`/`"…"` strings, `_{…}` key-sig blocks, and the original
                 // `>`/`<` shifts (already queued for removal) carry no brace or
                 // octave state for the lower walk — skip them, mirroring Lift.
-                if is_in_string(full_line, abs_col)
-                    || is_in_key_sig(full_line, abs_col)
+                if in_string(low_line, abs_col)
+                    || in_key_sig(low_line, abs_col)
                     || shift_set.contains(j)
                 {
                     low_col_in_sel += 1;

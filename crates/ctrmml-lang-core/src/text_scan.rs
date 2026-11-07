@@ -49,6 +49,84 @@ pub fn is_in_comment(line: &str, col: usize) -> bool {
     false
 }
 
+/// [`is_in_comment`], [`is_in_string`] and [`is_in_key_sig`] for every
+/// column of one line, computed in one pass over it.
+pub(crate) struct LineContext {
+    /// First `;` outside quotes.
+    comment_start: Option<usize>,
+    /// Per byte: inside or on a quote.
+    string: Vec<bool>,
+    /// Per byte `i`: [`is_in_key_sig`] for `col = i + 1`.
+    key_sig: Vec<bool>,
+}
+
+impl LineContext {
+    pub(crate) fn new(line: &str) -> Self {
+        let bytes = line.as_bytes();
+
+        let mut comment_start = None;
+        let (mut in_double, mut in_single) = (false, false);
+        for (i, &ch) in bytes.iter().enumerate() {
+            match ch {
+                b'"' if !in_single => in_double = !in_double,
+                b'\'' if !in_double => in_single = !in_single,
+                b';' if !in_double && !in_single => {
+                    comment_start = Some(i);
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        let mut string = vec![false; bytes.len()];
+        let (mut in_double, mut in_single) = (false, false);
+        for (i, &ch) in bytes.iter().enumerate() {
+            match ch {
+                b'"' if !in_single => {
+                    in_double = !in_double;
+                    string[i] = true;
+                }
+                b'\'' if !in_double => {
+                    in_single = !in_single;
+                    string[i] = true;
+                }
+                b';' if !in_double && !in_single => break,
+                _ => string[i] = in_double || in_single,
+            }
+        }
+
+        let mut key_sig = vec![false; bytes.len()];
+        for i in 1..bytes.len() {
+            key_sig[i] = match bytes[i] {
+                b'}' => false,
+                b'{' if bytes[i - 1] == b'_' => true,
+                _ => key_sig[i - 1],
+            };
+        }
+
+        Self {
+            comment_start,
+            string,
+            key_sig,
+        }
+    }
+
+    pub(crate) fn in_comment(&self, col: usize) -> bool {
+        self.comment_start.is_some_and(|start| start < col)
+    }
+
+    pub(crate) fn in_string(&self, col: usize) -> bool {
+        self.string.get(col).copied().unwrap_or(false)
+    }
+
+    pub(crate) fn in_key_sig(&self, col: usize) -> bool {
+        if col == 0 || self.key_sig.is_empty() {
+            return false;
+        }
+        self.key_sig[(col - 1).min(self.key_sig.len() - 1)]
+    }
+}
+
 /// Largest char boundary `<= idx` in `s` (clamped to `s.len()`). Keeps
 /// `&s[..idx]` / `&s[idx..]` slicing panic-safe when a caller hands us a
 /// byte offset that lands inside a multi-byte codepoint — e.g. a UTF-16
@@ -476,6 +554,43 @@ mod tests {
         // Column 7 sits just after the real `;` at index 6, outside any
         // string — must read as a comment start.
         assert!(is_in_comment(line, 7));
+    }
+
+    // ---------- LineContext -------------------------------------------------
+
+    #[test]
+    fn line_context_matches_the_per_column_scans() {
+        for line in [
+            "",
+            "A c ; d",
+            "A _{+c} cd _{-b} e",
+            "_{+c no close",
+            "'fm3 0011' c \"a;b\" ; 'x' _{c}",
+            "\"a 'b ; c\" ; real",
+            "'; still string' x",
+            "'tl1 -2''tl3 -2' c",
+            "A あ 'モード' ; コメント _{",
+            "}{_{}",
+        ] {
+            let context = LineContext::new(line);
+            for col in 0..line.len() + 3 {
+                assert_eq!(
+                    context.in_comment(col),
+                    is_in_comment(line, col),
+                    "{line:?} {col}"
+                );
+                assert_eq!(
+                    context.in_string(col),
+                    is_in_string(line, col),
+                    "{line:?} {col}"
+                );
+                assert_eq!(
+                    context.in_key_sig(col),
+                    is_in_key_sig(line, col),
+                    "{line:?} {col}"
+                );
+            }
+        }
     }
 
     // ---------- token_at ----------------------------------------------------
