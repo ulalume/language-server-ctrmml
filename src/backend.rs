@@ -11,7 +11,7 @@ use tower_lsp::Client;
 use ctrmml_lang_core::completion::CompletionSettings;
 
 use crate::check::CheckQueue;
-use crate::config::{ClientKind, Config};
+use crate::config::{ClientOptions, Settings};
 use crate::ctrmml_cmd::resolve_command_path;
 use crate::diagnostics::DiagnosticStoreHandle;
 use crate::fm_completion::FmPatchCache;
@@ -19,15 +19,40 @@ use crate::playback::Playback;
 use crate::utils::read_file_text;
 use crate::workspace_files::WorkspaceFiles;
 
-/// Client facts and settings fixed by `initialize`.
-#[derive(Default)]
+/// Client facts fixed by `initialize`.
 pub(crate) struct Session {
-    pub(crate) client_kind: ClientKind,
+    pub(crate) client: ClientOptions,
     pub(crate) roots: Vec<PathBuf>,
-    pub(crate) config: Config,
-    pub(crate) completion_settings: CompletionSettings,
+    /// Settings from `initializationOptions`; configuration applies on top.
+    pub(crate) initial_settings: Settings,
+    pub(crate) fm_picker_hierarchy_default: bool,
     pub(crate) supports_completion_as_is: bool,
     pub(crate) supports_code_action_resolve: bool,
+    pub(crate) supports_configuration: bool,
+    pub(crate) supports_configuration_registration: bool,
+}
+
+impl Default for Session {
+    fn default() -> Self {
+        let init = crate::config::initialization(None, None);
+        Self {
+            client: init.client,
+            roots: Vec::new(),
+            initial_settings: init.settings,
+            fm_picker_hierarchy_default: init.fm_picker_hierarchy_default,
+            supports_completion_as_is: false,
+            supports_code_action_resolve: false,
+            supports_configuration: false,
+            supports_configuration_registration: false,
+        }
+    }
+}
+
+/// The resolved `ctrmml-cmd`, for one configured path.
+#[derive(Default)]
+struct CommandPath {
+    configured: Option<String>,
+    resolved: Arc<OnceCell<String>>,
 }
 
 /// Server state. Cloning shares it, so handlers can hand work to tasks.
@@ -36,7 +61,10 @@ pub(crate) struct Backend {
     pub(crate) client: Client,
     pub(crate) docs: Arc<RwLock<HashMap<String, String>>>,
     session: Arc<OnceLock<Session>>,
-    command_path: Arc<OnceCell<String>>,
+    settings: Arc<std::sync::RwLock<Settings>>,
+    /// Counts configuration changes, so a slow read cannot overwrite a newer one.
+    pub(crate) settings_seq: Arc<AtomicU64>,
+    command_path: Arc<std::sync::Mutex<CommandPath>>,
     pub(crate) workspace_files: Arc<WorkspaceFiles>,
     pub(crate) fm_patches: Arc<FmPatchCache>,
     pub(crate) diagnostics: DiagnosticStoreHandle,
@@ -52,6 +80,8 @@ impl Backend {
             client,
             docs: Arc::default(),
             session: Arc::default(),
+            settings: Arc::default(),
+            settings_seq: Arc::default(),
             command_path: Arc::default(),
             workspace_files: Arc::default(),
             fm_patches: Arc::default(),
@@ -68,7 +98,24 @@ impl Backend {
     }
 
     pub(crate) fn start_session(&self, session: Session) {
+        self.set_settings(session.initial_settings.clone());
         let _ = self.session.set(session);
+    }
+
+    pub(crate) fn settings(&self) -> Settings {
+        self.settings.read().expect("settings lock").clone()
+    }
+
+    pub(crate) fn completion_settings(&self) -> CompletionSettings {
+        self.settings
+            .read()
+            .expect("settings lock")
+            .completion
+            .clone()
+    }
+
+    pub(crate) fn set_settings(&self, settings: Settings) {
+        *self.settings.write().expect("settings lock") = settings;
     }
 
     pub(crate) async fn resolve_uri_arg(
@@ -96,14 +143,24 @@ impl Backend {
             .flatten()
     }
 
-    /// The `ctrmml-cmd` to run, resolved once per session. Resolution runs
-    /// in its own task, so a cancelled caller does not abort a download.
+    /// The `ctrmml-cmd` to run, resolved once per configured path.
+    /// Resolution runs in its own task, so a cancelled caller does not
+    /// abort a download.
     pub(crate) async fn command_path(&self) -> std::result::Result<String, String> {
-        if let Some(path) = self.command_path.get() {
+        let config_path = self.settings().command_path;
+        let cell = {
+            let mut current = self.command_path.lock().expect("command path lock");
+            if current.configured != config_path {
+                *current = CommandPath {
+                    configured: config_path.clone(),
+                    resolved: Arc::default(),
+                };
+            }
+            Arc::clone(&current.resolved)
+        };
+        if let Some(path) = cell.get() {
             return Ok(path.clone());
         }
-        let cell = Arc::clone(&self.command_path);
-        let config_path = self.session().config.command_path.clone();
         tokio::spawn(async move {
             cell.get_or_try_init(|| resolve_command_path(config_path))
                 .await

@@ -79,24 +79,14 @@ fn parse_instrument_file(file: &Path) -> Vec<CachedPatch> {
         .patches
         .into_iter()
         .filter_map(|patch| {
-            let body = patch_mml_body(&patch.mml?);
-            (!body.trim().is_empty()).then(|| CachedPatch {
+            let mml = patch.mml.filter(|mml| !mml.trim().is_empty())?;
+            Some(CachedPatch {
                 name: patch.name,
                 has_macros: patch.has_macros,
-                mml: body.into(),
+                mml: mml.into(),
             })
         })
         .collect()
-}
-
-/// Drop the `@N fm` header: everything after the first `fm`, minus one
-/// leading space. Text without `fm` is returned unchanged.
-fn patch_mml_body(mml: &str) -> String {
-    let Some(position) = mml.find("fm") else {
-        return mml.to_string();
-    };
-    let body = &mml[position + 2..];
-    body.strip_prefix(' ').unwrap_or(body).to_string()
 }
 
 impl Backend {
@@ -184,19 +174,6 @@ mod tests {
     }
 
     #[test]
-    fn patch_mml_body_drops_the_instrument_header() {
-        assert_eq!(
-            patch_mml_body("@1 fm ; name\n    0   5\n"),
-            "; name\n    0   5\n"
-        );
-        assert_eq!(patch_mml_body("@1 fm\n    0   5\n"), "\n    0   5\n");
-        assert_eq!(
-            patch_mml_body("no instrument header"),
-            "no instrument header"
-        );
-    }
-
-    #[test]
     fn scanned_instrument_files_parse_into_core_patches() {
         let root = temp_test_dir("fm-parse");
         std::fs::create_dir_all(&root).expect("create test directory");
@@ -209,9 +186,23 @@ mod tests {
         assert_eq!(core.len(), 1);
         assert_eq!(core[0].rel_path, "piano.dmp");
         assert_eq!(core[0].name.as_deref(), Some("piano"));
-        assert!(!core[0].mml.starts_with("@1"));
+        assert!(core[0].mml.starts_with("@1 fm"));
         assert!(core[0].mml.contains("OP4"));
         assert!(!core[0].has_macros);
+
+        // Core drops the header when it inserts the patch.
+        let list = ctrmml_lang_core::completion_resolve(
+            "@1 fm ",
+            ctrmml_lang_core::Pos {
+                line: 0,
+                character: 6,
+            },
+            Some(' '),
+            &ctrmml_lang_core::CompletionSettings::default(),
+            ctrmml_lang_core::DataPayload::FmPatches(core),
+        );
+        let insert = &list.items[0].insert.text;
+        assert!(!insert.contains("@1") && insert.contains("OP4"), "{insert}");
 
         std::fs::remove_dir_all(root).expect("remove test directory");
     }

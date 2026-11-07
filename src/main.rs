@@ -10,7 +10,6 @@ mod fm_completion;
 mod link;
 mod lsp;
 mod lsp_commands;
-mod note_hover;
 mod playback;
 mod utils;
 mod workspace_files;

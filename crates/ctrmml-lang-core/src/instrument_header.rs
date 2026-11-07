@@ -85,6 +85,13 @@ pub fn parse_at_number(line: &str) -> Option<(u32, usize)> {
     Some((number, end))
 }
 
+/// The comment on an `@N` line, trimmed: the name ym2612_format gives the
+/// patch. `None` when it is empty.
+pub fn instrument_name(line: &str) -> Option<&str> {
+    let (_, comment) = line.split_once(';')?;
+    Some(comment.trim()).filter(|name| !name.is_empty())
+}
+
 /// Strip a case-insensitive `keyword` prefix from `text`.
 pub fn strip_keyword<'a>(text: &'a str, keyword: &str) -> Option<&'a str> {
     let head = text.get(..keyword.len())?;

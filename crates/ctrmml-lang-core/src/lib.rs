@@ -17,7 +17,9 @@ pub mod brace_state;
 pub mod chord;
 pub mod code_lens;
 pub mod completion;
+pub mod diagnostics;
 pub mod docs;
+pub mod fill_measure;
 pub mod hover;
 pub mod instrument_header;
 pub mod instrument_preview;
@@ -26,6 +28,7 @@ pub mod octave_scan;
 pub mod preview_note;
 pub mod psg_parser;
 pub mod string_model;
+pub mod symbols;
 pub mod text_scan;
 pub mod timesig;
 pub mod track_selector;
@@ -55,20 +58,26 @@ pub use completion::{
     CoreTextEdit, CursorTickData, DataPayload, DataRequest, EditRange, FmPatchData, InsertFormat,
     InsertSpec, Pos,
 };
+pub use diagnostics::{
+    check_report_to_diagnostics, playback_ranges, CheckDiagnostic, CheckMessage, CheckReport,
+    PlaybackPosition, Severity,
+};
+pub use fill_measure::{fill_measure_edit, fill_measure_plan, FillMeasureEdit, FillMeasurePlan};
 pub use hover::{hover_at, hover_at_utf16, HoverInfo};
 pub use instrument_header::{
-    instrument_header_at, instrument_header_for_keyword_line, parse_at_number, InstrumentHeader,
-    InstrumentType,
+    instrument_header_at, instrument_header_for_keyword_line, instrument_name, parse_at_number,
+    InstrumentHeader, InstrumentType,
 };
 pub use instrument_preview::{build_preview_mml, extract_instrument_block, ExtractedBlock};
 pub use key_sig::{default_key_sig, parse_key_sig, scale_for_name, scan_key_sig_at, KeySig};
 pub use octave_scan::{scan_brace_state_at, scan_channel_context_at, ChannelContext};
-pub use preview_note::{preview_note_at, PreviewNoteHit};
+pub use preview_note::{cursor_context, preview_note_at, CursorContext, PreviewNoteHit};
 pub use psg_parser::{
     compute_timeline, node_effective_length, node_start_frame, parse_psg_mml, serialize_psg_mml,
     total_duration, PsgEnvelope, PsgNode, TimePoint,
 };
 pub use string_model::{BorrowedLinesModel, LinesModel};
+pub use symbols::{definition_at, document_symbols, DocumentSymbol, SymbolKind};
 pub use text_scan::{
     double_quote_bounds, is_at_number, is_in_comment, is_in_key_sig, single_quote_bounds, token_at,
     tokenize_outside_double_quotes,

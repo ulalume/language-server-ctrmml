@@ -6,30 +6,30 @@ use tower_lsp::{
         CodeActionParams, CodeActionProviderCapability, CodeActionTriggerKind, CodeLens,
         CodeLensOptions, CodeLensParams, Command, CompletionItem, CompletionItemKind,
         CompletionItemLabelDetails, CompletionList, CompletionOptions, CompletionParams,
-        CompletionResponse, CompletionTextEdit, DidChangeTextDocumentParams,
-        DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
+        CompletionResponse, CompletionTextEdit, ConfigurationItem, DidChangeConfigurationParams,
+        DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+        DidSaveTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
         Documentation, ExecuteCommandOptions, ExecuteCommandParams, GotoDefinitionParams,
         GotoDefinitionResponse, Hover, HoverContents, HoverParams, HoverProviderCapability,
-        InitializeParams, InitializeResult, InsertTextFormat, InsertTextMode, Location,
-        MarkupContent, MarkupKind, MessageActionItem, MessageType, OneOf, Position, Range,
-        SaveOptions, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
-        TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit,
+        InitializeParams, InitializeResult, InitializedParams, InsertTextFormat, InsertTextMode,
+        Location, MarkupContent, MarkupKind, MessageActionItem, MessageType, OneOf, Position,
+        Range, Registration, SaveOptions, ServerCapabilities, SymbolKind as LspSymbolKind,
+        TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+        TextDocumentSyncSaveOptions, TextEdit,
     },
     LanguageServer,
 };
 
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::backend::{Backend, Session};
 use crate::check::CHECK_DEBOUNCE;
-use crate::config::{
-    apply_completion_client_defaults, completion_settings_from_value, config_from_value,
-    ClientKind, Config,
-};
+use crate::config::{configured_settings, initialization};
 use crate::diagnostics::publish_check_diagnostics;
 use crate::export::ExportFormat;
 use crate::fill_measure::{
-    fetch_cursor_tick, fill_measure_action, fill_measure_edit, FillMeasureTarget,
+    fetch_cursor_tick, fill_measure_action, fill_measure_edit, name_by_edit, FillMeasureTarget,
 };
 use crate::link::{relative_path_display, LinkSource, LinkTool};
 use crate::lsp_commands::{
@@ -38,24 +38,31 @@ use crate::lsp_commands::{
     CMD_PATCH_FORMATS, CMD_PLAY, CMD_PLAY_FROM_CURSOR, CMD_PREVIEW_PATCH, CMD_QUICKROM_DIRECTORY,
     CMD_QUICKROM_FILE, CMD_QUICKROM_FROM_CONFIG, CMD_QUICKROM_MENU, CMD_SAVE_PATCH, CMD_STOP,
 };
-use crate::note_hover::note_hover_text;
-use crate::utils::{is_mml_uri, line_at};
+use crate::utils::is_mml_uri;
 use ctrmml_lang_core::completion::{
     completion_plan, completion_resolve, CompletionPlan, CoreCommand, CoreCompletionList, CoreItem,
     CoreItemKind, DataPayload, DataRequest, EditRange, InsertFormat, Pos,
 };
+use ctrmml_lang_core::docs::COMPLETION_TRIGGER_CHARACTERS;
 use ctrmml_lang_core::transpose::Direction;
 use ctrmml_lang_core::{
-    build_preview_mml, byte_offset_to_utf16_character, code_lens_with_config,
-    extract_instrument_block, hover_at, instrument_header::strip_keyword, is_in_comment, token_at,
-    utf16_character_to_byte_offset, CodeLensConfig, ExtractedBlock, IconStyle, InstrumentType,
+    build_preview_mml, code_lens_with_config, definition_at, document_symbols,
+    extract_instrument_block, hover_at_utf16, ExtractedBlock, InstrumentType, SymbolKind,
 };
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
-        let client_kind =
-            ClientKind::from_name(params.client_info.as_ref().map(|info| info.name.as_str()));
+        let init = initialization(
+            params.initialization_options.as_ref(),
+            params.client_info.as_ref().map(|info| info.name.as_str()),
+        );
+        let workspace = params.capabilities.workspace.as_ref();
+        let supports_configuration =
+            workspace.is_some_and(|workspace| workspace.configuration == Some(true));
+        let supports_configuration_registration = workspace
+            .and_then(|workspace| workspace.did_change_configuration.as_ref())
+            .is_some_and(|capability| capability.dynamic_registration == Some(true));
         let supports_completion_as_is = params
             .capabilities
             .text_document
@@ -90,26 +97,16 @@ impl LanguageServer for Backend {
             }
         }
 
-        let mut config = Config::default();
-        let mut completion_settings = Default::default();
-        let mut hierarchy_explicit = false;
-        if let Some(options) = params.initialization_options {
-            if let Some(options_config) = config_from_value(&options) {
-                config = options_config;
-            }
-            (completion_settings, hierarchy_explicit) = completion_settings_from_value(&options);
-        }
-
-        // Compatibility until native extensions send completion settings:
-        // client-name sniffing may fill only an omitted hierarchy flag.
-        apply_completion_client_defaults(&mut completion_settings, hierarchy_explicit, client_kind);
+        let commands = command_ids(&init.client);
         self.start_session(Session {
-            client_kind,
+            client: init.client,
             roots,
-            config,
-            completion_settings,
+            initial_settings: init.settings,
+            fm_picker_hierarchy_default: init.fm_picker_hierarchy_default,
             supports_completion_as_is,
             supports_code_action_resolve,
+            supports_configuration,
+            supports_configuration_registration,
         });
 
         Ok(InitializeResult {
@@ -127,25 +124,18 @@ impl LanguageServer for Backend {
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 completion_provider: Some(CompletionOptions {
                     resolve_provider: Some(false),
-                    trigger_characters: Some(vec![
-                        "#".into(),
-                        "@".into(),
-                        "\"".into(),
-                        " ".into(),
-                        "'".into(),
-                        "/".into(),
-                        ".".into(),
-                        "{".into(),
-                        "+".into(),
-                        "-".into(),
-                        "=".into(),
-                        "|".into(),
-                    ]),
+                    trigger_characters: Some(
+                        COMPLETION_TRIGGER_CHARACTERS
+                            .iter()
+                            .map(|character| character.to_string())
+                            .collect(),
+                    ),
                     ..CompletionOptions::default()
                 }),
                 definition_provider: Some(OneOf::Left(true)),
+                document_symbol_provider: Some(OneOf::Left(true)),
                 execute_command_provider: Some(ExecuteCommandOptions {
-                    commands: command_ids(client_kind),
+                    commands,
                     ..ExecuteCommandOptions::default()
                 }),
                 code_action_provider: Some(if supports_code_action_resolve {
@@ -163,6 +153,59 @@ impl LanguageServer for Backend {
             },
             ..InitializeResult::default()
         })
+    }
+
+    async fn initialized(&self, _: InitializedParams) {
+        if !self.session().supports_configuration_registration {
+            return;
+        }
+        // Once registered, clients notify changes to the `ctrmml` section.
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            let registration = Registration {
+                id: "ctrmml-configuration".to_string(),
+                method: "workspace/didChangeConfiguration".to_string(),
+                register_options: Some(serde_json::json!({ "section": CONFIGURATION_SECTION })),
+            };
+            if let Err(error) = client.register_capability(vec![registration]).await {
+                eprintln!("configuration registration failed: {error}");
+            }
+        });
+    }
+
+    /// Re-read the settings: pulled with `workspace/configuration` when the
+    /// client answers it with an object, else taken from the notification.
+    async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
+        let seq = self.settings_seq.fetch_add(1, Ordering::SeqCst) + 1;
+        let this = self.clone();
+        tokio::spawn(async move {
+            let pulled = if this.session().supports_configuration {
+                let item = ConfigurationItem {
+                    scope_uri: None,
+                    section: Some(CONFIGURATION_SECTION.to_string()),
+                };
+                this.client
+                    .configuration(vec![item])
+                    .await
+                    .ok()
+                    .and_then(|mut values| values.pop())
+                    .filter(Value::is_object)
+            } else {
+                None
+            };
+            let Some(value) = pulled.or(Some(params.settings).filter(Value::is_object)) else {
+                return;
+            };
+            if this.settings_seq.load(Ordering::SeqCst) != seq {
+                return;
+            }
+            let session = this.session();
+            this.set_settings(configured_settings(
+                &session.initial_settings,
+                &value,
+                session.fm_picker_hierarchy_default,
+            ));
+        });
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
@@ -223,29 +266,17 @@ impl LanguageServer for Backend {
         let Some(text) = docs.get(&uri) else {
             return Ok(None);
         };
-        let line = line_at(text, position.line);
-        let col = utf16_character_to_byte_offset(line, position.character);
-
-        // Generic hover (commands, key sigs, platform commands, FM/2op/PSG
-        // params, instrument definitions, …) lives in `ctrmml-lang-core` so
-        // web-ctrmml, vscode-ctrmml, and zed-ctrmml all share the same
-        // behaviour. It already short-circuits on comments. Note hover is
-        // the last layer.
-        let (value, start, end) = match hover_at(text, position.line, col as u32) {
-            Some(info) => (info.markdown, info.start as usize, info.end as usize),
-            None => match note_hover_text(text, position.line, col as u32, line) {
-                Some(found) => found,
-                None => return Ok(None),
-            },
+        let Some(info) = hover_at_utf16(text, position.line, position.character) else {
+            return Ok(None);
         };
         Ok(Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
-                value,
+                value: info.markdown,
             }),
             range: Some(Range {
-                start: Position::new(position.line, byte_offset_to_utf16_character(line, start)),
-                end: Position::new(position.line, byte_offset_to_utf16_character(line, end)),
+                start: Position::new(position.line, info.start),
+                end: Position::new(position.line, info.end),
             }),
         }))
     }
@@ -267,20 +298,32 @@ impl LanguageServer for Backend {
         let Some(text) = docs.get(&uri) else {
             return Ok(None);
         };
-        let line = line_at(text, position.line);
-        let col = utf16_character_to_byte_offset(line, position.character);
-        if is_in_comment(line, col) {
-            return Ok(None);
-        }
-        let Some(range) =
-            definition_target_at(line, col).and_then(|target| find_definition(text, &target))
-        else {
+        let Some(range) = definition_at(text, position.line, position.character) else {
             return Ok(None);
         };
         Ok(Some(GotoDefinitionResponse::Scalar(Location {
             uri: params.text_document_position_params.text_document.uri,
-            range,
+            range: core_edit_range(range),
         })))
+    }
+
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
+        let uri = params.text_document.uri.to_string();
+        if !is_mml_uri(&uri) {
+            return Ok(None);
+        }
+        let docs = self.docs.read().await;
+        let Some(text) = docs.get(&uri) else {
+            return Ok(None);
+        };
+        let symbols = document_symbols(text)
+            .into_iter()
+            .map(lsp_document_symbol)
+            .collect();
+        Ok(Some(DocumentSymbolResponse::Nested(symbols)))
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -297,7 +340,7 @@ impl LanguageServer for Backend {
             .get(&uri)
             .cloned()
             .unwrap_or_default();
-        let settings = self.session().completion_settings.clone();
+        let settings = self.completion_settings();
         let pos = Pos {
             line: position.line,
             character: position.character,
@@ -352,9 +395,8 @@ impl LanguageServer for Backend {
             .get(&uri)
             .cloned()
             .unwrap_or_default();
-        let config = code_lens_config(self.session().client_kind);
         let mut out = Vec::new();
-        for lens in code_lens_with_config(&text, config) {
+        for lens in code_lens_with_config(&text, self.session().client.code_lens) {
             // The lens's anchor span is the entire line; clients are free
             // to position the chip however they like.
             let line = lens.line;
@@ -396,7 +438,11 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
         let start = params.range.start;
-        let mut actions = code_actions(&uri_str, start);
+        let mut actions = if self.session().client.command_code_actions {
+            code_actions(&uri_str, start)
+        } else {
+            Vec::new()
+        };
 
         // Document-aware actions: transpose and fill-measure both
         // need the live document text. Take a single snapshot for
@@ -429,8 +475,10 @@ impl LanguageServer for Backend {
                     action.data = Some(target.into_data());
                     actions.push(action);
                 } else if is_explicit_request(&params.context) {
-                    action.edit = self.fill_measure_edit(&target, &text).await;
-                    if action.edit.is_some() {
+                    if let Some((edit, closes_only)) = self.fill_measure_edit(&target, &text).await
+                    {
+                        name_by_edit(&mut action, &text, start.line, start.character, closes_only);
+                        action.edit = Some(edit);
                         actions.push(action);
                     }
                 }
@@ -450,7 +498,10 @@ impl LanguageServer for Backend {
             return Ok(action);
         };
         if let Some(text) = self.document_text(target.uri.as_str()).await {
-            action.edit = self.fill_measure_edit(&target, &text).await;
+            action.edit = self
+                .fill_measure_edit(&target, &text)
+                .await
+                .map(|(edit, _)| edit);
         }
         Ok(action)
     }
@@ -625,7 +676,7 @@ impl Backend {
         &self,
         target: &FillMeasureTarget,
         text: &str,
-    ) -> Option<tower_lsp::lsp_types::WorkspaceEdit> {
+    ) -> Option<(tower_lsp::lsp_types::WorkspaceEdit, bool)> {
         let cmd_path = self.command_path().await.ok()?;
         fill_measure_edit(&cmd_path, &target.uri, text, target.line, target.character).await
     }
@@ -645,16 +696,8 @@ fn is_explicit_request(context: &CodeActionContext) -> bool {
         })
 }
 
-fn code_lens_config(client_kind: ClientKind) -> CodeLensConfig {
-    if client_kind.is_vscode() {
-        CodeLensConfig::default()
-    } else {
-        CodeLensConfig {
-            icon_style: IconStyle::None,
-            include_file_actions: false,
-        }
-    }
-}
+/// The configuration section the server reads.
+const CONFIGURATION_SECTION: &str = "ctrmml";
 
 /// Arguments of the patch commands, `[uri, line, type, target, ...]`. The
 /// line may be a number or a string; `target` is the channel to preview on
@@ -786,48 +829,23 @@ fn core_edit_range(range: EditRange) -> Range {
     }
 }
 
-/// A `prefix<digits>` reference: `@N` instruments, `@EN` / `@MN` / `@PN`
-/// definitions and `*N` tracks.
-struct DefinitionTarget {
-    prefix: &'static str,
-    digits: String,
-}
-
-fn definition_target_at(line: &str, col: usize) -> Option<DefinitionTarget> {
-    let (token, _start, _end) = token_at(line, col)?;
-    let prefix = ["@E", "@M", "@P", "@", "*"].into_iter().find(|prefix| {
-        token
-            .strip_prefix(prefix)
-            .is_some_and(|rest| rest.starts_with(|ch: char| ch.is_ascii_digit()))
-    })?;
-    let digits = token[prefix.len()..]
-        .chars()
-        .take_while(|ch| ch.is_ascii_digit())
-        .collect();
-    Some(DefinitionTarget { prefix, digits })
-}
-
-/// The first line that defines `target`: `prefix<digits>` at the start of
-/// the line, followed by whitespace, `;` or the end of the line.
-fn find_definition(text: &str, target: &DefinitionTarget) -> Option<Range> {
-    for (idx, line) in text.lines().enumerate() {
-        let start = line.len() - line.trim_start().len();
-        let Some(rest) = strip_keyword(&line[start..], target.prefix) else {
-            continue;
-        };
-        let Some(after) = rest.strip_prefix(target.digits.as_str()) else {
-            continue;
-        };
-        if !after.is_empty() && !after.starts_with(|ch: char| ch.is_whitespace() || ch == ';') {
-            continue;
-        }
-        let end = start + target.prefix.len() + target.digits.len();
-        return Some(Range {
-            start: Position::new(idx as u32, byte_offset_to_utf16_character(line, start)),
-            end: Position::new(idx as u32, byte_offset_to_utf16_character(line, end)),
-        });
+#[allow(deprecated)]
+fn lsp_document_symbol(symbol: ctrmml_lang_core::DocumentSymbol) -> DocumentSymbol {
+    DocumentSymbol {
+        name: symbol.name,
+        detail: symbol.detail,
+        kind: match symbol.kind {
+            SymbolKind::Meta => LspSymbolKind::PROPERTY,
+            SymbolKind::Instrument => LspSymbolKind::STRUCT,
+            SymbolKind::Envelope => LspSymbolKind::ARRAY,
+            SymbolKind::Track => LspSymbolKind::FUNCTION,
+        },
+        tags: None,
+        deprecated: None,
+        range: core_edit_range(symbol.range),
+        selection_range: core_edit_range(symbol.selection_range),
+        children: None,
     }
-    None
 }
 
 #[cfg(test)]
@@ -1017,16 +1035,20 @@ mod tests {
         assert_eq!(list.items.len(), 1);
     }
 
+    fn lens_config(client_name: &str) -> ctrmml_lang_core::CodeLensConfig {
+        initialization(None, Some(client_name)).client.code_lens
+    }
+
     #[test]
     fn code_lens_policy_preserves_vscode_and_limits_other_clients_to_preview() {
-        let vscode = code_lens_with_config("@1 fm\n", code_lens_config(ClientKind::VsCode));
+        let vscode = code_lens_with_config("@1 fm\n", lens_config("Visual Studio Code"));
         let vscode_titles: Vec<&str> = vscode.iter().map(|lens| lens.title.as_str()).collect();
         assert_eq!(
             vscode_titles,
             ["$(folder-opened) Load", "$(save) Save", "$(play) FM"]
         );
 
-        let other = code_lens_with_config("@1 fm\n", code_lens_config(ClientKind::Other));
+        let other = code_lens_with_config("@1 fm\n", lens_config("Zed"));
         assert_eq!(other.len(), 1);
         // Codicon markers are dropped, but the play glyph stays so the lens
         // still reads as a button in clients that render titles verbatim.
@@ -1034,43 +1056,32 @@ mod tests {
         assert_eq!(other[0].command_id.as_deref(), Some(CMD_PREVIEW_PATCH));
     }
 
-    fn definition(text: &str, line: &str, col: usize) -> Option<Range> {
-        find_definition(text, &definition_target_at(line, col)?)
-    }
-
     #[test]
-    fn definitions_are_found_by_prefix_and_number() {
-        let text = "@10 fm\n@1 psg 15\n@E1 1 2\n*3 c d\nA @1 @E1 *3\n";
-        let line = "A @1 @E1 *3";
-        assert_eq!(definition(text, line, 3).map(|r| r.start.line), Some(1));
-        assert_eq!(definition(text, line, 6).map(|r| r.start.line), Some(2));
-        assert_eq!(definition(text, line, 10).map(|r| r.start.line), Some(3));
+    fn document_symbols_map_to_lsp_kinds() {
+        let symbols: Vec<DocumentSymbol> = document_symbols("#title x\n@1 fm\n@M1 0\nA c\n")
+            .into_iter()
+            .map(lsp_document_symbol)
+            .collect();
+        let kinds: Vec<LspSymbolKind> = symbols.iter().map(|symbol| symbol.kind).collect();
         assert_eq!(
-            definition(text, line, 3).map(|r| (r.start.character, r.end.character)),
-            Some((0, 2))
+            kinds,
+            [
+                LspSymbolKind::PROPERTY,
+                LspSymbolKind::STRUCT,
+                LspSymbolKind::ARRAY,
+                LspSymbolKind::FUNCTION
+            ]
         );
-    }
-
-    #[test]
-    fn definition_ranges_count_utf16_units() {
-        // `あ` is one UTF-16 unit and three bytes.
-        let text = "\u{3000}@1 fm\nA @1\n";
-        let range = definition(text, "A @1", 3).expect("definition");
-        assert_eq!((range.start.character, range.end.character), (1, 3));
-    }
-
-    #[test]
-    fn a_definition_needs_a_boundary_after_its_number() {
-        assert_eq!(definition("@1fm\nA @1\n", "A @1", 3), None);
+        assert_eq!(symbols[1].selection_range.end, Position::new(1, 2));
     }
 
     #[test]
     fn preview_lens_arguments_round_trip_through_handler_parser() {
-        let lens = code_lens_with_config("@7 fm\n", code_lens_config(ClientKind::Other))
+        let lens = code_lens_with_config("@7 fm\n", lens_config("Zed"))
             .into_iter()
             .find(|lens| lens.command_id.as_deref() == Some(CMD_PREVIEW_PATCH))
             .expect("FM preview lens");
-        assert_eq!(lens.arguments, ["0", "fm", "A", "7"]);
+        assert_eq!(lens.arguments, ["0", "fm", "A", "7", "0", "5"]);
 
         let mut wire_args = vec![Value::String("file:///song.mml".to_string())];
         wire_args.extend(lens.arguments.into_iter().map(Value::String));

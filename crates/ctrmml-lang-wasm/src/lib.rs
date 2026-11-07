@@ -13,6 +13,7 @@
 //! file-by-file swap.
 
 use ctrmml_lang_core::{
+    byte_offset_to_utf16_character,
     chord::{
         render_chord as core_render_chord, render_generic_chord as core_render_generic_chord,
         render_generic_diatonic_dyad as core_render_generic_diatonic_dyad,
@@ -21,10 +22,24 @@ use ctrmml_lang_core::{
         render_stacked_generic_diatonic_dyad as core_render_stacked_generic_diatonic_dyad,
         ChordSize, RootAccidental, CHORDS_3, CHORDS_4,
     },
+    track_selector::LineReader,
     transpose::{transpose_selection, Direction, Selection},
-    BorrowedLinesModel, KeySig,
+    utf16_character_to_byte_offset, BorrowedLinesModel, KeySig,
 };
 use wasm_bindgen::prelude::*;
+
+// Columns cross this boundary in UTF-16 code units, as JavaScript strings
+// and editors count them. The core counts UTF-8 bytes.
+
+/// The byte column for a 1-based UTF-16 `column` of `line_text`, 1-based.
+fn byte_column_1(line_text: &str, column: u32) -> u32 {
+    utf16_character_to_byte_offset(line_text, column.saturating_sub(1)) as u32 + 1
+}
+
+/// The UTF-16 column for a 1-based byte `column` of `line_text`, 1-based.
+fn utf16_column_1(line_text: &str, column: u32) -> u32 {
+    byte_offset_to_utf16_character(line_text, column.saturating_sub(1) as usize) + 1
+}
 
 // ---------------------------------------------------------------------------
 // Build-time hello: lets JS verify the bundle loaded.
@@ -63,9 +78,9 @@ impl TransposeResult {
 }
 
 /// Transpose every note in the 1-based selection by `direction`
-/// semitones (`+1` or `-1`). Returns `null` (JS undefined) when the
-/// selection contains no notes or when the rewritten text would match
-/// the original.
+/// semitones (`+1` or `-1`). Columns are 1-based UTF-16, in and out.
+/// Returns `null` (JS undefined) when the selection contains no notes or
+/// when the rewritten text would match the original.
 ///
 /// Replaces `transposeSelection` from `web-ctrmml/src/mml/transpose.ts`.
 #[wasm_bindgen]
@@ -83,18 +98,19 @@ pub fn transpose(
     } else {
         Direction::Down
     };
+    let line = |number: u32| model.get_line_content(number);
     let sel = Selection {
         start_line_number: start_line,
-        start_column,
+        start_column: byte_column_1(line(start_line), start_column),
         end_line_number: end_line,
-        end_column,
+        end_column: byte_column_1(line(end_line), end_column),
     };
     let edit = transpose_selection(&model, sel, dir)?;
     Some(TransposeResult {
         start_line: edit.start_line_number,
-        start_column: edit.start_column,
+        start_column: utf16_column_1(line(edit.start_line_number), edit.start_column),
         end_line: edit.end_line_number,
-        end_column: edit.end_column,
+        end_column: utf16_column_1(line(edit.end_line_number), edit.end_column),
         text: edit.text,
     })
 }
@@ -128,45 +144,34 @@ pub fn scan_time_signature(text: &str) -> Option<TimeSignatureResult> {
 }
 
 // ---------------------------------------------------------------------------
-// Beat-fill — replaces web-ctrmml/src/mml/beat-fill.ts
+// Fill measure
 // ---------------------------------------------------------------------------
 
-/// Generate MML rest notation to fill from `cursor_tick` to the next
-/// bar line.
-///
-/// `numerator` / `denominator` describe the time signature; pass `4`
-/// and `4` for the default. When `numerator == 0` the rest sequence is
-/// always empty (matches the TS "measure lines disabled" branch).
-///
-/// `after_bar_line` controls behavior when the cursor sits exactly on
-/// a measure boundary: `true` fills a full next measure, `false`
-/// returns an empty string.
-///
-/// Replaces `generateMeasureRests` from `web-ctrmml/src/mml/beat-fill.ts`.
+/// Whether a fill applies at the 0-based `line` and UTF-16 `character`.
+/// Returns `{ numerator, denominator, after_bar_line }` or `"null"` inside
+/// `@N fm` / `@N psg` blocks, outside every track and under `#timesig no`.
 #[wasm_bindgen]
-pub fn generate_measure_rests(
-    cursor_tick: u32,
-    ppqn: u32,
-    numerator: u32,
-    denominator: u32,
-    after_bar_line: bool,
-) -> String {
-    if numerator == 0 || denominator == 0 {
-        return String::new();
-    }
-    let ts = ctrmml_lang_core::TimeSignature {
-        numerator,
-        denominator,
-    };
-    ctrmml_lang_core::generate_measure_rests(cursor_tick, ppqn, Some(ts), after_bar_line)
+pub fn fill_measure_plan_json(text: &str, line: u32, character: u32) -> String {
+    serde_json::to_string(&ctrmml_lang_core::fill_measure_plan(text, line, character))
+        .expect("fill plan serializes to JSON")
 }
 
-/// True when the text before a 1-based `column` ends (ignoring trailing
-/// whitespace) with a `|` bar-line marker. Replaces `isAfterBarLine`
-/// from `web-ctrmml/src/mml/beat-fill.ts`.
+/// The fill at the position for the cursor's compiled `tick` and the
+/// song's `ppqn`. Returns `{ rests, edit: { range, new_text } }` (an
+/// insertion at the position; `rests` is empty when `new_text` only closes
+/// a full measure with ` |`) or `"null"` where no fill applies.
 #[wasm_bindgen]
-pub fn is_after_bar_line(line_content: &str, column: u32) -> bool {
-    ctrmml_lang_core::is_after_bar_line(line_content, column)
+pub fn fill_measure_edit_json(
+    text: &str,
+    line: u32,
+    character: u32,
+    tick: u32,
+    ppqn: u32,
+) -> String {
+    serde_json::to_string(&ctrmml_lang_core::fill_measure_edit(
+        text, line, character, tick, ppqn,
+    ))
+    .expect("fill edit serializes to JSON")
 }
 
 // ---------------------------------------------------------------------------
@@ -374,8 +379,8 @@ impl ChannelContextResult {
     }
 }
 
-/// Compute each channel's effective octave at `(line, column)` plus
-/// which `{...}` branch the cursor sits in.
+/// Compute each channel's effective octave at `(line, column)` (1-based,
+/// UTF-16 column) plus which `{...}` branch the cursor sits in.
 ///
 /// `track_line` should be `0` when unknown — the function will walk
 /// backward to locate the enclosing leading track selector. Pass a
@@ -396,6 +401,7 @@ pub fn scan_channel_context(
     } else {
         Some(track_line)
     };
+    let column = byte_column_1(model.get_line_content(line), column);
     let ctx = ctrmml_lang_core::scan_channel_context_at(
         &model,
         line,
@@ -414,8 +420,8 @@ pub fn scan_channel_context(
 // scanKeySigAt
 // ---------------------------------------------------------------------------
 
-/// Compute the effective key signature at `(line, column)` by walking
-/// backward to the most recent scale-reset or enclosing track-selector
+/// Compute the effective key signature at `(line, column)` (1-based,
+/// UTF-16 column) by walking backward to the most recent scale-reset or enclosing track-selector
 /// boundary. Returns a 7-element `Int8Array` indexed
 /// `[c, d, e, f, g, a, b]`, matching the parameter shape used by
 /// [`render_chord`] and friends.
@@ -424,6 +430,7 @@ pub fn scan_channel_context(
 #[wasm_bindgen]
 pub fn scan_key_sig(doc_text: &str, line: u32, column: u32) -> Vec<i8> {
     let model = BorrowedLinesModel::from_text(doc_text);
+    let column = byte_column_1(model.get_line_content(line), column);
     let sig = ctrmml_lang_core::scan_key_sig_at(&model, line, column);
     let letters = ['c', 'd', 'e', 'f', 'g', 'a', 'b'];
     letters.iter().map(|&l| sig.get_or_zero(l)).collect()
@@ -608,9 +615,8 @@ pub struct LeadingTrackSelectorResult {
 
 #[wasm_bindgen]
 impl LeadingTrackSelectorResult {
-    /// Byte offset just past the last span (before any trailing
-    /// whitespace) — used by TS callers to bound completion-context
-    /// queries.
+    /// UTF-16 offset just past the last span (before any trailing
+    /// whitespace).
     #[wasm_bindgen(getter)]
     pub fn end(&self) -> u32 {
         self.end
@@ -632,7 +638,7 @@ impl LeadingTrackSelectorResult {
             .unwrap_or(u32::MAX)
     }
 
-    /// Byte start offset for span `index`.
+    /// UTF-16 start offset for span `index`.
     pub fn span_start(&self, index: u32) -> u32 {
         self.spans
             .get(index as usize)
@@ -640,7 +646,7 @@ impl LeadingTrackSelectorResult {
             .unwrap_or(u32::MAX)
     }
 
-    /// Byte end offset for span `index` (exclusive).
+    /// UTF-16 end offset for span `index` (exclusive).
     pub fn span_end(&self, index: u32) -> u32 {
         self.spans
             .get(index as usize)
@@ -656,9 +662,18 @@ impl LeadingTrackSelectorResult {
 /// `web-ctrmml/src/mml/track-selector.ts`.
 #[wasm_bindgen]
 pub fn parse_leading_track_selector(line: &str) -> Option<LeadingTrackSelectorResult> {
+    let utf16 = |byte: usize| byte_offset_to_utf16_character(line, byte) as usize;
     ctrmml_lang_core::parse_leading_track_selector(line).map(|sel| LeadingTrackSelectorResult {
-        end: sel.end as u32,
-        spans: sel.spans,
+        end: utf16(sel.end) as u32,
+        spans: sel
+            .spans
+            .into_iter()
+            .map(|span| ctrmml_lang_core::LeadingTrackSpan {
+                start: utf16(span.start),
+                end: utf16(span.end),
+                ..span
+            })
+            .collect(),
     })
 }
 
@@ -682,18 +697,32 @@ pub fn find_track_selector_line(doc_text: &str, line: u32) -> u32 {
 // isInComment / isInKeySig
 // ---------------------------------------------------------------------------
 
-/// Returns `true` when the 0-based column falls inside a `;` line
+/// Returns `true` when the 0-based UTF-16 column falls inside a `;` line
 /// comment, respecting `"..."` and `'...'` string contexts.
 #[wasm_bindgen]
 pub fn is_in_comment(line: &str, col: u32) -> bool {
-    ctrmml_lang_core::is_in_comment(line, col as usize)
+    ctrmml_lang_core::is_in_comment(line, utf16_character_to_byte_offset(line, col))
 }
 
-/// Returns `true` when the 0-based column falls inside a `_{...}` key
-/// signature block.
+/// Returns `true` when the 0-based UTF-16 column falls inside a `_{...}`
+/// key signature block.
 #[wasm_bindgen]
 pub fn is_in_key_sig(line: &str, col: u32) -> bool {
-    ctrmml_lang_core::is_in_key_sig(line, col as usize)
+    ctrmml_lang_core::is_in_key_sig(line, utf16_character_to_byte_offset(line, col))
+}
+
+/// The 0-based UTF-16 column of 0-based byte column `byte_col` of `line`,
+/// for columns that `ctrmml-cmd` reports in bytes.
+#[wasm_bindgen]
+pub fn utf16_column(line: &str, byte_col: u32) -> u32 {
+    byte_offset_to_utf16_character(line, byte_col as usize)
+}
+
+/// The 0-based byte column of 0-based UTF-16 column `utf16_col` of `line`,
+/// for `ctrmml-cmd` calls that take byte columns.
+#[wasm_bindgen]
+pub fn byte_column(line: &str, utf16_col: u32) -> u32 {
+    utf16_character_to_byte_offset(line, utf16_col) as u32
 }
 
 /// Return all completion / hover documentation tables as a single JSON
@@ -707,21 +736,54 @@ pub fn docs_json() -> String {
 }
 
 /// Resolve a hover at `(line, col)` (zero-based, `col` in UTF-16 code
-/// units) in `text`. Returns a JSON object `{ markdown, line, start, end }`
-/// with the range in UTF-16 code units, or the literal `"null"` when the
-/// cursor isn't on a documented construct.
+/// units) in `text`. Returns a JSON object `{ markdown, line, start, end,
+/// table, key }` with the range in UTF-16 code units, or the literal
+/// `"null"` when the cursor isn't on a documented construct. `table` and
+/// `key` name the shown `docs_json` entry (`table` `"tracks"` with key
+/// `"letters"` or `"numeric"` for track selectors); both are `null` for
+/// PCM paths and PSG envelopes.
 #[wasm_bindgen]
 pub fn hover_at_json(text: &str, line: u32, col: u32) -> String {
     serde_json::to_string(&ctrmml_lang_core::hover_at_utf16(text, line, col))
         .expect("hover info serializes to JSON")
 }
 
+/// The definition of the `@N`, `@EN`, `@MN`, `@PN` or `*N` reference at the
+/// 0-based `line` and UTF-16 `character`: `{ start: { line, character },
+/// end }` covering the defining name, or `"null"`.
+#[wasm_bindgen]
+pub fn definition_at_json(text: &str, line: u32, character: u32) -> String {
+    serde_json::to_string(&ctrmml_lang_core::definition_at(text, line, character))
+        .expect("definition range serializes to JSON")
+}
+
+/// The document outline as a JSON array of `{ name, detail, kind, range,
+/// selection_range }`; `kind` is `"meta"`, `"instrument"`, `"envelope"` or
+/// `"track"`, `detail` may be `null`, ranges are 0-based UTF-16.
+#[wasm_bindgen]
+pub fn document_symbols_json(text: &str) -> String {
+    serde_json::to_string(&ctrmml_lang_core::document_symbols(text))
+        .expect("document symbols serialize to JSON")
+}
+
 /// Enumerate code-lens entries for `text` as a JSON array. Each entry is
 /// `{ line, title, command_id, arguments }` where `command_id` is `null`
-/// for informational labels.
+/// for informational labels; see `ctrmml_lang_core::code_lens` for the
+/// argument layout. `options_json` is `{ "code_lens_icons": "codicon" |
+/// "text", "code_lens_file_actions": bool }` (both optional, defaults
+/// `"codicon"` and `true`; `""` means all defaults). Malformed options
+/// return `{ "error": "..." }`.
 #[wasm_bindgen]
-pub fn code_lens_json(text: &str) -> String {
-    serde_json::to_string(&ctrmml_lang_core::code_lens(text))
+pub fn code_lens_json(text: &str, options_json: &str) -> String {
+    let config: ctrmml_lang_core::CodeLensConfig = if options_json.trim().is_empty() {
+        Default::default()
+    } else {
+        match serde_json::from_str(options_json) {
+            Ok(config) => config,
+            Err(error) => return json_error(&format!("invalid options_json: {error}")),
+        }
+    };
+    serde_json::to_string(&ctrmml_lang_core::code_lens_with_config(text, config))
         .expect("code lens entries serialize to JSON")
 }
 
@@ -834,17 +896,70 @@ pub fn build_preview_mml(text: &str, block_json: &str, channel: &str) -> String 
     ctrmml_lang_core::build_preview_mml(text, &block, channel)
 }
 
-/// Decide whether the keystroke at `(line, col)` (zero-based) typing
-/// `typed_char` should trigger a note preview. Returns a JSON object
-/// `{ midi, pulse_start, pulse_end, tempo, length, quantize, volume,
-/// noise_mode }` on hit, or `"null"` when no preview should fire.
+/// Decide whether the keystroke at `(line, col)` (zero-based, UTF-16
+/// column) typing `typed_char` should trigger a note preview. Returns a
+/// JSON object `{ midi, pulse_start, pulse_end, tempo, length, quantize,
+/// volume, noise_mode }` with UTF-16 pulse columns on hit, or `"null"`
+/// when no preview should fire.
 #[wasm_bindgen]
 pub fn preview_note_at_json(text: &str, line: u32, col: u32, typed_char: &str) -> String {
     let Some(typed) = typed_char.chars().next() else {
         return "null".to_string();
     };
-    let hit = ctrmml_lang_core::preview_note_at(text, line, col, typed);
+    let model = BorrowedLinesModel::from_text(text);
+    let line_text = model.get_line_content(line.saturating_add(1));
+    let byte_col = utf16_character_to_byte_offset(line_text, col) as u32;
+    let hit = ctrmml_lang_core::preview_note_at(text, line, byte_col, typed).map(|mut hit| {
+        hit.pulse_start = byte_offset_to_utf16_character(line_text, hit.pulse_start as usize);
+        hit.pulse_end = byte_offset_to_utf16_character(line_text, hit.pulse_end as usize);
+        hit
+    });
     serde_json::to_string(&hit).expect("preview note serializes to JSON")
+}
+
+/// The playback context at the 0-based `line` and UTF-16 `character`, from
+/// the text before the cursor. Returns `{ track_line, tracks,
+/// active_channel, octave, tempo, length, quantize, volume, key_sig,
+/// noise_mode }`; `track_line` (0-based) and `active_channel` are `null`
+/// outside a track or brace, `key_sig` holds the accidentals of
+/// `c d e f g a b`.
+#[wasm_bindgen]
+pub fn cursor_context_json(text: &str, line: u32, character: u32) -> String {
+    serde_json::to_string(&ctrmml_lang_core::cursor_context(text, line, character))
+        .expect("cursor context serializes to JSON")
+}
+
+/// Place a `ctrmml-cmd check --json` report on `text`. Returns a JSON
+/// array of `{ severity: "error" | "warning", message, code, range }`,
+/// errors first, with `range` as `{ start: { line, character }, end }`
+/// (0-based, UTF-16). Malformed JSON returns `{ "error": "..." }`.
+#[wasm_bindgen]
+pub fn check_report_to_diagnostics_json(text: &str, check_json: &str) -> String {
+    let report: ctrmml_lang_core::CheckReport = match serde_json::from_str(check_json) {
+        Ok(report) => report,
+        Err(error) => return json_error(&format!("invalid check_json: {error}")),
+    };
+    serde_json::to_string(&ctrmml_lang_core::check_report_to_diagnostics(
+        text, &report,
+    ))
+    .expect("diagnostics serialize to JSON")
+}
+
+/// One-character highlight ranges for playback positions, given as
+/// parallel arrays of 0-based lines and 0-based byte columns. Returns a
+/// flat `Uint32Array` of `[line, start, end, ...]` triples in UTF-16 units,
+/// without repeats; positions past the last line are dropped.
+#[wasm_bindgen]
+pub fn playback_ranges(text: &str, lines: &[u32], cols: &[u32]) -> Vec<u32> {
+    let positions: Vec<ctrmml_lang_core::PlaybackPosition> = lines
+        .iter()
+        .zip(cols)
+        .map(|(&line, &col)| ctrmml_lang_core::PlaybackPosition { line, col })
+        .collect();
+    ctrmml_lang_core::playback_ranges(text, &positions)
+        .into_iter()
+        .flat_map(|range| [range.start.line, range.start.character, range.end.character])
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -866,16 +981,36 @@ mod tests {
     }
 
     #[test]
+    fn docs_json_carries_channel_names_and_trigger_characters() {
+        let docs: serde_json::Value = serde_json::from_str(&docs_json()).expect("docs JSON");
+        assert_eq!(docs["channel_descriptions"][9], "Noise");
+        assert_eq!(
+            docs["channel_descriptions"].as_array().map(Vec::len),
+            Some(16)
+        );
+        assert_eq!(
+            docs["completion_trigger_characters"]
+                .as_array()
+                .map(Vec::len),
+            Some(12)
+        );
+    }
+
+    #[test]
     fn hover_json_keeps_its_shape() {
         let value: serde_json::Value =
             serde_json::from_str(&hover_at_json("A @1 c", 0, 2)).expect("hover JSON");
         let object = value.as_object().expect("hover object");
         let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
         keys.sort_unstable();
-        assert_eq!(keys, ["end", "line", "markdown", "start"]);
+        assert_eq!(keys, ["end", "key", "line", "markdown", "start", "table"]);
         assert_eq!(
             (value["line"].as_u64(), value["start"].as_u64()),
             (Some(0), Some(2))
+        );
+        assert_eq!(
+            (value["table"].as_str(), value["key"].as_str()),
+            (Some("at_meta"), Some("@<num>"))
         );
         assert_eq!(hover_at_json("; c", 0, 2), "null");
     }
@@ -928,24 +1063,194 @@ mod tests {
     }
 
     #[test]
-    fn generate_measure_rests_partial() {
-        // ppqn=48, 4/4 → tpm=192. Cursor at tick 48 → 144 left → "r2."
-        assert_eq!(generate_measure_rests(48, 48, 4, 4, false), "r2.");
+    fn fill_measure_json_shapes() {
+        let plan: serde_json::Value =
+            serde_json::from_str(&fill_measure_plan_json("A c4 |", 0, 6)).expect("plan JSON");
+        assert_eq!(
+            plan,
+            serde_json::json!({"numerator": 4, "denominator": 4, "after_bar_line": true})
+        );
+        assert_eq!(fill_measure_plan_json("#timesig no\nA c4 |", 1, 6), "null");
+
+        let edit: serde_json::Value =
+            serde_json::from_str(&fill_measure_edit_json("A c4", 0, 4, 48, 48)).expect("edit JSON");
+        assert_eq!(
+            edit,
+            serde_json::json!({
+                "rests": "r2.",
+                "edit": {
+                    "range": {
+                        "start": {"line": 0, "character": 4},
+                        "end": {"line": 0, "character": 4}
+                    },
+                    "new_text": "r2. |"
+                }
+            })
+        );
+    }
+
+    // ---- UTF-16 columns -----------------------------------------------------
+    //
+    // `あ` is one UTF-16 unit and three UTF-8 bytes.
+
+    #[test]
+    fn preview_note_after_japanese_text_reads_the_accidental() {
+        let text = "A 'あ' o4 cd+";
+        let hit: serde_json::Value =
+            serde_json::from_str(&preview_note_at_json(text, 0, 11, "+")).expect("hit JSON");
+        // o4 d+ is MIDI 39 (o5c is 48).
+        assert_eq!(hit["midi"], 39);
+        assert_eq!(
+            (hit["pulse_start"].as_u64(), hit["pulse_end"].as_u64()),
+            (Some(10), Some(12))
+        );
     }
 
     #[test]
-    fn generate_measure_rests_disabled_meter() {
-        assert_eq!(generate_measure_rests(48, 48, 0, 4, true), "");
+    fn bar_line_after_japanese_text_is_found() {
+        let after_bar = |character| {
+            let plan: serde_json::Value =
+                serde_json::from_str(&fill_measure_plan_json("A 'あ' c4 |", 0, character))
+                    .expect("plan JSON");
+            plan["after_bar_line"].as_bool()
+        };
+        assert_eq!(after_bar(10), Some(true));
+        assert_eq!(after_bar(9), Some(false));
     }
 
     #[test]
-    fn is_after_bar_line_yes() {
-        assert!(is_after_bar_line("abc |", 6));
+    fn check_error_after_japanese_text_is_placed_in_utf16_units() {
+        let report = r#"{"ok":false,"errors":[{"message":"unterminated '[]' loop","path":"<stdin>","line":1,"col":11,"length":0,"code":"parse_error"}],"warnings":[]}"#;
+        let value: serde_json::Value =
+            serde_json::from_str(&check_report_to_diagnostics_json("A 'あ' c ] e\n", report))
+                .expect("diagnostics JSON");
+        assert_eq!(
+            value,
+            serde_json::json!([{
+                "severity": "error",
+                "message": "unterminated '[]' loop",
+                "code": "parse_error",
+                "range": {
+                    "start": {"line": 0, "character": 8},
+                    "end": {"line": 0, "character": 9}
+                }
+            }])
+        );
+        assert!(check_report_to_diagnostics_json("", "{").starts_with("{\"error\""));
     }
 
     #[test]
-    fn is_after_bar_line_no() {
-        assert!(!is_after_bar_line("abc def", 8));
+    fn playback_ranges_after_japanese_text_are_flat_utf16_triples() {
+        assert_eq!(
+            playback_ranges("A 'あ' c d\nB e", &[0, 0, 1, 5], &[8, 8, 2, 0]),
+            [0, 6, 7, 1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn cursor_context_json_shape() {
+        let value: serde_json::Value =
+            serde_json::from_str(&cursor_context_json("AB 'あ' t90 o4 _{-b} {c/e", 0, 23))
+                .expect("context JSON");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "track_line": 0,
+                "tracks": [0, 1],
+                "active_channel": 1,
+                "octave": 4,
+                "tempo": 90,
+                "length": 4,
+                "quantize": 8,
+                "volume": 15,
+                "key_sig": [0, 0, 0, 0, 0, 0, -1],
+                "noise_mode": 0
+            })
+        );
+    }
+
+    #[test]
+    fn definition_and_symbol_json_shapes() {
+        let text = "@1 fm ; Bass\nA 'あ' @1\n";
+        let definition: serde_json::Value =
+            serde_json::from_str(&definition_at_json(text, 1, 7)).expect("definition JSON");
+        assert_eq!(
+            definition,
+            serde_json::json!({
+                "start": {"line": 0, "character": 0},
+                "end": {"line": 0, "character": 2}
+            })
+        );
+        assert_eq!(definition_at_json(text, 1, 0), "null");
+
+        let symbols: serde_json::Value =
+            serde_json::from_str(&document_symbols_json(text)).expect("symbols JSON");
+        assert_eq!(symbols[0]["name"], "@1");
+        assert_eq!(symbols[0]["detail"], "fm Bass");
+        assert_eq!(symbols[0]["kind"], "instrument");
+        assert_eq!(symbols[1]["kind"], "track");
+        assert_eq!(symbols[1]["range"]["end"]["character"], 8);
+    }
+
+    #[test]
+    fn code_lens_options_pick_icons_and_file_actions() {
+        let titles = |options: &str| -> Vec<String> {
+            let lenses: serde_json::Value =
+                serde_json::from_str(&code_lens_json("@1 fm\n", options)).expect("lens JSON");
+            lenses
+                .as_array()
+                .expect("lens array")
+                .iter()
+                .map(|lens| lens["title"].as_str().unwrap_or("").to_string())
+                .collect()
+        };
+        assert_eq!(
+            titles(""),
+            ["$(folder-opened) Load", "$(save) Save", "$(play) FM"]
+        );
+        assert_eq!(
+            titles(r#"{"codeLensIcons": "text", "code_lens_file_actions": false, "other": 1}"#),
+            ["▷ FM"]
+        );
+        assert!(code_lens_json("", "{").starts_with("{\"error\""));
+        assert!(code_lens_json("", r#"{"code_lens_icons": "emoji"}"#).starts_with("{\"error\""));
+    }
+
+    #[test]
+    fn column_conversions_round_trip() {
+        assert_eq!(utf16_column("A 'あ' c", 8), 6);
+        assert_eq!(byte_column("A 'あ' c", 6), 8);
+    }
+
+    #[test]
+    fn comment_and_key_sig_columns_after_japanese_text() {
+        // The `;` is UTF-16 column 6, byte column 8.
+        assert!(!is_in_comment("A 'あ' ;c", 6));
+        assert!(is_in_comment("A 'あ' ;c", 7));
+        assert!(is_in_key_sig("A 'あ' _{+c} c", 9));
+        assert!(!is_in_key_sig("A 'あ' _{+c} c", 12));
+    }
+
+    #[test]
+    fn scanners_after_japanese_text_take_utf16_columns() {
+        // UTF-16 column 13 (1-based) is just after `>`.
+        let ctx = scan_channel_context("A 'あ' o4 > c", 1, 12, 1, 0);
+        assert_eq!(ctx.octaves, vec![5]);
+        let ks = scan_key_sig("A 'あ' _{+c} c", 1, 14);
+        assert_eq!(ks[0], 1);
+    }
+
+    #[test]
+    fn transpose_after_japanese_text_uses_utf16_columns() {
+        let result = transpose("A 'あ' o4 cd", 1, 10, 1, 12, 1).expect("edit");
+        assert_eq!(result.text, "c+d+");
+        assert_eq!((result.start_column, result.end_column), (10, 12));
+    }
+
+    #[test]
+    fn track_selector_spans_are_utf16_offsets() {
+        let sel = parse_leading_track_selector("AB c").expect("selector");
+        assert_eq!((sel.span_start(1), sel.span_end(1), sel.end()), (1, 2, 2));
     }
 
     #[test]
