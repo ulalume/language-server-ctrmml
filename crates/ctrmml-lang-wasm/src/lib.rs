@@ -715,27 +715,8 @@ pub fn docs_json() -> String {
 /// construct.
 #[wasm_bindgen]
 pub fn hover_at_json(text: &str, line: u32, col: u32) -> String {
-    let wire = ctrmml_lang_core::hover_at(text, line, col).map(HoverInfoWire::from);
-    serde_json::to_string(&wire).expect("hover info serializes to JSON")
-}
-
-#[derive(serde::Serialize)]
-struct HoverInfoWire {
-    markdown: String,
-    line: u32,
-    start: u32,
-    end: u32,
-}
-
-impl From<ctrmml_lang_core::HoverInfo> for HoverInfoWire {
-    fn from(info: ctrmml_lang_core::HoverInfo) -> Self {
-        Self {
-            markdown: info.markdown,
-            line: info.line,
-            start: info.start,
-            end: info.end,
-        }
-    }
+    serde_json::to_string(&ctrmml_lang_core::hover_at(text, line, col))
+        .expect("hover info serializes to JSON")
 }
 
 /// Enumerate code-lens entries for `text` as a JSON array. Each entry is
@@ -885,6 +866,21 @@ mod tests {
     #[test]
     fn version_is_non_empty() {
         assert!(!version().is_empty());
+    }
+
+    #[test]
+    fn hover_json_keeps_its_shape() {
+        let value: serde_json::Value =
+            serde_json::from_str(&hover_at_json("A @1 c", 0, 2)).expect("hover JSON");
+        let object = value.as_object().expect("hover object");
+        let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["end", "line", "markdown", "start"]);
+        assert_eq!(
+            (value["line"].as_u64(), value["start"].as_u64()),
+            (Some(0), Some(2))
+        );
+        assert_eq!(hover_at_json("; c", 0, 2), "null");
     }
 
     #[test]
