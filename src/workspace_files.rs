@@ -57,21 +57,24 @@ impl WorkspaceFiles {
         self.rescan(root.to_path_buf()).await
     }
 
-    async fn rescan(&self, root: PathBuf) -> Arc<RootFiles> {
-        let scan_root = root.clone();
-        let files = tokio::task::spawn_blocking(move || scan(&scan_root))
-            .await
-            .unwrap_or_default();
-        let files = Arc::new(files);
-        self.listings.lock().expect("listing lock").insert(
-            root,
-            Listing {
-                files: Arc::clone(&files),
-                scanned: Instant::now(),
-                refreshing: false,
-            },
-        );
-        files
+    /// Scan `root` and store the listing. The scan finishes and is stored
+    /// even if the caller stops waiting.
+    async fn rescan(self: &Arc<Self>, root: PathBuf) -> Arc<RootFiles> {
+        let this = Arc::clone(self);
+        tokio::task::spawn_blocking(move || {
+            let files = Arc::new(scan(&root));
+            this.listings.lock().expect("listing lock").insert(
+                root,
+                Listing {
+                    files: Arc::clone(&files),
+                    scanned: Instant::now(),
+                    refreshing: false,
+                },
+            );
+            files
+        })
+        .await
+        .unwrap_or_default()
     }
 }
 
