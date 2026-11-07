@@ -6,27 +6,26 @@ use tower_lsp::{
         CodeActionParams, CodeActionProviderCapability, CodeActionTriggerKind, CodeLens,
         CodeLensOptions, CodeLensParams, Command, CompletionItem, CompletionItemKind,
         CompletionItemLabelDetails, CompletionList, CompletionOptions, CompletionParams,
-        CompletionResponse, CompletionTextEdit, DidChangeTextDocumentParams,
-        DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
-        DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse, Documentation,
-        ExecuteCommandOptions, ExecuteCommandParams, GotoDefinitionParams, GotoDefinitionResponse,
-        Hover, HoverContents, HoverParams, HoverProviderCapability, InitializeParams,
-        InitializeResult, InsertTextFormat, InsertTextMode, Location, MarkupContent, MarkupKind,
-        MessageActionItem, MessageType, OneOf, Position, Range, SaveOptions, ServerCapabilities,
-        SymbolKind as LspSymbolKind, TextDocumentSyncCapability, TextDocumentSyncKind,
-        TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit,
+        CompletionResponse, CompletionTextEdit, ConfigurationItem, DidChangeConfigurationParams,
+        DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+        DidSaveTextDocumentParams, DocumentSymbol, DocumentSymbolParams, DocumentSymbolResponse,
+        Documentation, ExecuteCommandOptions, ExecuteCommandParams, GotoDefinitionParams,
+        GotoDefinitionResponse, Hover, HoverContents, HoverParams, HoverProviderCapability,
+        InitializeParams, InitializeResult, InitializedParams, InsertTextFormat, InsertTextMode,
+        Location, MarkupContent, MarkupKind, MessageActionItem, MessageType, OneOf, Position,
+        Range, Registration, SaveOptions, ServerCapabilities, SymbolKind as LspSymbolKind,
+        TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
+        TextDocumentSyncSaveOptions, TextEdit,
     },
     LanguageServer,
 };
 
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::backend::{Backend, Session};
 use crate::check::CHECK_DEBOUNCE;
-use crate::config::{
-    apply_completion_client_defaults, completion_settings_from_value, config_from_value,
-    ClientKind, Config,
-};
+use crate::config::{configured_settings, initialization};
 use crate::diagnostics::publish_check_diagnostics;
 use crate::export::ExportFormat;
 use crate::fill_measure::{
@@ -50,14 +49,22 @@ use ctrmml_lang_core::transpose::Direction;
 use ctrmml_lang_core::{
     build_preview_mml, byte_offset_to_utf16_character, code_lens_with_config, definition_at,
     document_symbols, extract_instrument_block, hover_at, utf16_character_to_byte_offset,
-    CodeLensConfig, ExtractedBlock, IconStyle, InstrumentType, SymbolKind,
+    ExtractedBlock, InstrumentType, SymbolKind,
 };
 
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
-        let client_kind =
-            ClientKind::from_name(params.client_info.as_ref().map(|info| info.name.as_str()));
+        let init = initialization(
+            params.initialization_options.as_ref(),
+            params.client_info.as_ref().map(|info| info.name.as_str()),
+        );
+        let workspace = params.capabilities.workspace.as_ref();
+        let supports_configuration =
+            workspace.is_some_and(|workspace| workspace.configuration == Some(true));
+        let supports_configuration_registration = workspace
+            .and_then(|workspace| workspace.did_change_configuration.as_ref())
+            .is_some_and(|capability| capability.dynamic_registration == Some(true));
         let supports_completion_as_is = params
             .capabilities
             .text_document
@@ -92,26 +99,16 @@ impl LanguageServer for Backend {
             }
         }
 
-        let mut config = Config::default();
-        let mut completion_settings = Default::default();
-        let mut hierarchy_explicit = false;
-        if let Some(options) = params.initialization_options {
-            if let Some(options_config) = config_from_value(&options) {
-                config = options_config;
-            }
-            (completion_settings, hierarchy_explicit) = completion_settings_from_value(&options);
-        }
-
-        // Compatibility until native extensions send completion settings:
-        // client-name sniffing may fill only an omitted hierarchy flag.
-        apply_completion_client_defaults(&mut completion_settings, hierarchy_explicit, client_kind);
+        let commands = command_ids(&init.client);
         self.start_session(Session {
-            client_kind,
+            client: init.client,
             roots,
-            config,
-            completion_settings,
+            initial_settings: init.settings,
+            fm_picker_hierarchy_default: init.fm_picker_hierarchy_default,
             supports_completion_as_is,
             supports_code_action_resolve,
+            supports_configuration,
+            supports_configuration_registration,
         });
 
         Ok(InitializeResult {
@@ -140,7 +137,7 @@ impl LanguageServer for Backend {
                 definition_provider: Some(OneOf::Left(true)),
                 document_symbol_provider: Some(OneOf::Left(true)),
                 execute_command_provider: Some(ExecuteCommandOptions {
-                    commands: command_ids(client_kind),
+                    commands,
                     ..ExecuteCommandOptions::default()
                 }),
                 code_action_provider: Some(if supports_code_action_resolve {
@@ -158,6 +155,59 @@ impl LanguageServer for Backend {
             },
             ..InitializeResult::default()
         })
+    }
+
+    async fn initialized(&self, _: InitializedParams) {
+        if !self.session().supports_configuration_registration {
+            return;
+        }
+        // Once registered, clients notify changes to the `ctrmml` section.
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            let registration = Registration {
+                id: "ctrmml-configuration".to_string(),
+                method: "workspace/didChangeConfiguration".to_string(),
+                register_options: Some(serde_json::json!({ "section": CONFIGURATION_SECTION })),
+            };
+            if let Err(error) = client.register_capability(vec![registration]).await {
+                eprintln!("configuration registration failed: {error}");
+            }
+        });
+    }
+
+    /// Re-read the settings: pulled with `workspace/configuration` when the
+    /// client answers it with an object, else taken from the notification.
+    async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
+        let seq = self.settings_seq.fetch_add(1, Ordering::SeqCst) + 1;
+        let this = self.clone();
+        tokio::spawn(async move {
+            let pulled = if this.session().supports_configuration {
+                let item = ConfigurationItem {
+                    scope_uri: None,
+                    section: Some(CONFIGURATION_SECTION.to_string()),
+                };
+                this.client
+                    .configuration(vec![item])
+                    .await
+                    .ok()
+                    .and_then(|mut values| values.pop())
+                    .filter(Value::is_object)
+            } else {
+                None
+            };
+            let Some(value) = pulled.or(Some(params.settings).filter(Value::is_object)) else {
+                return;
+            };
+            if this.settings_seq.load(Ordering::SeqCst) != seq {
+                return;
+            }
+            let session = this.session();
+            this.set_settings(configured_settings(
+                &session.initial_settings,
+                &value,
+                session.fm_picker_hierarchy_default,
+            ));
+        });
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
@@ -304,7 +354,7 @@ impl LanguageServer for Backend {
             .get(&uri)
             .cloned()
             .unwrap_or_default();
-        let settings = self.session().completion_settings.clone();
+        let settings = self.completion_settings();
         let pos = Pos {
             line: position.line,
             character: position.character,
@@ -359,9 +409,8 @@ impl LanguageServer for Backend {
             .get(&uri)
             .cloned()
             .unwrap_or_default();
-        let config = code_lens_config(self.session().client_kind);
         let mut out = Vec::new();
-        for lens in code_lens_with_config(&text, config) {
+        for lens in code_lens_with_config(&text, self.session().client.code_lens) {
             // The lens's anchor span is the entire line; clients are free
             // to position the chip however they like.
             let line = lens.line;
@@ -403,7 +452,11 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
         let start = params.range.start;
-        let mut actions = code_actions(&uri_str, start);
+        let mut actions = if self.session().client.command_code_actions {
+            code_actions(&uri_str, start)
+        } else {
+            Vec::new()
+        };
 
         // Document-aware actions: transpose and fill-measure both
         // need the live document text. Take a single snapshot for
@@ -652,16 +705,8 @@ fn is_explicit_request(context: &CodeActionContext) -> bool {
         })
 }
 
-fn code_lens_config(client_kind: ClientKind) -> CodeLensConfig {
-    if client_kind.is_vscode() {
-        CodeLensConfig::default()
-    } else {
-        CodeLensConfig {
-            icon_style: IconStyle::None,
-            include_file_actions: false,
-        }
-    }
-}
+/// The configuration section the server reads.
+const CONFIGURATION_SECTION: &str = "ctrmml";
 
 /// Arguments of the patch commands, `[uri, line, type, target, ...]`. The
 /// line may be a number or a string; `target` is the channel to preview on
@@ -999,16 +1044,20 @@ mod tests {
         assert_eq!(list.items.len(), 1);
     }
 
+    fn lens_config(client_name: &str) -> ctrmml_lang_core::CodeLensConfig {
+        initialization(None, Some(client_name)).client.code_lens
+    }
+
     #[test]
     fn code_lens_policy_preserves_vscode_and_limits_other_clients_to_preview() {
-        let vscode = code_lens_with_config("@1 fm\n", code_lens_config(ClientKind::VsCode));
+        let vscode = code_lens_with_config("@1 fm\n", lens_config("Visual Studio Code"));
         let vscode_titles: Vec<&str> = vscode.iter().map(|lens| lens.title.as_str()).collect();
         assert_eq!(
             vscode_titles,
             ["$(folder-opened) Load", "$(save) Save", "$(play) FM"]
         );
 
-        let other = code_lens_with_config("@1 fm\n", code_lens_config(ClientKind::Other));
+        let other = code_lens_with_config("@1 fm\n", lens_config("Zed"));
         assert_eq!(other.len(), 1);
         // Codicon markers are dropped, but the play glyph stays so the lens
         // still reads as a button in clients that render titles verbatim.
@@ -1037,7 +1086,7 @@ mod tests {
 
     #[test]
     fn preview_lens_arguments_round_trip_through_handler_parser() {
-        let lens = code_lens_with_config("@7 fm\n", code_lens_config(ClientKind::Other))
+        let lens = code_lens_with_config("@7 fm\n", lens_config("Zed"))
             .into_iter()
             .find(|lens| lens.command_id.as_deref() == Some(CMD_PREVIEW_PATCH))
             .expect("FM preview lens");

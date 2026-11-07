@@ -10,7 +10,7 @@ use tower_lsp::lsp_types::{
     CodeAction, CodeActionKind, Command, Position, Range, TextEdit, Url, WorkspaceEdit,
 };
 
-use crate::config::ClientKind;
+use crate::config::ClientOptions;
 
 pub(crate) struct CommandDef {
     pub(crate) id: &'static str,
@@ -38,6 +38,8 @@ pub(crate) const CMD_PREVIEW_PATCH: &str = "mml.previewPatch";
 /// Code-lens save command — converts the `@N fm` block to a patch
 /// file format (DMP / INS / TFI / …).
 pub(crate) const CMD_SAVE_PATCH: &str = "mml.savePatch";
+/// Code-lens load command; only clients handle it.
+pub(crate) const CMD_LOAD_PATCH: &str = "mml.loadPatch";
 /// Returns the ym2612_format descriptor list. Client-side plumbing for
 /// save dialogs; not in `COMMANDS`, so it stays out of code-action menus.
 pub(crate) const CMD_PATCH_FORMATS: &str = "ctrmml.patchFormats";
@@ -95,26 +97,21 @@ pub(crate) const COMMANDS: &[CommandDef] = &[
         id: CMD_QUICKROM_MENU,
         title: "ctrmml: quickrom...",
     },
-    // `mml.previewPatch` / `mml.savePatch` are not in this base list on
-    // purpose. vscode-languageclient auto-registers a forwarder for
-    // every advertised command, which collides with the client-side
-    // handlers vscode-ctrmml installs (file dialogs, completion
-    // trigger) — and the synchronous throw on duplicate registration
-    // prevents the other lens commands from registering at all.
-    // `command_ids` conditionally advertises preview to non-VS Code
-    // clients, where standards-conforming clients need it before they
-    // will execute the lens. Save still requires client-side file UI and
-    // remains unadvertised.
-    // The server still handles both via `execute_command` because the
-    // match is by name, not by capability.
 ];
 
-pub(crate) fn command_ids(client_kind: ClientKind) -> Vec<String> {
-    let mut commands: Vec<String> = COMMANDS.iter().map(|entry| entry.id.to_string()).collect();
-    if !client_kind.is_vscode() {
-        commands.push(CMD_PREVIEW_PATCH.to_string());
-    }
-    commands
+/// The commands to advertise: these and `mml.previewPatch`, minus the
+/// ones the client registers itself (vscode-languageclient registers a
+/// forwarder for every advertised command, and a duplicate registration
+/// throws). `mml.savePatch` needs client-side file UI and is never
+/// advertised; the server still runs it by name.
+pub(crate) fn command_ids(client: &ClientOptions) -> Vec<String> {
+    COMMANDS
+        .iter()
+        .map(|entry| entry.id)
+        .chain([CMD_PREVIEW_PATCH])
+        .filter(|id| !client.client_commands.iter().any(|own| own == id))
+        .map(str::to_string)
+        .collect()
 }
 
 pub(crate) fn command_title(command_id: &str) -> &str {
@@ -245,23 +242,35 @@ mod tests {
         assert_eq!(transposed("A 'あ' o4 cd\n", range).as_deref(), Some("c+d+"));
     }
 
+    fn client(name: &str, options: serde_json::Value) -> ClientOptions {
+        crate::config::initialization(Some(&options), Some(name)).client
+    }
+
     #[test]
     fn patch_formats_stays_out_of_the_command_lists() {
         assert!(!COMMANDS.iter().any(|entry| entry.id == CMD_PATCH_FORMATS));
-        for client_kind in [ClientKind::VsCode, ClientKind::Other] {
-            assert!(!command_ids(client_kind)
+        for name in ["Visual Studio Code", "Zed"] {
+            assert!(!command_ids(&client(name, json!({})))
                 .iter()
                 .any(|command| command == CMD_PATCH_FORMATS));
         }
     }
 
     #[test]
-    fn preview_patch_is_advertised_only_outside_vscode() {
-        let vscode = command_ids(ClientKind::VsCode);
+    fn commands_the_client_registers_are_not_advertised() {
+        let vscode = command_ids(&client("Visual Studio Code", json!({})));
         assert!(!vscode.iter().any(|command| command == CMD_PREVIEW_PATCH));
+        assert!(vscode.iter().any(|command| command == CMD_PLAY));
 
-        let other = command_ids(ClientKind::Other);
+        let other = command_ids(&client("Zed", json!({})));
         assert!(other.iter().any(|command| command == CMD_PREVIEW_PATCH));
         assert!(!other.iter().any(|command| command == CMD_SAVE_PATCH));
+
+        let explicit = command_ids(&client(
+            "Zed",
+            json!({"client_commands": ["mml.previewPatch", "ctrmml.stop"]}),
+        ));
+        assert!(!explicit.iter().any(|command| command == CMD_PREVIEW_PATCH));
+        assert!(!explicit.iter().any(|command| command == CMD_STOP));
     }
 }
