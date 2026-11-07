@@ -30,6 +30,13 @@ pub struct HoverInfo {
     /// 0-based column range in UTF-8 bytes within the line.
     pub start: u32,
     pub end: u32,
+    /// The `docs_json` table of the shown entry (`"commands"`,
+    /// `"meta_keywords"`, `"platform_commands"`, …), or `"tracks"` for track
+    /// selectors. `None` for hovers on document data: PCM paths and PSG
+    /// envelopes.
+    pub table: Option<&'static str>,
+    /// The entry's `key` in `table`; `"letters"` or `"numeric"` for tracks.
+    pub key: Option<&'static str>,
 }
 
 #[derive(Debug, Clone)]
@@ -37,6 +44,7 @@ struct Hit {
     markdown: String,
     start: usize,
     end: usize,
+    source: Option<(&'static str, &'static str)>,
 }
 
 impl Hit {
@@ -45,11 +53,17 @@ impl Hit {
             markdown: format_hover(label, doc),
             start,
             end,
+            source: None,
         }
     }
 
-    fn entry(entry: &DocEntry, start: usize, end: usize) -> Self {
-        Self::new(entry.label, entry.doc, start, end)
+    fn entry(table: &'static str, entry: &'static DocEntry, start: usize, end: usize) -> Self {
+        Self::new(entry.label, entry.doc, start, end).from(table, entry.key)
+    }
+
+    fn from(mut self, table: &'static str, key: &'static str) -> Self {
+        self.source = Some((table, key));
+        self
     }
 
     fn into_info(self, line: u32) -> HoverInfo {
@@ -58,6 +72,8 @@ impl Hit {
             line,
             start: self.start as u32,
             end: self.end as u32,
+            table: self.source.map(|(table, _)| table),
+            key: self.source.map(|(_, key)| key),
         }
     }
 }
@@ -69,7 +85,8 @@ fn documented(table: &'static [DocEntry], key: &str) -> Option<&'static DocEntry
 
 /// Hover for the command documented under `key`, covering `start..end`.
 fn command_hit(key: &str, start: usize, end: usize) -> Option<Hit> {
-    documented(docs::COMMAND_COMPLETIONS, key).map(|entry| Hit::entry(entry, start, end))
+    documented(docs::COMMAND_COMPLETIONS, key)
+        .map(|entry| Hit::entry("commands", entry, start, end))
 }
 
 // ---------------------------------------------------------------------------
@@ -128,11 +145,20 @@ pub fn format_hover(label: &str, doc: &str) -> String {
 
 fn track_hit(line: &str, col: usize) -> Option<Hit> {
     let (token, start, end) = whitespace_token_at(line, col)?;
+    track_token_hit(token, start, end)
+}
+
+fn track_token_hit(token: &str, start: usize, end: usize) -> Option<Hit> {
     if !is_track_token(start, token) {
         return None;
     }
     let doc = docs::track_doc(token)?;
-    Some(Hit::new(docs::TRACK_HELP_LABEL, doc, start, end))
+    let key = if token.starts_with('*') {
+        "numeric"
+    } else {
+        "letters"
+    };
+    Some(Hit::new(docs::TRACK_HELP_LABEL, doc, start, end).from("tracks", key))
 }
 
 fn hover_hit_line(line: &str, col: usize) -> Option<Hit> {
@@ -144,7 +170,7 @@ fn hover_hit_line(line: &str, col: usize) -> Option<Hit> {
     // `'lfo 0 5'` etc. show as a single hover region.
     if let Some((sq_start, sq_end)) = single_quote_bounds(line, col) {
         if let Some(entry) = platform_command_at_inner(line, sq_start, sq_end) {
-            return Some(Hit::entry(entry, sq_start, sq_end + 1));
+            return Some(Hit::entry("platform_commands", entry, sq_start, sq_end + 1));
         }
     }
 
@@ -153,7 +179,7 @@ fn hover_hit_line(line: &str, col: usize) -> Option<Hit> {
     if let Some((token, start, end)) = tok {
         if is_at_meta_token(token) {
             if let Some(entry) = at_meta_entry(token) {
-                return Some(Hit::entry(entry, start, end));
+                return Some(Hit::entry("at_meta", entry, start, end));
             }
         }
     }
@@ -175,6 +201,7 @@ fn hover_hit_line(line: &str, col: usize) -> Option<Hit> {
                             ),
                             start: dq_start,
                             end: dq_end + 1,
+                            source: None,
                         });
                     }
                 }
@@ -199,30 +226,33 @@ fn hover_hit_line(line: &str, col: usize) -> Option<Hit> {
 
     let (token, start, end) = tok?;
 
-    if is_track_token(start, token) {
-        if let Some(doc) = docs::track_doc(token) {
-            return Some(Hit::new(docs::TRACK_HELP_LABEL, doc, start, end));
-        }
+    if let Some(hit) = track_token_hit(token, start, end) {
+        return Some(hit);
     }
 
     // `#platform <value>` etc. — value-context hover.
     if let Some((_, meta_end, meta_keyword)) = meta_keyword_bounds(line) {
         if col >= meta_end && start >= meta_end {
-            let table = match meta_keyword {
-                "#platform" => Some(docs::PLATFORM_VALUES),
-                "#option" => Some(docs::OPTION_VALUES),
-                "#timesig" => Some(docs::TIMESIG_VALUES),
-                "#group" => Some(docs::GROUP_VALUES),
-                _ => None,
+            let (name, table) = match meta_keyword {
+                "#platform" => ("platform_values", docs::PLATFORM_VALUES),
+                "#option" => ("option_values", docs::OPTION_VALUES),
+                "#timesig" => ("timesig_values", docs::TIMESIG_VALUES),
+                "#group" => ("group_values", docs::GROUP_VALUES),
+                _ => return None,
             };
-            let entry = table.and_then(|table| documented(table, token))?;
-            return Some(Hit::new(token, entry.doc, start, end));
+            let entry = documented(table, token)?;
+            return Some(Hit::new(token, entry.doc, start, end).from(name, entry.key));
         }
     }
 
     if token.starts_with('#') {
-        let doc = docs::meta_doc(token)?;
-        return Some(Hit::new(token, doc, start, end));
+        let entry = docs::find_entry(docs::META_KEYWORDS, token)?;
+        let doc = if entry.doc.is_empty() {
+            entry.detail
+        } else {
+            entry.doc
+        };
+        return Some(Hit::new(token, doc, start, end).from("meta_keywords", entry.key));
     }
 
     let offset = col.saturating_sub(start).min(token.len().saturating_sub(1));
@@ -230,7 +260,7 @@ fn hover_hit_line(line: &str, col: usize) -> Option<Hit> {
     // `@meta` embedded inside a larger token (e.g. `cde@2fg`).
     if token.contains('@') {
         if let Some((entry, at_pos, at_end)) = at_meta_in_token(token, offset) {
-            return Some(Hit::entry(entry, start + at_pos, start + at_end));
+            return Some(Hit::entry("at_meta", entry, start + at_pos, start + at_end));
         }
     }
 
@@ -257,12 +287,12 @@ fn hover_hit_line(line: &str, col: usize) -> Option<Hit> {
 
     // Instrument type keyword (`fm`, `psg`, `pcm`, `2op`).
     if let Some(entry) = documented(docs::INSTRUMENT_TYPES, token) {
-        return Some(Hit::new(token, entry.doc, start, end));
+        return Some(Hit::new(token, entry.doc, start, end).from("instrument_types", entry.key));
     }
 
     // `rate=` / `offset=` PCM params.
     if let Some(entry) = rate_offset_in_token(token) {
-        return Some(Hit::entry(entry, start, end));
+        return Some(Hit::entry("rate_offset", entry, start, end));
     }
 
     // Regular MML command at the cursor offset.
@@ -406,8 +436,8 @@ fn command_at(token: &str, offset: usize, base: usize) -> Option<Hit> {
 
             if offset >= start && offset < end {
                 let key = &token[start..start + 1];
-                let (label, doc) = docs::command_entry(key, signed)?;
-                return Some(Hit::new(label, doc, base + start, base + end));
+                let entry = docs::command_entry(key, signed)?;
+                return Some(Hit::entry("commands", entry, base + start, base + end));
             }
             idx = end;
             continue;
@@ -693,7 +723,7 @@ fn fm_hover(doc: &BorrowedLinesModel, line_idx: usize, col: usize) -> Option<Hit
         let key = if idx == 0 { "ALG" } else { "FB" };
         let entry = docs::find_entry(docs::FM_PARAM_DOCS, key)?;
         let n = numbers[idx];
-        return Some(Hit::entry(entry, n.start, n.end));
+        return Some(Hit::entry("fm_params", entry, n.start, n.end));
     }
 
     if !is_numeric_param_line(line, parse_end) {
@@ -726,7 +756,7 @@ fn fm_hover(doc: &BorrowedLinesModel, line_idx: usize, col: usize) -> Option<Hit
         Some(op) => format!("OP{} {}", op, entry.label),
         None => entry.label.to_string(),
     };
-    Some(Hit::new(&label, entry.doc, n.start, n.end))
+    Some(Hit::new(&label, entry.doc, n.start, n.end).from("fm_params", entry.key))
 }
 
 fn two_op_hover(doc: &BorrowedLinesModel, line_idx: usize, col: usize) -> Option<Hit> {
@@ -757,7 +787,7 @@ fn two_op_hover(doc: &BorrowedLinesModel, line_idx: usize, col: usize) -> Option
     }
     let entry = docs::TWO_OP_PARAM_DOCS.get(idx)?;
     let n = numbers[idx];
-    Some(Hit::entry(entry, n.start, n.end))
+    Some(Hit::entry("two_op_params", entry, n.start, n.end))
 }
 
 fn psg_hover(doc: &BorrowedLinesModel, line_idx: usize, col: usize) -> Option<Hit> {
@@ -903,6 +933,46 @@ mod tests {
 
     fn span(info: &HoverInfo) -> (u32, u32) {
         (info.start, info.end)
+    }
+
+    fn doc_ref(text: &str, line: u32, col: u32) -> Option<(&'static str, &'static str)> {
+        let info = hover_at(text, line, col)?;
+        Some((info.table?, info.key?))
+    }
+
+    #[test]
+    fn hovers_name_the_docs_entry_they_show() {
+        let text = concat!(
+            "#platform mdsdrv\n",
+            "@1 fm\n",
+            " 3 4\n",
+            "@2 pcm \"kick.wav\" rate=8000\n",
+            "@3 psg 15 0\n",
+            "AB o4 V-8 c+ 'mode 1' @M1 [c]2 *40\n",
+        );
+        assert_eq!(doc_ref(text, 0, 2), Some(("meta_keywords", "#platform")));
+        assert_eq!(doc_ref(text, 0, 12), Some(("platform_values", "mdsdrv")));
+        assert_eq!(doc_ref(text, 1, 0), Some(("at_meta", "@<num>")));
+        assert_eq!(doc_ref(text, 1, 3), Some(("instrument_types", "fm")));
+        assert_eq!(doc_ref(text, 2, 1), Some(("fm_params", "ALG")));
+        assert_eq!(doc_ref(text, 3, 20), Some(("rate_offset", "rate=")));
+        assert_eq!(doc_ref(text, 5, 0), Some(("tracks", "letters")));
+        assert_eq!(doc_ref(text, 5, 3), Some(("commands", "o")));
+        assert_eq!(doc_ref(text, 5, 6), Some(("commands", "V")));
+        assert_eq!(doc_ref(text, 5, 10), Some(("commands", "notes")));
+        assert_eq!(doc_ref(text, 5, 15), Some(("platform_commands", "mode")));
+        assert_eq!(doc_ref(text, 5, 23), Some(("at_meta", "@M<num>")));
+        assert_eq!(doc_ref(text, 5, 26), Some(("commands", "[")));
+        assert_eq!(doc_ref(text, 5, 31), Some(("tracks", "numeric")));
+        assert_eq!(
+            doc_ref("@1 2op 1 2 3 4 5 0\n", 0, 9),
+            Some(("two_op_params", "ML1"))
+        );
+        // Document data has no docs entry.
+        assert_eq!(doc_ref(text, 3, 9), None);
+        assert!(hover_at(text, 3, 9).is_some());
+        assert_eq!(doc_ref(text, 4, 7), None);
+        assert!(hover_at(text, 4, 7).is_some());
     }
 
     #[test]

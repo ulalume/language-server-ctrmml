@@ -736,9 +736,12 @@ pub fn docs_json() -> String {
 }
 
 /// Resolve a hover at `(line, col)` (zero-based, `col` in UTF-16 code
-/// units) in `text`. Returns a JSON object `{ markdown, line, start, end }`
-/// with the range in UTF-16 code units, or the literal `"null"` when the
-/// cursor isn't on a documented construct.
+/// units) in `text`. Returns a JSON object `{ markdown, line, start, end,
+/// table, key }` with the range in UTF-16 code units, or the literal
+/// `"null"` when the cursor isn't on a documented construct. `table` and
+/// `key` name the shown `docs_json` entry (`table` `"tracks"` with key
+/// `"letters"` or `"numeric"` for track selectors); both are `null` for
+/// PCM paths and PSG envelopes.
 #[wasm_bindgen]
 pub fn hover_at_json(text: &str, line: u32, col: u32) -> String {
     serde_json::to_string(&ctrmml_lang_core::hover_at_utf16(text, line, col))
@@ -988,10 +991,14 @@ mod tests {
         let object = value.as_object().expect("hover object");
         let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
         keys.sort_unstable();
-        assert_eq!(keys, ["end", "line", "markdown", "start"]);
+        assert_eq!(keys, ["end", "key", "line", "markdown", "start", "table"]);
         assert_eq!(
             (value["line"].as_u64(), value["start"].as_u64()),
             (Some(0), Some(2))
+        );
+        assert_eq!(
+            (value["table"].as_str(), value["key"].as_str()),
+            (Some("at_meta"), Some("@<num>"))
         );
         assert_eq!(hover_at_json("; c", 0, 2), "null");
     }

@@ -894,42 +894,42 @@ pub const FM_PARAM_DOCS: &[DocEntry] = &[
 
 pub const TWO_OP_PARAM_DOCS: &[DocEntry] = &[
     entry(
-        "",
+        "@",
         "FM Instrument Number",
         "",
         "",
         "FM instrument number to duplicate.",
     ),
     entry(
-        "",
+        "ML1",
         "OP1 Multiple (0..15)",
         "",
         "",
         "1 is normal, 2 is 2x, 3 is 3x, 0 is 0.5x.",
     ),
     entry(
-        "",
+        "ML2",
         "OP2 Multiple (0..15)",
         "",
         "",
         "1 is normal, 2 is 2x, 3 is 3x, 0 is 0.5x.",
     ),
     entry(
-        "",
+        "ML3",
         "OP3 Multiple (0..15)",
         "",
         "",
         "1 is normal, 2 is 2x, 3 is 3x, 0 is 0.5x.",
     ),
     entry(
-        "",
+        "ML4",
         "OP4 Multiple (0..15)",
         "",
         "",
         "1 is normal, 2 is 2x, 3 is 3x, 0 is 0.5x.",
     ),
     entry(
-        "",
+        "TRS",
         "Transpose (-24..24)",
         "",
         "",
@@ -951,16 +951,6 @@ pub fn find_entry_by_label(table: &'static [DocEntry], label: &str) -> Option<&'
     table.iter().find(|entry| entry.label == label)
 }
 
-pub fn meta_doc(label: &str) -> Option<&'static str> {
-    META_KEYWORDS.iter().find(|e| e.key == label).map(|e| {
-        if e.doc.is_empty() {
-            e.detail
-        } else {
-            e.doc
-        }
-    })
-}
-
 /// Snippet body for the "Default FM template" item the FM completer
 /// appends at the bottom of its file-suggestion list. Body starts with
 /// a leading space so it concatenates cleanly with the preceding `fm`
@@ -973,7 +963,7 @@ pub const FM_DEFAULT_TEMPLATE: &str =
 /// `key`: an unsigned form (`V<0..127>`) and a signed one (`V<-128..+127>`).
 /// When the call site saw an explicit `+/-` prefix on the operand it wants the
 /// signed variant.
-pub fn command_entry(key: &str, signed: bool) -> Option<(&'static str, &'static str)> {
+pub fn command_entry(key: &str, signed: bool) -> Option<&'static DocEntry> {
     let matches = COMMAND_COMPLETIONS.iter().filter(|e| e.key == key);
     let mut first: Option<&DocEntry> = None;
     let mut signed_match: Option<&DocEntry> = None;
@@ -990,10 +980,7 @@ pub fn command_entry(key: &str, signed: bool) -> Option<(&'static str, &'static 
     } else {
         first
     }?;
-    if entry.doc.is_empty() {
-        return None;
-    }
-    Some((entry.label, entry.doc))
+    (!entry.doc.is_empty()).then_some(entry)
 }
 
 /// Mega Drive (MDSDRV) channel names of tracks `A`..`P`, by track id.
