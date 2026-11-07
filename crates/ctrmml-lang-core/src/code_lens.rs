@@ -137,15 +137,7 @@ pub fn code_lens_with_config(text: &str, config: CodeLensConfig) -> Vec<CodeLens
 
         if let Some(header) = instrument_header_at(&model, line_number) {
             if let Some(ty) = header.instrument_type() {
-                let target = LensTarget {
-                    line: line_idx.to_string(),
-                    ty,
-                    number: header.number.to_string(),
-                    keyword: keyword_position(&model, &header),
-                    name: instrument_name(model.get_line_content(line_number))
-                        .unwrap_or("")
-                        .to_string(),
-                };
+                let target = LensTarget::new(&model, line_number, &header, ty);
                 emit_instrument_variants(&target, config, &mut out);
             }
             continue;
@@ -167,35 +159,47 @@ pub fn code_lens_with_config(text: &str, config: CodeLensConfig) -> Vec<CodeLens
     out
 }
 
-/// What an instrument lens acts on, as lens arguments.
-struct LensTarget {
-    line: String,
+/// What an instrument lens acts on.
+struct LensTarget<'a> {
+    line: u32,
     ty: InstrumentType,
-    number: String,
+    number: u32,
     /// The keyword's 0-based line and the UTF-16 character past its end.
-    keyword: [String; 2],
-    name: String,
+    keyword: (u32, u32),
+    name: &'a str,
 }
 
-impl LensTarget {
+impl<'a> LensTarget<'a> {
+    /// The target of `header`, whose `@N` sits on 1-based `line_number`.
+    fn new(
+        model: &'a BorrowedLinesModel,
+        line_number: u32,
+        header: &InstrumentHeader,
+        ty: InstrumentType,
+    ) -> Self {
+        let keyword_text = model.get_line_content(header.keyword_line);
+        let keyword_end = byte_offset_to_utf16_character(keyword_text, header.keyword_end());
+        Self {
+            line: line_number - 1,
+            ty,
+            number: header.number,
+            keyword: (header.keyword_line - 1, keyword_end),
+            name: instrument_name(model.get_line_content(line_number)).unwrap_or(""),
+        }
+    }
+
+    /// `line, type, between.., number, keyword_line, keyword_end, after..`
     fn args(&self, between: &[&str], after: &[&str]) -> Vec<String> {
-        let mut args = vec![self.line.clone(), self.ty.keyword().to_string()];
+        let mut args = vec![self.line.to_string(), self.ty.keyword().to_string()];
         args.extend(between.iter().map(|arg| arg.to_string()));
-        args.push(self.number.clone());
-        args.extend(self.keyword.iter().cloned());
+        args.extend([self.number, self.keyword.0, self.keyword.1].map(|n| n.to_string()));
         args.extend(after.iter().map(|arg| arg.to_string()));
         args
     }
 }
 
-fn keyword_position(model: &BorrowedLinesModel, header: &InstrumentHeader) -> [String; 2] {
-    let line = model.get_line_content(header.keyword_line);
-    let end = byte_offset_to_utf16_character(line, header.keyword_end());
-    [(header.keyword_line - 1).to_string(), end.to_string()]
-}
-
 fn emit_instrument_variants(target: &LensTarget, config: CodeLensConfig, out: &mut Vec<CodeLens>) {
-    let line: u32 = target.line.parse().unwrap_or(0);
+    let line = target.line;
     let preview = "mml.previewPatch";
     let load = "mml.loadPatch";
     let save = "mml.savePatch";
@@ -214,7 +218,7 @@ fn emit_instrument_variants(target: &LensTarget, config: CodeLensConfig, out: &m
                     line,
                     icons.title("save", "Save"),
                     save,
-                    target.args(&[], &[&target.name]),
+                    target.args(&[], &[target.name]),
                 ));
             }
             out.push(CodeLens::cmd(
