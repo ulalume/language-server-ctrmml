@@ -31,15 +31,14 @@ use crate::export::ExportFormat;
 use crate::fill_measure::{
     fetch_cursor_tick, fill_measure_action, fill_measure_edit, FillMeasureTarget,
 };
+use crate::link::{relative_path_display, LinkSource, LinkTool};
 use crate::lsp_commands::{
     code_actions, command_ids, transpose_code_action, CMD_EXPORT_VGM, CMD_EXPORT_WAV,
     CMD_MDSLINK_DIRECTORY, CMD_MDSLINK_FILE, CMD_MDSLINK_FROM_CONFIG, CMD_MDSLINK_MENU,
     CMD_PATCH_FORMATS, CMD_PLAY, CMD_PLAY_FROM_CURSOR, CMD_PREVIEW_PATCH, CMD_QUICKROM_DIRECTORY,
     CMD_QUICKROM_FILE, CMD_QUICKROM_FROM_CONFIG, CMD_QUICKROM_MENU, CMD_SAVE_PATCH, CMD_STOP,
 };
-use crate::mdslink::MdslinkRunResult;
 use crate::note_hover::note_hover_text;
-use crate::quickrom::QuickromRunResult;
 use crate::utils::{is_mml_uri, line_at};
 use ctrmml_lang_core::completion::{
     completion_plan, completion_resolve, CompletionPlan, CoreCommand, CoreCompletionList, CoreItem,
@@ -49,7 +48,7 @@ use ctrmml_lang_core::transpose::Direction;
 use ctrmml_lang_core::{
     build_preview_mml, byte_offset_to_utf16_character, code_lens_with_config,
     extract_instrument_block, hover_at, instrument_header::strip_keyword, is_in_comment, token_at,
-    utf16_character_to_byte_offset, CodeLensConfig, IconStyle, InstrumentType,
+    utf16_character_to_byte_offset, CodeLensConfig, ExtractedBlock, IconStyle, InstrumentType,
 };
 
 #[tower_lsp::async_trait]
@@ -457,360 +456,15 @@ impl LanguageServer for Backend {
     }
 
     async fn execute_command(&self, params: ExecuteCommandParams) -> Result<Option<Value>> {
-        let args = params.arguments;
-        match params.command.as_str() {
-            CMD_PLAY => {
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                if let Err(err) = self.start_playback(uri, None).await {
-                    let _ = self.client.show_message(MessageType::ERROR, err).await;
-                }
-            }
-            CMD_PLAY_FROM_CURSOR => {
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                let line = args.get(1).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                let col = args.get(2).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                if let Err(err) = self.start_playback(uri, Some((line, col))).await {
-                    let _ = self.client.show_message(MessageType::ERROR, err).await;
-                }
-            }
-            CMD_STOP => {
-                self.stop_playback().await;
-            }
-            CMD_EXPORT_VGM => {
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                match self.run_export(uri, ExportFormat::Vgm).await {
-                    Ok(path) => {
-                        let display = relative_path_display(&path, &self.session().roots);
-                        let _ = self
-                            .client
-                            .show_message(MessageType::INFO, format!("exported {display}"))
-                            .await;
-                    }
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                    }
-                }
-            }
-            CMD_EXPORT_WAV => {
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                match self.run_export(uri, ExportFormat::Wav).await {
-                    Ok(path) => {
-                        let display = relative_path_display(&path, &self.session().roots);
-                        let _ = self
-                            .client
-                            .show_message(MessageType::INFO, format!("exported {display}"))
-                            .await;
-                    }
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                    }
-                }
-            }
-            CMD_MDSLINK_FILE => {
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                run_mdslink_command(self, CMD_MDSLINK_FILE, uri).await;
-            }
-            CMD_MDSLINK_DIRECTORY => {
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                run_mdslink_command(self, CMD_MDSLINK_DIRECTORY, uri).await;
-            }
-            CMD_MDSLINK_FROM_CONFIG => {
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                run_mdslink_command(self, CMD_MDSLINK_FROM_CONFIG, uri).await;
-            }
-            CMD_MDSLINK_MENU => {
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                if let Some(command) = select_menu_command(
-                    self,
-                    "mdslink",
-                    &[
-                        ("mdslink file", CMD_MDSLINK_FILE),
-                        ("mdslink directory", CMD_MDSLINK_DIRECTORY),
-                        ("mdslink from mdslink.json", CMD_MDSLINK_FROM_CONFIG),
-                    ],
-                )
-                .await
-                {
-                    run_mdslink_command(self, command, uri).await;
-                }
-            }
-            CMD_QUICKROM_FILE => {
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                run_quickrom_command(self, CMD_QUICKROM_FILE, uri).await;
-            }
-            CMD_QUICKROM_DIRECTORY => {
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                run_quickrom_command(self, CMD_QUICKROM_DIRECTORY, uri).await;
-            }
-            CMD_QUICKROM_FROM_CONFIG => {
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                run_quickrom_command(self, CMD_QUICKROM_FROM_CONFIG, uri).await;
-            }
-            CMD_QUICKROM_MENU => {
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                if let Some(command) = select_menu_command(
-                    self,
-                    "quickrom",
-                    &[
-                        ("quickrom file", CMD_QUICKROM_FILE),
-                        ("quickrom directory", CMD_QUICKROM_DIRECTORY),
-                        ("quickrom from quickrom.json", CMD_QUICKROM_FROM_CONFIG),
-                    ],
-                )
-                .await
-                {
-                    run_quickrom_command(self, command, uri).await;
-                }
-            }
-            CMD_PREVIEW_PATCH => {
-                // Args from the code-lens dispatch in `ctrmml-lang-core`:
-                //   [uri, line_str, type, channel, instrument_number_str]
-                // The LSP layer prepended the uri before forwarding; the
-                // lang-core side keeps the line as a string in LSP wire
-                // form (zero-based).
-                // lang-core emits the line as a string; vscode-ctrmml may
-                // forward it as a number once it grows its own typed
-                // wrapper. Accept either shape.
-                let parsed = parse_preview_patch_args(&args);
-                let uri = match parsed.uri {
-                    Some(uri) => uri,
-                    None => match self.resolve_uri_arg(&args).await {
-                        Ok(uri) => uri,
-                        Err(err) => {
-                            let _ = self.client.show_message(MessageType::ERROR, err).await;
-                            return Ok(None);
-                        }
-                    },
-                };
-                let ty = match InstrumentType::parse(&parsed.instrument_type) {
-                    Some(ty) => ty,
-                    None => {
-                        let _ = self
-                            .client
-                            .show_message(
-                                MessageType::ERROR,
-                                format!(
-                                    "previewPatch: unknown instrument type `{}`",
-                                    parsed.instrument_type
-                                ),
-                            )
-                            .await;
-                        return Ok(None);
-                    }
-                };
-                let doc_text = self.docs.read().await.get(&uri).cloned();
-                let Some(doc_text) = doc_text else {
-                    let _ = self
-                        .client
-                        .show_message(MessageType::ERROR, "previewPatch: document not in cache")
-                        .await;
-                    return Ok(None);
-                };
-                let Some(block) = extract_instrument_block(&doc_text, parsed.line, ty) else {
-                    let _ = self
-                        .client
-                        .show_message(
-                            MessageType::ERROR,
-                            format!(
-                                "previewPatch: no @N {} block at line {}",
-                                parsed.instrument_type, parsed.line
-                            ),
-                        )
-                        .await;
-                    return Ok(None);
-                };
-                let preview = build_preview_mml(&doc_text, &block, &parsed.channel);
-                if let Err(err) = self.start_playback_with_text(uri, preview, None).await {
-                    let _ = self.client.show_message(MessageType::ERROR, err).await;
-                }
-            }
-            CMD_PATCH_FORMATS => {
-                return Ok(Some(
-                    serde_json::to_value(ym2612_format::formats()).unwrap_or(Value::Null),
-                ));
-            }
-            CMD_SAVE_PATCH => {
-                // Args: [uri, line, type, target_path, format?]. The client
-                // shows the save dialog so it knows where the user wants
-                // the patch to land; the LSP then runs the conversion.
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                let line = args
-                    .get(1)
-                    .and_then(|v| {
-                        v.as_u64()
-                            .or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))
-                    })
-                    .unwrap_or(0) as u32;
-                let type_str = args.get(2).and_then(|v| v.as_str()).unwrap_or("");
-                let target_str = args.get(3).and_then(|v| v.as_str()).unwrap_or("");
-                let format_override = args.get(4).and_then(|v| v.as_str());
-                if target_str.is_empty() {
-                    let _ = self
-                        .client
-                        .show_message(MessageType::ERROR, "savePatch: missing target path")
-                        .await;
-                    return Ok(None);
-                }
-                let ty = match InstrumentType::parse(type_str) {
-                    Some(ty) => ty,
-                    None => {
-                        let _ = self
-                            .client
-                            .show_message(
-                                MessageType::ERROR,
-                                format!("savePatch: unknown instrument type `{type_str}`"),
-                            )
-                            .await;
-                        return Ok(None);
-                    }
-                };
-                let doc_text = self.docs.read().await.get(&uri).cloned();
-                let Some(doc_text) = doc_text else {
-                    let _ = self
-                        .client
-                        .show_message(MessageType::ERROR, "savePatch: document not in cache")
-                        .await;
-                    return Ok(None);
-                };
-                let Some(block) = extract_instrument_block(&doc_text, line, ty) else {
-                    let _ = self
-                        .client
-                        .show_message(
-                            MessageType::ERROR,
-                            format!("savePatch: no @N {type_str} block at line {line}"),
-                        )
-                        .await;
-                    return Ok(None);
-                };
-                let target = std::path::PathBuf::from(target_str);
-                let format = format_override.map(str::to_string).or_else(|| {
-                    target
-                        .extension()
-                        .and_then(|extension| extension.to_str())
-                        .map(str::to_ascii_lowercase)
-                });
-                let Some(format) = format else {
-                    let _ = self
-                        .client
-                        .show_message(MessageType::ERROR, "savePatch: missing target format")
-                        .await;
-                    return Ok(None);
-                };
-                let converted = ym2612_format::convert(
-                    block.mml_text.as_bytes(),
-                    "input.mml",
-                    Some("mml"),
-                    0,
-                    &format,
-                );
-                let data = match converted {
-                    Ok(data) => data,
-                    Err(err) => {
-                        let _ = self
-                            .client
-                            .show_message(MessageType::ERROR, format!("savePatch: {err}"))
-                            .await;
-                        return Ok(None);
-                    }
-                };
-                match tokio::fs::write(&target, data).await {
-                    Ok(()) => {
-                        let display = target_str
-                            .rsplit(std::path::MAIN_SEPARATOR)
-                            .next()
-                            .unwrap_or(target_str);
-                        let _ = self
-                            .client
-                            .show_message(MessageType::INFO, format!("saved {display}"))
-                            .await;
-                    }
-                    Err(err) => {
-                        let _ = self
-                            .client
-                            .show_message(MessageType::ERROR, format!("savePatch: {err}"))
-                            .await;
-                    }
-                }
-            }
-            _ => {}
+        if params.command == CMD_PATCH_FORMATS {
+            return Ok(Some(
+                serde_json::to_value(ym2612_format::formats()).unwrap_or(Value::Null),
+            ));
+        }
+        match self.run_command(&params.command, &params.arguments).await {
+            Ok(Some(message)) => self.client.show_message(MessageType::INFO, message).await,
+            Ok(None) => {}
+            Err(message) => self.client.show_message(MessageType::ERROR, message).await,
         }
         Ok(None)
     }
@@ -821,6 +475,152 @@ impl LanguageServer for Backend {
 }
 
 impl Backend {
+    /// Run an `executeCommand`. `Ok(Some(text))` is a message for the user.
+    async fn run_command(
+        &self,
+        command: &str,
+        args: &[Value],
+    ) -> std::result::Result<Option<String>, String> {
+        if let Some((tool, source)) = link_command(command) {
+            let uri = self.resolve_uri_arg(args).await?;
+            return self.run_link(tool, source, &uri).await.map(Some);
+        }
+        match command {
+            CMD_PLAY => {
+                let uri = self.resolve_uri_arg(args).await?;
+                self.start_playback(uri, None).await?;
+            }
+            CMD_PLAY_FROM_CURSOR => {
+                let uri = self.resolve_uri_arg(args).await?;
+                let line = args.get(1).and_then(Value::as_u64).unwrap_or(0) as u32;
+                let character = args.get(2).and_then(Value::as_u64).unwrap_or(0) as u32;
+                self.start_playback(uri, Some((line, character))).await?;
+            }
+            CMD_STOP => self.stop_playback().await,
+            CMD_EXPORT_VGM | CMD_EXPORT_WAV => {
+                let format = if command == CMD_EXPORT_VGM {
+                    ExportFormat::Vgm
+                } else {
+                    ExportFormat::Wav
+                };
+                let uri = self.resolve_uri_arg(args).await?;
+                let path = self.run_export(uri, format).await?;
+                let display = relative_path_display(&path, &self.session().roots);
+                return Ok(Some(format!("exported {display}")));
+            }
+            CMD_MDSLINK_MENU | CMD_QUICKROM_MENU => {
+                let tool = if command == CMD_MDSLINK_MENU {
+                    LinkTool::Mdslink
+                } else {
+                    LinkTool::Quickrom
+                };
+                let uri = self.resolve_uri_arg(args).await?;
+                let Some(source) = self.select_link_source(tool).await? else {
+                    return Ok(None);
+                };
+                return self.run_link(tool, source, &uri).await.map(Some);
+            }
+            CMD_PREVIEW_PATCH => {
+                let patch = parse_patch_args(args);
+                let uri = self.resolve_uri_arg(args).await?;
+                let (text, block) = self.patch_block(&uri, &patch, "previewPatch").await?;
+                let preview = build_preview_mml(&text, &block, &patch.target);
+                self.start_playback_with_text(uri, preview, None).await?;
+            }
+            CMD_SAVE_PATCH => {
+                // The client picks the target file and may name its format.
+                let patch = parse_patch_args(args);
+                if patch.target.is_empty() {
+                    return Err("savePatch: missing target path".to_string());
+                }
+                let uri = self.resolve_uri_arg(args).await?;
+                let (_, block) = self.patch_block(&uri, &patch, "savePatch").await?;
+                let target = std::path::PathBuf::from(&patch.target);
+                let format = args
+                    .get(4)
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| {
+                        target
+                            .extension()
+                            .and_then(|extension| extension.to_str())
+                            .map(str::to_ascii_lowercase)
+                    })
+                    .ok_or_else(|| "savePatch: missing target format".to_string())?;
+                let data = ym2612_format::convert(
+                    block.mml_text.as_bytes(),
+                    "input.mml",
+                    Some("mml"),
+                    0,
+                    &format,
+                )
+                .map_err(|err| format!("savePatch: {err}"))?;
+                tokio::fs::write(&target, data)
+                    .await
+                    .map_err(|err| format!("savePatch: {err}"))?;
+                let name = target
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or(patch.target);
+                return Ok(Some(format!("saved {name}")));
+            }
+            _ => {}
+        }
+        Ok(None)
+    }
+
+    /// The document text and the `@N <type>` block the patch arguments name.
+    async fn patch_block(
+        &self,
+        uri: &str,
+        patch: &PatchArgs,
+        command: &str,
+    ) -> std::result::Result<(String, ExtractedBlock), String> {
+        let ty = InstrumentType::parse(&patch.instrument_type).ok_or_else(|| {
+            format!(
+                "{command}: unknown instrument type `{}`",
+                patch.instrument_type
+            )
+        })?;
+        let text = self
+            .document_text(uri)
+            .await
+            .ok_or_else(|| format!("{command}: failed to read the document"))?;
+        let block = extract_instrument_block(&text, patch.line, ty).ok_or_else(|| {
+            format!(
+                "{command}: no @N {} block at line {}",
+                patch.instrument_type, patch.line
+            )
+        })?;
+        Ok((text, block))
+    }
+
+    async fn select_link_source(
+        &self,
+        tool: LinkTool,
+    ) -> std::result::Result<Option<LinkSource>, String> {
+        let choices = tool.source_titles();
+        let actions = choices
+            .iter()
+            .map(|(title, _)| MessageActionItem {
+                title: title.clone(),
+                properties: Default::default(),
+            })
+            .collect();
+        let name = tool.name();
+        let selected = self
+            .client
+            .show_message_request(MessageType::INFO, format!("ctrmml: {name}"), Some(actions))
+            .await
+            .map_err(|err| format!("failed to open {name} menu: {err}"))?;
+        Ok(selected.and_then(|selected| {
+            choices
+                .into_iter()
+                .find(|(title, _)| *title == selected.title)
+                .map(|(_, source)| source)
+        }))
+    }
+
     async fn fill_measure_edit(
         &self,
         target: &FillMeasureTarget,
@@ -856,15 +656,18 @@ fn code_lens_config(client_kind: ClientKind) -> CodeLensConfig {
     }
 }
 
+/// Arguments of the patch commands, `[uri, line, type, target, ...]`. The
+/// line may be a number or a string; `target` is the channel to preview on
+/// or the file to save to.
 #[derive(Debug, PartialEq, Eq)]
-struct PreviewPatchArgs {
+struct PatchArgs {
     uri: Option<String>,
     line: u32,
     instrument_type: String,
-    channel: String,
+    target: String,
 }
 
-fn parse_preview_patch_args(args: &[Value]) -> PreviewPatchArgs {
+fn parse_patch_args(args: &[Value]) -> PatchArgs {
     let line = args
         .get(1)
         .and_then(|value| {
@@ -873,20 +676,30 @@ fn parse_preview_patch_args(args: &[Value]) -> PreviewPatchArgs {
                 .or_else(|| value.as_str().and_then(|line| line.parse::<u64>().ok()))
         })
         .unwrap_or(0) as u32;
-    PreviewPatchArgs {
+    let text = |index: usize| {
+        args.get(index)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    PatchArgs {
         uri: args.first().and_then(Value::as_str).map(str::to_string),
         line,
-        instrument_type: args
-            .get(2)
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        channel: args
-            .get(3)
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
+        instrument_type: text(2),
+        target: text(3),
     }
+}
+
+fn link_command(command: &str) -> Option<(LinkTool, LinkSource)> {
+    Some(match command {
+        CMD_MDSLINK_FILE => (LinkTool::Mdslink, LinkSource::File),
+        CMD_MDSLINK_DIRECTORY => (LinkTool::Mdslink, LinkSource::Directory),
+        CMD_MDSLINK_FROM_CONFIG => (LinkTool::Mdslink, LinkSource::Config),
+        CMD_QUICKROM_FILE => (LinkTool::Quickrom, LinkSource::File),
+        CMD_QUICKROM_DIRECTORY => (LinkTool::Quickrom, LinkSource::Directory),
+        CMD_QUICKROM_FROM_CONFIG => (LinkTool::Quickrom, LinkSource::Config),
+        _ => return None,
+    })
 }
 
 fn single_trigger_character(value: String) -> Option<char> {
@@ -971,163 +784,6 @@ fn core_edit_range(range: EditRange) -> Range {
         start: Position::new(range.start.line, range.start.character),
         end: Position::new(range.end.line, range.end.character),
     }
-}
-
-async fn select_menu_command(
-    backend: &Backend,
-    menu_name: &str,
-    choices: &[(&'static str, &'static str)],
-) -> Option<&'static str> {
-    let actions: Vec<MessageActionItem> = choices
-        .iter()
-        .map(|(title, _)| MessageActionItem {
-            title: (*title).to_string(),
-            properties: Default::default(),
-        })
-        .collect();
-    let selected = match backend
-        .client
-        .show_message_request(
-            MessageType::INFO,
-            format!("ctrmml: {menu_name}"),
-            Some(actions),
-        )
-        .await
-    {
-        Ok(item) => item,
-        Err(err) => {
-            let _ = backend
-                .client
-                .show_message(
-                    MessageType::ERROR,
-                    format!("failed to open {menu_name} menu: {err}"),
-                )
-                .await;
-            return None;
-        }
-    }?;
-
-    choices
-        .iter()
-        .find(|(title, _)| *title == selected.title.as_str())
-        .map(|(_, command)| *command)
-}
-
-async fn run_mdslink_command(backend: &Backend, command: &str, uri: String) {
-    let result = match command {
-        CMD_MDSLINK_FILE => backend.run_mdslink_single(uri).await,
-        CMD_MDSLINK_DIRECTORY => backend.run_mdslink_directory(uri).await,
-        CMD_MDSLINK_FROM_CONFIG => backend.run_mdslink_config(uri).await,
-        _ => {
-            let _ = backend
-                .client
-                .show_message(
-                    MessageType::ERROR,
-                    format!("unsupported mdslink command: {command}"),
-                )
-                .await;
-            return;
-        }
-    };
-    handle_mdslink_result(backend, result).await;
-}
-
-async fn run_quickrom_command(backend: &Backend, command: &str, uri: String) {
-    let result = match command {
-        CMD_QUICKROM_FILE => backend.run_quickrom_single(uri).await,
-        CMD_QUICKROM_DIRECTORY => backend.run_quickrom_directory(uri).await,
-        CMD_QUICKROM_FROM_CONFIG => backend.run_quickrom_config(uri).await,
-        _ => {
-            let _ = backend
-                .client
-                .show_message(
-                    MessageType::ERROR,
-                    format!("unsupported quickrom command: {command}"),
-                )
-                .await;
-            return;
-        }
-    };
-    handle_quickrom_result(backend, result).await;
-}
-
-async fn handle_mdslink_result(
-    backend: &Backend,
-    result: std::result::Result<MdslinkRunResult, String>,
-) {
-    match result {
-        Ok(result) => {
-            let roots = &backend.session().roots;
-            let seq = relative_path_display(&result.outputs.seq_output, roots);
-            let pcm = relative_path_display(&result.outputs.pcm_output, roots);
-            let inc = relative_path_display(&result.outputs.asm_header_output, roots);
-            let header = relative_path_display(&result.outputs.c_header_output, roots);
-            let mut message = format!("mdslink outputs: {seq}, {pcm}, {inc}, {header}");
-            if let Some(warning) = result.warning {
-                message.push_str(";\n\n**warning**: ");
-                message.push_str(&warning);
-            }
-            let _ = backend
-                .client
-                .show_message(MessageType::INFO, message)
-                .await;
-        }
-        Err(err) => {
-            let _ = backend.client.show_message(MessageType::ERROR, err).await;
-        }
-    }
-}
-
-async fn handle_quickrom_result(
-    backend: &Backend,
-    result: std::result::Result<QuickromRunResult, String>,
-) {
-    match result {
-        Ok(result) => {
-            let roots = &backend.session().roots;
-            let rom = relative_path_display(&result.rom_output, roots);
-            let mut message = format!("quickrom output: {rom}");
-            if let Some(warning) = result.warning {
-                message.push_str(";\n\n**warning**: ");
-                message.push_str(&warning);
-            }
-            let _ = backend
-                .client
-                .show_message(MessageType::INFO, message)
-                .await;
-        }
-        Err(err) => {
-            let _ = backend.client.show_message(MessageType::ERROR, err).await;
-        }
-    }
-}
-
-fn relative_path_display(path: &std::path::Path, roots: &[std::path::PathBuf]) -> String {
-    if let Some(root) = best_workspace_root(path, roots) {
-        if let Some(rel) = pathdiff::diff_paths(path, root) {
-            return rel.to_string_lossy().to_string();
-        }
-    }
-    path.to_string_lossy().to_string()
-}
-
-fn best_workspace_root(
-    path: &std::path::Path,
-    roots: &[std::path::PathBuf],
-) -> Option<std::path::PathBuf> {
-    let mut best: Option<std::path::PathBuf> = None;
-    for root in roots {
-        if path.starts_with(root) {
-            let replace = match &best {
-                Some(existing) => root.components().count() > existing.components().count(),
-                None => true,
-            };
-            if replace {
-                best = Some(root.clone());
-            }
-        }
-    }
-    best
 }
 
 /// A `prefix<digits>` reference: `@N` instruments, `@EN` / `@MN` / `@PN`
@@ -1419,12 +1075,12 @@ mod tests {
         let mut wire_args = vec![Value::String("file:///song.mml".to_string())];
         wire_args.extend(lens.arguments.into_iter().map(Value::String));
         assert_eq!(
-            parse_preview_patch_args(&wire_args),
-            PreviewPatchArgs {
+            parse_patch_args(&wire_args),
+            PatchArgs {
                 uri: Some("file:///song.mml".to_string()),
                 line: 0,
                 instrument_type: "fm".to_string(),
-                channel: "A".to_string(),
+                target: "A".to_string(),
             }
         );
     }
