@@ -463,7 +463,7 @@ pub const COMMAND_COMPLETIONS: &[DocEntry] = &[
         "\\=<delay>,<volume>",
         "\\=${1:delay},${2:volume}",
         "Echo macro setup.",
-        "Set echo macro parameters. The first value is how many notes or rests to backtrack, and the second is the volume reduction for the echoed note.",
+        "Set echo macro parameters. The first value is how many notes or rests to backtrack, and the second is the volume reduction for the echoed note. Use this with coarse volume (`v`); the value is subtracted from the current volume.",
     ),
     entry(
         "\\",
