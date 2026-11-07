@@ -38,8 +38,7 @@ use crate::lsp_commands::{
     CMD_PATCH_FORMATS, CMD_PLAY, CMD_PLAY_FROM_CURSOR, CMD_PREVIEW_PATCH, CMD_QUICKROM_DIRECTORY,
     CMD_QUICKROM_FILE, CMD_QUICKROM_FROM_CONFIG, CMD_QUICKROM_MENU, CMD_SAVE_PATCH, CMD_STOP,
 };
-use crate::note_hover::note_hover_text;
-use crate::utils::{is_mml_uri, line_at};
+use crate::utils::is_mml_uri;
 use ctrmml_lang_core::completion::{
     completion_plan, completion_resolve, CompletionPlan, CoreCommand, CoreCompletionList, CoreItem,
     CoreItemKind, DataPayload, DataRequest, EditRange, InsertFormat, Pos,
@@ -47,9 +46,8 @@ use ctrmml_lang_core::completion::{
 use ctrmml_lang_core::docs::COMPLETION_TRIGGER_CHARACTERS;
 use ctrmml_lang_core::transpose::Direction;
 use ctrmml_lang_core::{
-    build_preview_mml, byte_offset_to_utf16_character, code_lens_with_config, definition_at,
-    document_symbols, extract_instrument_block, hover_at, utf16_character_to_byte_offset,
-    ExtractedBlock, InstrumentType, SymbolKind,
+    build_preview_mml, code_lens_with_config, definition_at, document_symbols,
+    extract_instrument_block, hover_at_utf16, ExtractedBlock, InstrumentType, SymbolKind,
 };
 
 #[tower_lsp::async_trait]
@@ -268,29 +266,17 @@ impl LanguageServer for Backend {
         let Some(text) = docs.get(&uri) else {
             return Ok(None);
         };
-        let line = line_at(text, position.line);
-        let col = utf16_character_to_byte_offset(line, position.character);
-
-        // Generic hover (commands, key sigs, platform commands, FM/2op/PSG
-        // params, instrument definitions, …) lives in `ctrmml-lang-core` so
-        // web-ctrmml, vscode-ctrmml, and zed-ctrmml all share the same
-        // behaviour. It already short-circuits on comments. Note hover is
-        // the last layer.
-        let (value, start, end) = match hover_at(text, position.line, col as u32) {
-            Some(info) => (info.markdown, info.start as usize, info.end as usize),
-            None => match note_hover_text(text, position.line, col as u32, line) {
-                Some(found) => found,
-                None => return Ok(None),
-            },
+        let Some(info) = hover_at_utf16(text, position.line, position.character) else {
+            return Ok(None);
         };
         Ok(Some(Hover {
             contents: HoverContents::Markup(MarkupContent {
                 kind: MarkupKind::Markdown,
-                value,
+                value: info.markdown,
             }),
             range: Some(Range {
-                start: Position::new(position.line, byte_offset_to_utf16_character(line, start)),
-                end: Position::new(position.line, byte_offset_to_utf16_character(line, end)),
+                start: Position::new(position.line, info.start),
+                end: Position::new(position.line, info.end),
             }),
         }))
     }
