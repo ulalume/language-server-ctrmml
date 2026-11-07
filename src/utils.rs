@@ -26,8 +26,12 @@ pub(crate) fn read_file_text(uri: &str) -> Option<String> {
     std::fs::read_to_string(path).ok()
 }
 
-pub(crate) fn line_at(text: &str, line_index: u32) -> Option<String> {
-    text.lines().nth(line_index as usize).map(|s| s.to_string())
+/// Line `line_index` of `text` without its line ending; empty past the end.
+pub(crate) fn line_at(text: &str, line_index: u32) -> &str {
+    text.split('\n')
+        .nth(line_index as usize)
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .unwrap_or("")
 }
 
 pub(crate) fn is_wav(path: &std::path::Path) -> bool {

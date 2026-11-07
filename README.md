@@ -28,7 +28,7 @@ This server provides FM instrument completion via the `ym2612_format` library, l
 
 This server can control playback and exports via `ctrmml-cmd`.
 
-- By default, `ctrmml-cmd` is auto-downloaded from https://github.com/ulalume/ctrmml-cmd (GitHub Releases).
+- By default, the `ctrmml-cmd` release pinned in `src/ctrmml_cmd.rs` (`CTRMML_CMD_VERSION`) is downloaded from https://github.com/ulalume/ctrmml-cmd (GitHub Releases).
 - Auto-downloaded binaries are cached under `~/.cache/ctrmml-cmd` (or OS temp if cache is unavailable).
 - Optional overrides:
   - `command_path` in LSP initialization options

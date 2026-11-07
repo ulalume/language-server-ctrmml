@@ -1,15 +1,19 @@
 use std::process::Stdio;
+use std::sync::atomic::Ordering;
 
+use ctrmml_lang_core::utf16_character_to_byte_offset;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{ChildStdin, Command as TokioCommand};
+use tokio::process::{ChildStderr, ChildStdin, Command as TokioCommand};
 use tokio::sync::watch;
-use tower_lsp::lsp_types::{Diagnostic, MessageType};
+use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, MessageType};
+use tower_lsp::Client;
 
 use crate::backend::Backend;
 use crate::ctrmml_cmd::CTRMML_CMD_NAME;
 use crate::diagnostics::{
     clear_playback_diagnostics, diagnostic_for_playback_error, diagnostics_for_positions,
-    expire_playback_diagnostics_on_check, publish_playback_diagnostics, PlaybackMessage,
+    expire_playback_diagnostics_on_check, publish_playback_diagnostics, DiagnosticStoreHandle,
+    HighlightPosition, PlaybackMessage,
 };
 use crate::utils::{read_file_text, uri_to_path};
 
@@ -59,12 +63,8 @@ impl Backend {
         start: Option<(u32, u32)>,
     ) -> std::result::Result<(), String> {
         let text = self
-            .docs
-            .read()
+            .document_text(&uri)
             .await
-            .get(&uri)
-            .cloned()
-            .or_else(|| read_file_text(&uri))
             .ok_or_else(|| "failed to read mml text".to_string())?;
         self.start_playback_inner(uri, text, start, PlaybackMode::Document)
             .await
@@ -104,12 +104,13 @@ impl Backend {
         if mode.hot_reload() {
             cmd.arg("--hot-reload");
         }
-        if let Some((line, col)) = start {
-            cmd.arg("--start").arg(format!("{line}:{col}"));
+        if let Some((line, character)) = start {
+            cmd.arg("--start").arg(start_arg(&text, line, character));
         }
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
 
         let mut child = cmd
             .spawn()
@@ -153,12 +154,12 @@ impl Backend {
             .stdout
             .take()
             .ok_or_else(|| format!("failed to capture {CTRMML_CMD_NAME} stdout"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| format!("failed to capture {CTRMML_CMD_NAME} stderr"))?;
 
-        let token = {
-            let mut seq = self.playback_seq.lock().await;
-            *seq += 1;
-            *seq
-        };
+        let token = self.playback_seq.fetch_add(1, Ordering::SeqCst) + 1;
 
         {
             let mut slot = self.playback.lock().await;
@@ -170,56 +171,86 @@ impl Backend {
             });
         }
 
+        // Keep reading stderr so the child never blocks on a full pipe.
+        let stderr_task = tokio::spawn(relay_stderr(stderr, self.client.clone()));
+
         let client = self.client.clone();
         let docs = self.docs.clone();
         let store = self.diagnostics.clone();
         let seq = self.playback_seq.clone();
-        let uri_clone = uri.clone();
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout).lines();
             let mut playback_error_published = false;
+            let mut started = false;
+            let mut last_positions: Option<Vec<HighlightPosition>> = None;
+            let mut file_text: Option<String> = None;
             while let Ok(Some(line)) = reader.next_line().await {
-                if *seq.lock().await != token {
+                if seq.load(Ordering::SeqCst) != token {
                     break;
                 }
-                let msg = match parse_playback_message(&line) {
-                    Ok(msg) => msg,
-                    Err(_) => continue,
+                let Ok(msg) = parse_playback_message(&line) else {
+                    continue;
                 };
-                let text = match &msg {
-                    PlaybackMessage::Highlight { .. } if mode.owns_document_diagnostics() => docs
-                        .read()
-                        .await
-                        .get(&uri_clone)
-                        .cloned()
-                        .or_else(|| read_file_text(&uri_clone))
-                        .unwrap_or_default(),
-                    _ => String::new(),
-                };
-                match playback_outcome(mode, &text, &msg) {
-                    PlaybackOutcome::Diagnostics(diags) => {
-                        if matches!(msg, PlaybackMessage::PlaybackError { .. }) {
-                            playback_error_published = true;
-                        }
-                        publish_playback_diagnostics(&client, &store, &uri_clone, diags).await;
+                if let PlaybackMessage::Highlight { positions } = &msg {
+                    started = true;
+                    if last_positions.as_ref() == Some(positions) {
+                        continue;
                     }
-                    PlaybackOutcome::Message(message) => {
-                        client.show_message(MessageType::ERROR, message).await;
-                    }
-                    PlaybackOutcome::Ignore => {}
+                    last_positions = Some(positions.clone());
                 }
+                let outcome = {
+                    let docs = docs.read().await;
+                    let text = match &msg {
+                        PlaybackMessage::Highlight { .. } if mode.owns_document_diagnostics() => {
+                            match docs.get(&uri) {
+                                Some(text) => text.as_str(),
+                                None => file_text
+                                    .get_or_insert_with(|| read_file_text(&uri).unwrap_or_default())
+                                    .as_str(),
+                            }
+                        }
+                        _ => "",
+                    };
+                    playback_outcome(mode, text, &msg)
+                };
+                publish_outcome(
+                    &client,
+                    &store,
+                    &uri,
+                    outcome,
+                    &mut playback_error_published,
+                )
+                .await;
             }
 
-            if *seq.lock().await == token {
-                match playback_exit(mode, playback_error_published) {
-                    PlaybackExit::Clear => {
-                        clear_playback_diagnostics(&client, &store, &uri_clone).await;
-                    }
-                    PlaybackExit::ExpireOnNextCheck => {
-                        expire_playback_diagnostics_on_check(&store, &uri_clone).await;
-                    }
-                    PlaybackExit::Leave => {}
+            let stderr_text = stderr_task.await.unwrap_or_default();
+            if seq.load(Ordering::SeqCst) != token {
+                return;
+            }
+            // Output on stderr before any playback means the song never
+            // started (compile or audio failure).
+            if !started && !playback_error_published && !stderr_text.trim().is_empty() {
+                let failure = PlaybackMessage::PlaybackError {
+                    message: stderr_text.trim().to_string(),
+                };
+                let outcome = playback_outcome(mode, "", &failure);
+                publish_outcome(
+                    &client,
+                    &store,
+                    &uri,
+                    outcome,
+                    &mut playback_error_published,
+                )
+                .await;
+            }
+            match playback_exit(mode, playback_error_published) {
+                PlaybackExit::Clear => {
+                    clear_playback_diagnostics(&client, &store, &uri).await;
                 }
+                PlaybackExit::ExpireOnNextCheck => {
+                    expire_playback_diagnostics_on_check(&store, &uri).await;
+                }
+                PlaybackExit::Leave => {}
             }
         });
 
@@ -246,10 +277,7 @@ impl Backend {
     }
 
     pub(crate) async fn stop_playback(&self) {
-        {
-            let mut seq = self.playback_seq.lock().await;
-            *seq += 1;
-        }
+        self.playback_seq.fetch_add(1, Ordering::SeqCst);
         let mut slot = self.playback.lock().await;
         if let Some(mut playback) = slot.take() {
             // Drop the watch sender first so the writer task exits and
@@ -262,6 +290,69 @@ impl Backend {
             }
         }
     }
+}
+
+async fn publish_outcome(
+    client: &Client,
+    store: &DiagnosticStoreHandle,
+    uri: &str,
+    outcome: PlaybackOutcome,
+    playback_error_published: &mut bool,
+) {
+    match outcome {
+        PlaybackOutcome::Diagnostics(diags) => {
+            if diags
+                .iter()
+                .any(|diag| diag.severity == Some(DiagnosticSeverity::ERROR))
+            {
+                *playback_error_published = true;
+            }
+            publish_playback_diagnostics(client, store, uri, diags).await;
+        }
+        PlaybackOutcome::Message(message) => {
+            client.show_message(MessageType::ERROR, message).await;
+        }
+        PlaybackOutcome::Ignore => {}
+    }
+}
+
+/// Log the child's stderr, surfacing failed hot reloads that leave the
+/// edit unplayed. Returns the text read, up to a limit.
+async fn relay_stderr(stderr: ChildStderr, client: Client) -> String {
+    const KEEP: usize = 4096;
+    let mut lines = BufReader::new(stderr).lines();
+    let mut kept = String::new();
+    let mut last_shown: Option<String> = None;
+    while let Ok(Some(line)) = lines.next_line().await {
+        client
+            .log_message(
+                MessageType::WARNING,
+                format!("{CTRMML_CMD_NAME} play: {line}"),
+            )
+            .await;
+        if line.starts_with("hot-reload: relink failed") && last_shown.as_ref() != Some(&line) {
+            client
+                .show_message(MessageType::WARNING, line.clone())
+                .await;
+            last_shown = Some(line.clone());
+        }
+        if kept.len() < KEEP {
+            kept.push_str(&line);
+            kept.push('\n');
+        }
+    }
+    kept
+}
+
+/// `--start` takes a 1-based line and a 1-based byte column.
+fn start_arg(text: &str, line: u32, character: u32) -> String {
+    let line_text = text
+        .split('\n')
+        .nth(line as usize)
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .unwrap_or("");
+    let col = utf16_character_to_byte_offset(line_text, character);
+    format!("{}:{}", line + 1, col + 1)
 }
 
 async fn write_initial(
@@ -281,7 +372,7 @@ async fn write_update_frame(
     stdin: &mut ChildStdin,
     text: &str,
 ) -> std::result::Result<(), std::io::Error> {
-    let header = format!("UPDATE {}\n", text.as_bytes().len());
+    let header = format!("UPDATE {}\n", text.len());
     stdin.write_all(header.as_bytes()).await?;
     stdin.write_all(text.as_bytes()).await?;
     stdin.write_all(b"\n").await?;
@@ -419,6 +510,14 @@ mod tests {
             playback_exit(PlaybackMode::Document, true),
             PlaybackExit::ExpireOnNextCheck
         );
+    }
+
+    #[test]
+    fn start_position_is_one_based_in_bytes() {
+        assert_eq!(start_arg("A cdef\n", 0, 2), "1:3");
+        assert_eq!(start_arg("; x\r\nA cdef\n", 1, 0), "2:1");
+        // `あ` is one UTF-16 unit and three bytes.
+        assert_eq!(start_arg("Aあ c\n", 0, 3), "1:6");
     }
 
     #[test]

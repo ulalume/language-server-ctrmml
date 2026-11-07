@@ -7,18 +7,27 @@
 //! (`@1`, `V-8`, `_{+fc}`, `'mode 1'`) as a single hover region instead
 //! of being split by the host editor's word boundaries.
 
-use crate::docs;
-use crate::text_scan::is_in_key_sig;
-use crate::track_selector::parse_leading_track_selector;
+use serde::Serialize;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+use crate::completion::{byte_offset_to_utf16_character, utf16_character_to_byte_offset};
+use crate::docs::{self, DocEntry};
+use crate::instrument_header::{
+    instrument_header_at, instrument_header_for_keyword_line, InstrumentHeader,
+};
+use crate::string_model::BorrowedLinesModel;
+use crate::text_scan::{
+    double_quote_bounds, is_at_number, is_in_comment, is_in_key_sig, is_ws, single_quote_bounds,
+    whitespace_token_at,
+};
+use crate::track_selector::{parse_leading_track_selector, LineReader};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HoverInfo {
     pub markdown: String,
     /// 0-based line index that contains the hover. Always the same as the
     /// input line; included to keep call sites symmetric with range types.
     pub line: u32,
-    /// 0-based column range (UTF-8 byte offsets; ctrmml source is ASCII so
-    /// this matches both char- and UTF-16 columns).
+    /// 0-based column range in UTF-8 bytes within the line.
     pub start: u32,
     pub end: u32,
 }
@@ -31,6 +40,18 @@ struct Hit {
 }
 
 impl Hit {
+    fn new(label: &str, doc: &str, start: usize, end: usize) -> Self {
+        Self {
+            markdown: format_hover(label, doc),
+            start,
+            end,
+        }
+    }
+
+    fn entry(entry: &DocEntry, start: usize, end: usize) -> Self {
+        Self::new(entry.label, entry.doc, start, end)
+    }
+
     fn into_info(self, line: u32) -> HoverInfo {
         HoverInfo {
             markdown: self.markdown,
@@ -41,46 +62,53 @@ impl Hit {
     }
 }
 
+/// The first `table` entry for `key`, when it carries documentation.
+fn documented(table: &'static [DocEntry], key: &str) -> Option<&'static DocEntry> {
+    docs::find_entry(table, key).filter(|entry| !entry.doc.is_empty())
+}
+
+/// Hover for the command documented under `key`, covering `start..end`.
+fn command_hit(key: &str, start: usize, end: usize) -> Option<Hit> {
+    documented(docs::COMMAND_COMPLETIONS, key).map(|entry| Hit::entry(entry, start, end))
+}
+
 // ---------------------------------------------------------------------------
 // Public entry points
 // ---------------------------------------------------------------------------
 
-/// Resolve a hover for `text` at zero-based `(line, col)`.
+/// Resolve a hover for `text` at zero-based `(line, col)`, where `col` is a
+/// UTF-8 byte offset within the line.
 pub fn hover_at(text: &str, line: u32, col: u32) -> Option<HoverInfo> {
+    let doc = BorrowedLinesModel::from_text(text);
+    if line >= doc.get_line_count() {
+        return None;
+    }
     let line_idx = line as usize;
     let col_usize = col as usize;
-    let line_content = nth_line(text, line_idx)?;
+    let line_content = line_at(&doc, line_idx);
 
-    if crate::text_scan::is_in_comment(line_content, col_usize) {
+    if is_in_comment(line_content, col_usize) {
         return None;
     }
 
-    if let Some(hit) = two_op_hover(text, line_idx, col_usize) {
-        return Some(hit.into_info(line));
-    }
-    if let Some(hit) = fm_hover(text, line_idx, col_usize) {
-        return Some(hit.into_info(line));
-    }
-    if let Some(hit) = psg_hover(text, line_idx, col_usize) {
-        return Some(hit.into_info(line));
-    }
+    let hit = two_op_hover(&doc, line_idx, col_usize)
+        .or_else(|| fm_hover(&doc, line_idx, col_usize))
+        .or_else(|| psg_hover(&doc, line_idx, col_usize))
+        .or_else(|| track_hit(line_content, col_usize))
+        .or_else(|| hover_hit_line(line_content, col_usize))?;
+    Some(hit.into_info(line))
+}
 
-    if let Some(tok) = token_at(line_content, col_usize) {
-        if is_track_token(line_content, tok.start, tok.token) {
-            if let Some(doc) = docs::track_doc(tok.token) {
-                return Some(
-                    Hit {
-                        markdown: format_hover(docs::TRACK_HELP_LABEL, doc),
-                        start: tok.start,
-                        end: tok.end,
-                    }
-                    .into_info(line),
-                );
-            }
-        }
-    }
-
-    hover_hit_line(line_content, col_usize).map(|h| h.into_info(line))
+/// [`hover_at`] with the column and the returned range in UTF-16 code
+/// units, as LSP and Monaco count them.
+pub fn hover_at_utf16(text: &str, line: u32, character: u32) -> Option<HoverInfo> {
+    let doc = BorrowedLinesModel::from_text(text);
+    let line_text = doc.get_line_content(line.saturating_add(1));
+    let col = utf16_character_to_byte_offset(line_text, character);
+    let mut info = hover_at(text, line, col as u32)?;
+    info.start = byte_offset_to_utf16_character(line_text, info.start as usize);
+    info.end = byte_offset_to_utf16_character(line_text, info.end as usize);
+    Some(info)
 }
 
 /// Format `(label, body)` into the same markdown shape used by the web
@@ -98,6 +126,15 @@ pub fn format_hover(label: &str, doc: &str) -> String {
 // Single-line dispatch — ports `hoverHit` from web-ctrmml mml-hover.ts.
 // ---------------------------------------------------------------------------
 
+fn track_hit(line: &str, col: usize) -> Option<Hit> {
+    let (token, start, end) = whitespace_token_at(line, col)?;
+    if !is_track_token(start, token) {
+        return None;
+    }
+    let doc = docs::track_doc(token)?;
+    Some(Hit::new(docs::TRACK_HELP_LABEL, doc, start, end))
+}
+
 fn hover_hit_line(line: &str, col: usize) -> Option<Hit> {
     if line.is_empty() {
         return None;
@@ -106,25 +143,17 @@ fn hover_hit_line(line: &str, col: usize) -> Option<Hit> {
     // Platform command — cover the whole quoted form so `'mode 1'`,
     // `'lfo 0 5'` etc. show as a single hover region.
     if let Some((sq_start, sq_end)) = single_quote_bounds(line, col) {
-        if let Some((cmd_label, cmd_doc)) = platform_command_at_inner(line, sq_start, sq_end) {
-            return Some(Hit {
-                markdown: format_hover(cmd_label, cmd_doc),
-                start: sq_start,
-                end: sq_end + 1,
-            });
+        if let Some(entry) = platform_command_at_inner(line, sq_start, sq_end) {
+            return Some(Hit::entry(entry, sq_start, sq_end + 1));
         }
     }
 
-    let tok = token_at(line, col);
+    let tok = whitespace_token_at(line, col);
 
-    if let Some(tok) = tok.as_ref() {
-        if tok.token.starts_with('@') && is_at_meta_token(tok.token) {
-            if let Some((label, doc)) = at_meta_lookup(tok.token) {
-                return Some(Hit {
-                    markdown: format_hover(label, doc),
-                    start: tok.start,
-                    end: tok.end,
-                });
+    if let Some((token, start, end)) = tok {
+        if is_at_meta_token(token) {
+            if let Some(entry) = at_meta_entry(token) {
+                return Some(Hit::entry(entry, start, end));
             }
         }
     }
@@ -134,7 +163,7 @@ fn hover_hit_line(line: &str, col: usize) -> Option<Hit> {
         if dq_start + 1 < dq_end {
             let prefix = line.get(..dq_start)?.trim_end();
             let tokens: Vec<&str> = prefix.split_whitespace().collect();
-            if let Some(pos) = tokens.iter().rposition(|t| *t == "pcm") {
+            if let Some(pos) = tokens.iter().rposition(|t| t.eq_ignore_ascii_case("pcm")) {
                 if pos > 0 && is_at_number(tokens[pos - 1]) {
                     let path = &line[dq_start + 1..dq_end];
                     if !path.is_empty() {
@@ -162,73 +191,46 @@ fn hover_hit_line(line: &str, col: usize) -> Option<Hit> {
         let on_key_sig_open =
             symbol == '{' && col > 0 && line.as_bytes().get(col - 1) == Some(&b'_');
         if "[]()|/{}><".contains(symbol) && !in_key_sig && !on_key_sig_open {
-            let key = symbol.to_string();
-            if let Some(doc) = docs::command_doc(&key) {
-                let label = docs::command_completion_label(&key).unwrap_or(&key);
-                return Some(Hit {
-                    markdown: format_hover(label, doc),
-                    start: col,
-                    end: col + 1,
-                });
+            if let Some(hit) = command_hit(&symbol.to_string(), col, col + 1) {
+                return Some(hit);
             }
         }
     }
 
-    let tok = tok?;
-    let TokenSpan { token, start, end } = tok;
+    let (token, start, end) = tok?;
 
-    if is_track_token(line, start, token) {
+    if is_track_token(start, token) {
         if let Some(doc) = docs::track_doc(token) {
-            return Some(Hit {
-                markdown: format_hover(docs::TRACK_HELP_LABEL, doc),
-                start,
-                end,
-            });
+            return Some(Hit::new(docs::TRACK_HELP_LABEL, doc, start, end));
         }
     }
 
     // `#platform <value>` etc. — value-context hover.
     if let Some((_, meta_end, meta_keyword)) = meta_keyword_bounds(line) {
         if col >= meta_end && start >= meta_end {
-            let doc = match meta_keyword {
-                "#platform" => docs::platform_value_doc(token),
-                "#option" => docs::option_value_doc(token),
-                "#timesig" => docs::timesig_value_doc(token),
-                "#group" => docs::group_value_doc(token),
+            let table = match meta_keyword {
+                "#platform" => Some(docs::PLATFORM_VALUES),
+                "#option" => Some(docs::OPTION_VALUES),
+                "#timesig" => Some(docs::TIMESIG_VALUES),
+                "#group" => Some(docs::GROUP_VALUES),
                 _ => None,
             };
-            if let Some(doc) = doc {
-                return Some(Hit {
-                    markdown: format_hover(token, doc),
-                    start,
-                    end,
-                });
-            }
-            return None;
+            let entry = table.and_then(|table| documented(table, token))?;
+            return Some(Hit::new(token, entry.doc, start, end));
         }
     }
 
     if token.starts_with('#') {
-        if let Some(doc) = docs::meta_doc(token) {
-            return Some(Hit {
-                markdown: format_hover(token, doc),
-                start,
-                end,
-            });
-        }
-        return None;
+        let doc = docs::meta_doc(token)?;
+        return Some(Hit::new(token, doc, start, end));
     }
 
     let offset = col.saturating_sub(start).min(token.len().saturating_sub(1));
 
     // `@meta` embedded inside a larger token (e.g. `cde@2fg`).
     if token.contains('@') {
-        if let Some((label, doc, at_pos, at_end)) = at_meta_in_token(token, offset) {
-            return Some(Hit {
-                markdown: format_hover(label, doc),
-                start: start + at_pos,
-                end: start + at_end,
-            });
+        if let Some((entry, at_pos, at_end)) = at_meta_in_token(token, offset) {
+            return Some(Hit::entry(entry, start + at_pos, start + at_end));
         }
     }
 
@@ -238,63 +240,33 @@ fn hover_hit_line(line: &str, col: usize) -> Option<Hit> {
         let next_char = line.as_bytes().get(col + 1).copied().map(|b| b as char);
         let is_eq = next_char == Some('=');
         let key = if is_eq { "\\=" } else { "\\" };
-        if let Some(doc) = docs::command_doc(key) {
-            let label = docs::command_completion_label(key).unwrap_or(key);
-            return Some(Hit {
-                markdown: format_hover(label, doc),
-                start: col,
-                end: col + if is_eq { 2 } else { 1 },
-            });
+        if let Some(hit) = command_hit(key, col, col + if is_eq { 2 } else { 1 }) {
+            return Some(hit);
         }
     }
     if current_char == Some('=') {
-        if col > 0 && line.as_bytes()[col - 1] == b'\\' {
-            if let Some(doc) = docs::command_doc("\\=") {
-                let label = docs::command_completion_label("\\=").unwrap_or("\\=");
-                return Some(Hit {
-                    markdown: format_hover(label, doc),
-                    start: col - 1,
-                    end: col + 1,
-                });
-            }
-        } else if let Some(doc) = docs::command_doc("=") {
-            let label = docs::command_completion_label("=").unwrap_or("=");
-            return Some(Hit {
-                markdown: format_hover(label, doc),
-                start: col,
-                end: col + 1,
-            });
+        let hit = if col > 0 && line.as_bytes()[col - 1] == b'\\' {
+            command_hit("\\=", col - 1, col + 1)
+        } else {
+            command_hit("=", col, col + 1)
+        };
+        if hit.is_some() {
+            return hit;
         }
     }
 
     // Instrument type keyword (`fm`, `psg`, `pcm`, `2op`).
-    if let Some(doc) = docs::instrument_doc(token) {
-        return Some(Hit {
-            markdown: format_hover(token, doc),
-            start,
-            end,
-        });
+    if let Some(entry) = documented(docs::INSTRUMENT_TYPES, token) {
+        return Some(Hit::new(token, entry.doc, start, end));
     }
 
     // `rate=` / `offset=` PCM params.
-    if let Some((label, doc)) = rate_offset_in_token(token) {
-        return Some(Hit {
-            markdown: format_hover(label, doc),
-            start,
-            end,
-        });
+    if let Some(entry) = rate_offset_in_token(token) {
+        return Some(Hit::entry(entry, start, end));
     }
 
     // Regular MML command at the cursor offset.
-    if let Some(cmd) = command_at(token, offset) {
-        return Some(Hit {
-            markdown: format_hover(cmd.label, cmd.doc),
-            start: start + cmd.start,
-            end: start + cmd.end,
-        });
-    }
-
-    None
+    command_at(token, offset, start)
 }
 
 // ---------------------------------------------------------------------------
@@ -303,14 +275,9 @@ fn hover_hit_line(line: &str, col: usize) -> Option<Hit> {
 
 const COMMAND_CHARS: &str = "olQqCRLstTvVpkKMGDr^&";
 
-struct CommandHit {
-    label: &'static str,
-    doc: &'static str,
-    start: usize,
-    end: usize,
-}
-
-fn command_at(token: &str, offset: usize) -> Option<CommandHit> {
+/// The command under `offset` within `token`, whose first byte sits at
+/// `base` on the line.
+fn command_at(token: &str, offset: usize, base: usize) -> Option<Hit> {
     let bytes = token.as_bytes();
     let mut idx = 0;
     while idx < bytes.len() {
@@ -341,36 +308,11 @@ fn command_at(token: &str, offset: usize) -> Option<CommandHit> {
             }
 
             if offset >= start && offset < end {
-                if let Some(acc_idx) = accidental_index {
-                    if offset == acc_idx {
-                        let acc_key: &'static str = match token.as_bytes()[acc_idx] {
-                            b'+' => "+",
-                            b'-' => "-",
-                            b'=' => "=",
-                            _ => return None,
-                        };
-                        if let Some(doc) = docs::command_doc(acc_key) {
-                            let label = docs::command_completion_label(acc_key).unwrap_or(acc_key);
-                            return Some(CommandHit {
-                                label,
-                                doc,
-                                start: acc_idx,
-                                end: acc_idx + 1,
-                            });
-                        }
-                        return None;
-                    }
+                if accidental_index == Some(offset) {
+                    let acc_key = &token[offset..offset + 1];
+                    return command_hit(acc_key, base + offset, base + offset + 1);
                 }
-                if let Some(doc) = docs::command_doc("notes") {
-                    let label = docs::command_completion_label("notes").unwrap_or("notes");
-                    return Some(CommandHit {
-                        label,
-                        doc,
-                        start,
-                        end,
-                    });
-                }
-                return None;
+                return command_hit("notes", base + start, base + end);
             }
             idx = end;
             continue;
@@ -406,16 +348,7 @@ fn command_at(token: &str, offset: usize) -> Option<CommandHit> {
             }
 
             if offset >= start && offset < end {
-                if let Some(doc) = docs::command_doc(key) {
-                    let label = docs::command_completion_label(key).unwrap_or(key);
-                    return Some(CommandHit {
-                        label,
-                        doc,
-                        start,
-                        end,
-                    });
-                }
-                return None;
+                return command_hit(key, base + start, base + end);
             }
             idx = end;
             continue;
@@ -452,16 +385,7 @@ fn command_at(token: &str, offset: usize) -> Option<CommandHit> {
             }
 
             if offset >= start && offset < end {
-                if let Some(doc) = docs::command_doc(key) {
-                    let label = docs::command_completion_label(key).unwrap_or(key);
-                    return Some(CommandHit {
-                        label,
-                        doc,
-                        start,
-                        end,
-                    });
-                }
-                return None;
+                return command_hit(key, base + start, base + end);
             }
             idx = end;
             continue;
@@ -482,15 +406,8 @@ fn command_at(token: &str, offset: usize) -> Option<CommandHit> {
 
             if offset >= start && offset < end {
                 let key = &token[start..start + 1];
-                if let Some((label, doc)) = docs::command_entry(key, signed) {
-                    return Some(CommandHit {
-                        label,
-                        doc,
-                        start,
-                        end,
-                    });
-                }
-                return None;
+                let (label, doc) = docs::command_entry(key, signed)?;
+                return Some(Hit::new(label, doc, base + start, base + end));
             }
             idx = end;
             continue;
@@ -504,72 +421,6 @@ fn command_at(token: &str, offset: usize) -> Option<CommandHit> {
 // ---------------------------------------------------------------------------
 // Text helpers
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy)]
-struct TokenSpan<'a> {
-    token: &'a str,
-    start: usize,
-    end: usize,
-}
-
-fn token_at(line: &str, col: usize) -> Option<TokenSpan<'_>> {
-    if col > line.len() {
-        return None;
-    }
-    let bytes = line.as_bytes();
-    let mut start = col;
-    while start > 0 && !is_ws(bytes[start - 1]) {
-        start -= 1;
-    }
-    let mut end = col;
-    while end < line.len() && !is_ws(bytes[end]) {
-        end += 1;
-    }
-    if start >= end {
-        return None;
-    }
-    Some(TokenSpan {
-        token: &line[start..end],
-        start,
-        end,
-    })
-}
-
-fn is_ws(byte: u8) -> bool {
-    matches!(byte, b' ' | b'\t' | b'\r' | b'\n' | 0x0b | 0x0c)
-}
-
-fn single_quote_bounds(line: &str, col: usize) -> Option<(usize, usize)> {
-    quote_bounds(line, col, b'\'')
-}
-
-fn double_quote_bounds(line: &str, col: usize) -> Option<(usize, usize)> {
-    quote_bounds(line, col, b'"')
-}
-
-fn quote_bounds(line: &str, col: usize, quote: u8) -> Option<(usize, usize)> {
-    let bytes = line.as_bytes();
-    let mut last: Option<usize> = None;
-    for (i, &b) in bytes.iter().enumerate() {
-        if b == quote {
-            match last {
-                Some(open) => {
-                    if col >= open && col <= i {
-                        return Some((open, i));
-                    }
-                    last = None;
-                }
-                None => last = Some(i),
-            }
-        }
-    }
-    None
-}
-
-fn is_at_number(token: &str) -> bool {
-    let bytes = token.as_bytes();
-    bytes.first() == Some(&b'@') && bytes.len() > 1 && bytes[1..].iter().all(|b| b.is_ascii_digit())
-}
 
 fn is_at_meta_token(token: &str) -> bool {
     // Matches `@<digits>`, `@E<digits>`, `@M<digits>`, `@P<digits>`.
@@ -587,39 +438,27 @@ fn is_at_meta_token(token: &str) -> bool {
     bytes[idx..].iter().all(|b| b.is_ascii_digit())
 }
 
-fn at_meta_lookup(token: &str) -> Option<(&'static str, &'static str)> {
-    let label = if token.starts_with("@E") {
-        "@E<num>"
-    } else if token.starts_with("@M") {
-        "@M<num>"
-    } else if token.starts_with("@P") {
-        "@P<num>"
-    } else {
-        "@<num>"
-    };
-    docs::at_meta_doc(label).map(|doc| (label, doc))
+fn at_meta_label(after_at: &str) -> &'static str {
+    match after_at.as_bytes().first() {
+        Some(b'E') => "@E<num>",
+        Some(b'M') => "@M<num>",
+        Some(b'P') => "@P<num>",
+        _ => "@<num>",
+    }
 }
 
-fn at_meta_in_token(
-    token: &str,
-    offset: usize,
-) -> Option<(&'static str, &'static str, usize, usize)> {
+fn at_meta_entry(token: &str) -> Option<&'static DocEntry> {
+    let label = at_meta_label(&token[1..]);
+    docs::find_entry_by_label(docs::AT_META, label).filter(|entry| !entry.doc.is_empty())
+}
+
+fn at_meta_in_token(token: &str, offset: usize) -> Option<(&'static DocEntry, usize, usize)> {
     let prefix = token.get(..=offset)?;
     let at_pos = prefix.rfind('@')?;
     let rest = &token[at_pos..];
 
-    let mut idx = 1;
-    let label = if rest.len() > 1 && matches!(&rest[1..2], "E" | "M" | "P") {
-        idx = 2;
-        match &rest[1..2] {
-            "E" => "@E<num>",
-            "M" => "@M<num>",
-            "P" => "@P<num>",
-            _ => unreachable!(),
-        }
-    } else {
-        "@<num>"
-    };
+    let label = at_meta_label(&rest[1..]);
+    let mut idx = if label == "@<num>" { 1 } else { 2 };
     let bytes = rest.as_bytes();
     let digit_start = idx;
     while idx < bytes.len() && (bytes[idx] as char).is_ascii_digit() {
@@ -630,43 +469,33 @@ fn at_meta_in_token(
     }
     let at_end = at_pos + idx;
     if offset >= at_pos && offset < at_end {
-        let doc = docs::at_meta_doc(label)?;
-        return Some((label, doc, at_pos, at_end));
+        let entry = at_meta_entry(rest)?;
+        return Some((entry, at_pos, at_end));
     }
     None
 }
 
-fn rate_offset_in_token(token: &str) -> Option<(&'static str, &'static str)> {
-    if token.starts_with("rate=") {
-        let label = docs::rate_offset_label("rate=").unwrap_or("rate=");
-        return docs::rate_offset_doc("rate=").map(|doc| (label, doc));
-    }
-    if token.starts_with("offset=") {
-        let label = docs::rate_offset_label("offset=").unwrap_or("offset=");
-        return docs::rate_offset_doc("offset=").map(|doc| (label, doc));
-    }
-    None
+fn rate_offset_in_token(token: &str) -> Option<&'static DocEntry> {
+    ["rate=", "offset="]
+        .into_iter()
+        .find(|key| token.starts_with(key))
+        .and_then(|key| documented(docs::RATE_OFFSET, key))
 }
 
 fn platform_command_at_inner(
     line: &str,
     sq_start: usize,
     sq_end: usize,
-) -> Option<(&'static str, &'static str)> {
+) -> Option<&'static DocEntry> {
     if sq_start + 1 >= sq_end {
         return None;
     }
     let inner = line.get(sq_start + 1..sq_end)?.trim_start();
     let cmd = inner.split_whitespace().next()?;
-    let doc = docs::platform_command_doc(cmd)?;
-    // Resolve to the canonical `'static` label from the docs table. Any
-    // command that has a `doc` always has a `label`, so the unwrap is safe;
-    // we use `?` to keep the type discipline tight without panicking.
-    let label = docs::platform_command_label(cmd)?;
-    Some((label, doc))
+    documented(docs::PLATFORM_COMMANDS, cmd)
 }
 
-fn is_track_token(_line: &str, start: usize, token: &str) -> bool {
+fn is_track_token(start: usize, token: &str) -> bool {
     // `*N` is a macro/subroutine reference and is valid anywhere on a line.
     if let Some(rest) = token.strip_prefix('*') {
         if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()) {
@@ -742,27 +571,6 @@ fn number_index_at(numbers: &[NumberSpan], col: usize) -> Option<usize> {
     None
 }
 
-fn is_definition_line(line: &str, keyword: &str) -> bool {
-    let trimmed = line.trim_start();
-    if !trimmed.starts_with('@') {
-        return false;
-    }
-    let bytes = trimmed.as_bytes();
-    let mut idx = 1;
-    while idx < bytes.len() && (bytes[idx] as char).is_ascii_digit() {
-        idx += 1;
-    }
-    if idx == 1 {
-        return false;
-    }
-    let rest = trimmed[idx..].trim_start();
-    if !rest.starts_with(keyword) {
-        return false;
-    }
-    let after = &rest[keyword.len()..];
-    after.is_empty() || after.starts_with(|c: char| c.is_whitespace()) || after.starts_with(';')
-}
-
 fn is_numeric_param_line(line: &str, parse_end: usize) -> bool {
     let slice = &line[..parse_end.min(line.len())];
     for ch in slice.chars() {
@@ -783,100 +591,55 @@ fn strip_at_number(line: &str, numbers: Vec<NumberSpan>) -> Vec<NumberSpan> {
     numbers
 }
 
-fn strip_two_op_numbers(line: &str, numbers: Vec<NumberSpan>, parse_end: usize) -> Vec<NumberSpan> {
-    let mut filtered = strip_at_number(line, numbers);
-    if let Some(pos) = line[..parse_end.min(line.len())].find("2op") {
-        filtered.retain(|n| n.start < pos || n.start >= pos + 3);
-    }
-    filtered
+fn line_at<'a>(doc: &'a BorrowedLinesModel, line_idx: usize) -> &'a str {
+    doc.get_line_content(line_idx as u32 + 1)
 }
 
-/// Scan upward from `line_idx` for an `@N <keyword>` anchor. Handles both
-/// single-line (`@1 fm`) and multi-line headers (`@1` alone, `fm` on the
-/// next non-blank line).
-fn find_instrument_anchor(text: &str, line_idx: usize, keyword: &str) -> Option<usize> {
-    let lines: Vec<&str> = text.lines().collect();
+/// The `@N <keyword>` header written on the single line `line_idx`.
+fn definition_header<'a>(
+    doc: &'a BorrowedLinesModel,
+    line_idx: usize,
+    keyword: &str,
+) -> Option<InstrumentHeader<'a>> {
+    let line_number = line_idx as u32 + 1;
+    instrument_header_at(doc, line_number)
+        .filter(|header| header.keyword_line == line_number && header.is(keyword))
+}
+
+/// The header whose `keyword` stands alone on `line_idx`, below a bare `@N`.
+fn keyword_line_header<'a>(
+    doc: &'a BorrowedLinesModel,
+    line_idx: usize,
+    keyword: &str,
+) -> Option<InstrumentHeader<'a>> {
+    instrument_header_for_keyword_line(doc, line_idx as u32 + 1).filter(|header| header.is(keyword))
+}
+
+/// Scan upward from `line_idx` for the `@N` line of a `<keyword>` header.
+fn find_instrument_anchor(
+    doc: &BorrowedLinesModel,
+    line_idx: usize,
+    keyword: &str,
+) -> Option<usize> {
     for idx in (0..=line_idx).rev() {
-        let line = *lines.get(idx)?;
+        let line = line_at(doc, idx);
         let trimmed = line.trim_start();
         if trimmed.starts_with('@') {
-            if is_definition_line(line, keyword) {
-                return Some(idx);
-            }
-            if is_bare_at_number(trimmed) {
-                let lookahead = (idx + 1).min(idx + 3);
-                for j in (idx + 1)..=lookahead.min(lines.len().saturating_sub(1)) {
-                    let next = lines.get(j)?.trim();
-                    if next.is_empty() || next.starts_with(';') {
-                        continue;
-                    }
-                    if let Some(after) = next.strip_prefix(keyword) {
-                        if after.is_empty()
-                            || after.starts_with(|c: char| c.is_whitespace() || c == ';')
-                        {
-                            return Some(idx);
-                        }
-                    }
-                    break;
-                }
-            }
-            return None;
+            return instrument_header_at(doc, idx as u32 + 1)
+                .filter(|header| header.is(keyword))
+                .map(|_| idx);
         }
-        if trimmed.starts_with('#') {
-            return None;
-        }
-        if parse_leading_track_selector(line).is_some() {
+        if trimmed.starts_with('#') || parse_leading_track_selector(line).is_some() {
             return None;
         }
     }
     None
 }
 
-fn is_bare_at_number(trimmed: &str) -> bool {
-    if !trimmed.starts_with('@') {
-        return false;
-    }
-    let bytes = trimmed.as_bytes();
-    let mut idx = 1;
-    while idx < bytes.len() && (bytes[idx] as char).is_ascii_digit() {
-        idx += 1;
-    }
-    if idx == 1 {
-        return false;
-    }
-    let rest = trimmed[idx..].trim_start();
-    rest.is_empty() || rest.starts_with(';')
-}
-
-fn is_multiline_keyword_line(text: &str, line_idx: usize, keyword: &str) -> bool {
-    let lines: Vec<&str> = text.lines().collect();
-    let Some(line) = lines.get(line_idx) else {
-        return false;
-    };
-    let trimmed = line.trim_start();
-    if !trimmed.starts_with(keyword) {
-        return false;
-    }
-    let after = &trimmed[keyword.len()..];
-    if !after.is_empty() && !after.starts_with(|c: char| c.is_whitespace() || c == ';') {
-        return false;
-    }
-    let lower_bound = line_idx.saturating_sub(3);
-    for j in (lower_bound..line_idx).rev() {
-        let prev = lines.get(j).map(|l| l.trim()).unwrap_or("");
-        if prev.is_empty() || prev.starts_with(';') {
-            continue;
-        }
-        return is_bare_at_number(prev);
-    }
-    false
-}
-
-fn fm_operator_index(text: &str, anchor: usize, line_idx: usize) -> Option<usize> {
-    let lines: Vec<&str> = text.lines().collect();
+fn fm_operator_index(doc: &BorrowedLinesModel, anchor: usize, line_idx: usize) -> Option<usize> {
     let mut count = 0usize;
     for idx in (anchor + 1)..=line_idx {
-        let line = *lines.get(idx)?;
+        let line = line_at(doc, idx);
         let trimmed = line.trim_start();
         if trimmed.starts_with('@') {
             break;
@@ -899,15 +662,15 @@ fn fm_operator_index(text: &str, anchor: usize, line_idx: usize) -> Option<usize
 
 const FM_10_KEYS: [&str; 10] = ["AR", "DR", "SR", "RR", "SL", "TL", "KS", "ML", "DT", "SSG"];
 
-fn fm_hover(text: &str, line_idx: usize, col: usize) -> Option<Hit> {
-    let line = nth_line(text, line_idx)?;
+fn fm_hover(doc: &BorrowedLinesModel, line_idx: usize, col: usize) -> Option<Hit> {
+    let line = line_at(doc, line_idx);
     let trimmed = line.trim_start();
     if trimmed.is_empty() || trimmed.starts_with(';') {
         return None;
     }
 
-    let is_anchor = is_definition_line(line, "fm");
-    let is_ml_keyword = !is_anchor && is_multiline_keyword_line(text, line_idx, "fm");
+    let is_anchor = definition_header(doc, line_idx, "fm").is_some();
+    let is_ml_keyword = !is_anchor && keyword_line_header(doc, line_idx, "fm").is_some();
     if trimmed.starts_with('@') && !is_anchor {
         return None;
     }
@@ -928,19 +691,15 @@ fn fm_hover(text: &str, line_idx: usize, col: usize) -> Option<Hit> {
             return None;
         }
         let key = if idx == 0 { "ALG" } else { "FB" };
-        let (label, doc) = docs::fm_param_doc(key)?;
+        let entry = docs::find_entry(docs::FM_PARAM_DOCS, key)?;
         let n = numbers[idx];
-        return Some(Hit {
-            markdown: format_hover(label, doc),
-            start: n.start,
-            end: n.end,
-        });
+        return Some(Hit::entry(entry, n.start, n.end));
     }
 
     if !is_numeric_param_line(line, parse_end) {
         return None;
     }
-    let anchor = find_instrument_anchor(text, line_idx.saturating_sub(1), "fm")?;
+    let anchor = find_instrument_anchor(doc, line_idx.saturating_sub(1), "fm")?;
     if line_idx <= anchor {
         return None;
     }
@@ -953,7 +712,7 @@ fn fm_hover(text: &str, line_idx: usize, col: usize) -> Option<Hit> {
         2 => (vec!["ALG", "FB"], None),
         10 => (
             FM_10_KEYS.to_vec(),
-            fm_operator_index(text, anchor, line_idx),
+            fm_operator_index(doc, anchor, line_idx),
         ),
         1 => (vec!["TRS"], None),
         _ => return None,
@@ -961,36 +720,34 @@ fn fm_hover(text: &str, line_idx: usize, col: usize) -> Option<Hit> {
 
     let idx = number_index_at(&numbers, col)?;
     let key = *param_keys.get(idx)?;
-    let (label, doc) = docs::fm_param_doc(key)?;
+    let entry = docs::find_entry(docs::FM_PARAM_DOCS, key)?;
     let n = numbers[idx];
-    let final_label = if let Some(op) = op_index {
-        format!("OP{} {}", op, label)
-    } else {
-        label.to_string()
+    let label = match op_index {
+        Some(op) => format!("OP{} {}", op, entry.label),
+        None => entry.label.to_string(),
     };
-    Some(Hit {
-        markdown: format_hover(&final_label, doc),
-        start: n.start,
-        end: n.end,
-    })
+    Some(Hit::new(&label, entry.doc, n.start, n.end))
 }
 
-fn two_op_hover(text: &str, line_idx: usize, col: usize) -> Option<Hit> {
-    let line = nth_line(text, line_idx)?;
+fn two_op_hover(doc: &BorrowedLinesModel, line_idx: usize, col: usize) -> Option<Hit> {
+    let line = line_at(doc, line_idx);
     let trimmed = line.trim_start();
     if trimmed.is_empty() || trimmed.starts_with(';') {
         return None;
     }
-    if !is_definition_line(line, "2op") && !is_multiline_keyword_line(text, line_idx, "2op") {
-        return None;
-    }
+    let header = definition_header(doc, line_idx, "2op")
+        .or_else(|| keyword_line_header(doc, line_idx, "2op"))?;
 
     let parse_end = line.find(';').unwrap_or(line.len());
     if col >= parse_end {
         return None;
     }
 
-    let numbers = strip_two_op_numbers(line, parse_numbers(line, parse_end), parse_end);
+    // `2op` itself reads as a number; drop it along with the `@N` digits.
+    let numbers: Vec<NumberSpan> = strip_at_number(line, parse_numbers(line, parse_end))
+        .into_iter()
+        .filter(|n| n.start < header.keyword_start || n.start >= header.keyword_end())
+        .collect();
     if numbers.len() < 6 {
         return None;
     }
@@ -998,17 +755,13 @@ fn two_op_hover(text: &str, line_idx: usize, col: usize) -> Option<Hit> {
     if idx >= 6 {
         return None;
     }
-    let (label, doc) = docs::two_op_param_doc(idx)?;
+    let entry = docs::TWO_OP_PARAM_DOCS.get(idx)?;
     let n = numbers[idx];
-    Some(Hit {
-        markdown: format_hover(label, doc),
-        start: n.start,
-        end: n.end,
-    })
+    Some(Hit::entry(entry, n.start, n.end))
 }
 
-fn psg_hover(text: &str, line_idx: usize, col: usize) -> Option<Hit> {
-    let line = nth_line(text, line_idx)?;
+fn psg_hover(doc: &BorrowedLinesModel, line_idx: usize, col: usize) -> Option<Hit> {
+    let line = line_at(doc, line_idx);
     let trimmed = line.trim_start();
     if trimmed.is_empty() || trimmed.starts_with(';') {
         return None;
@@ -1018,22 +771,17 @@ fn psg_hover(text: &str, line_idx: usize, col: usize) -> Option<Hit> {
     let mut data_start_col: usize = 0;
 
     if trimmed.starts_with('@') {
-        if !is_definition_line(line, "psg") {
-            return None;
-        }
+        let header = definition_header(doc, line_idx, "psg")?;
         in_psg_block = true;
-        let line_offset = line.len() - trimmed.len();
-        let psg_idx = trimmed.find("psg").unwrap_or(0);
-        data_start_col = line_offset + psg_idx + 3;
-    } else if is_multiline_keyword_line(text, line_idx, "psg") {
+        data_start_col = header.keyword_end();
+    } else if let Some(header) = keyword_line_header(doc, line_idx, "psg") {
         in_psg_block = true;
-        let line_offset = line.len() - trimmed.len();
-        data_start_col = line_offset + 3;
+        data_start_col = header.keyword_end();
     } else {
         if parse_leading_track_selector(line).is_some() {
             return None;
         }
-        if find_instrument_anchor(text, line_idx.saturating_sub(1), "psg").is_some() {
+        if find_instrument_anchor(doc, line_idx.saturating_sub(1), "psg").is_some() {
             in_psg_block = true;
         }
     }
@@ -1046,44 +794,40 @@ fn psg_hover(text: &str, line_idx: usize, col: usize) -> Option<Hit> {
         return None;
     }
 
-    let tok = token_at(line, col)?;
-    let mk = |label: &str, body: &str| Hit {
-        markdown: format_hover(label, body),
-        start: tok.start,
-        end: tok.end,
-    };
+    let (token, start, end) = whitespace_token_at(line, col)?;
+    let mk = |label: &str, body: &str| Hit::new(label, body, start, end);
 
-    if tok.token == "|" {
+    if token == "|" {
         return Some(mk(
             "PSG envelope loop position",
             "Set the loop point inside this PSG envelope. Playback jumps back here when the envelope reaches the end.",
         ));
     }
-    if tok.token == "/" {
+    if token == "/" {
         return Some(mk(
             "PSG envelope sustain position",
             "Set the sustain point inside this PSG envelope. Sustain keeps the envelope around this point while the note is held.",
         ));
     }
-    if is_l_colon_number(tok.token) {
+    if is_l_colon_number(token) {
         return Some(mk(
             "PSG envelope default step length",
             "Set the default length in frames for the following PSG envelope values on this definition line.",
         ));
     }
-    if is_slide_token(tok.token) {
+    if is_slide_token(token) {
         return Some(mk(
             "PSG envelope slide",
             "Slide from one PSG volume value to another. `value>target:length` slides over the given number of frames.",
         ));
     }
-    if is_hold_token(tok.token) {
+    if is_hold_token(token) {
         return Some(mk(
             "PSG envelope hold",
             "Keep this PSG volume value for the specified number of frames.",
         ));
     }
-    if tok.token.chars().all(|c| c.is_ascii_digit()) && !tok.token.is_empty() {
+    if token.chars().all(|c| c.is_ascii_digit()) && !token.is_empty() {
         return Some(mk(
             "PSG envelope volume",
             "PSG instruments are sequences of volume values. `15` is loudest, `0` is silence. Use `>` for slides, `:` for frame length, `|` for loop, and `/` for sustain.",
@@ -1151,10 +895,6 @@ fn is_hold_token(token: &str) -> bool {
         idx += 1;
     }
     idx == bytes.len() && idx > rest_start
-}
-
-fn nth_line(text: &str, idx: usize) -> Option<&str> {
-    text.lines().nth(idx)
 }
 
 #[cfg(test)]
@@ -1267,6 +1007,34 @@ mod tests {
     fn repeat_block_open_bracket() {
         let info = hover_at("[cdefg]2", 0, 0).unwrap();
         assert!(info.markdown.starts_with("`[ ]`"));
+    }
+
+    #[test]
+    fn fm_parameters_resolve_under_a_multi_line_header() {
+        let text = "@1\n; comment\nfm\n  0 5\n";
+        let info = hover_at(text, 3, 2).expect("ALG hover");
+        assert!(info.markdown.starts_with("`Algorithm"), "{}", info.markdown);
+    }
+
+    #[test]
+    fn fm_parameters_resolve_under_an_upper_case_header() {
+        let info = hover_at("@1 FM\n  0 5\n", 1, 4).expect("FB hover");
+        assert!(info.markdown.starts_with("`Feedback"), "{}", info.markdown);
+    }
+
+    #[test]
+    fn psg_data_starts_after_an_upper_case_keyword() {
+        let info = hover_at("@2 PSG 15\n", 0, 7).expect("PSG volume hover");
+        assert!(info.markdown.starts_with("`PSG envelope volume`"));
+        assert_eq!(span(&info), (7, 9));
+    }
+
+    #[test]
+    fn utf16_hover_counts_columns_after_japanese_text() {
+        // `あ` is one UTF-16 unit and three bytes.
+        let info = hover_at_utf16("A 'あ' @1 c", 0, 7).expect("hover on @1");
+        assert_eq!(span(&info), (6, 8));
+        assert!(info.markdown.starts_with("`@<num>`"));
     }
 
     #[test]

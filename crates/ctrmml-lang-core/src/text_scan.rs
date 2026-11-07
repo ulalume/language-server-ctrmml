@@ -49,6 +49,84 @@ pub fn is_in_comment(line: &str, col: usize) -> bool {
     false
 }
 
+/// [`is_in_comment`], [`is_in_string`] and [`is_in_key_sig`] for every
+/// column of one line, computed in one pass over it.
+pub(crate) struct LineContext {
+    /// First `;` outside quotes.
+    comment_start: Option<usize>,
+    /// Per byte: inside or on a quote.
+    string: Vec<bool>,
+    /// Per byte `i`: [`is_in_key_sig`] for `col = i + 1`.
+    key_sig: Vec<bool>,
+}
+
+impl LineContext {
+    pub(crate) fn new(line: &str) -> Self {
+        let bytes = line.as_bytes();
+
+        let mut comment_start = None;
+        let (mut in_double, mut in_single) = (false, false);
+        for (i, &ch) in bytes.iter().enumerate() {
+            match ch {
+                b'"' if !in_single => in_double = !in_double,
+                b'\'' if !in_double => in_single = !in_single,
+                b';' if !in_double && !in_single => {
+                    comment_start = Some(i);
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        let mut string = vec![false; bytes.len()];
+        let (mut in_double, mut in_single) = (false, false);
+        for (i, &ch) in bytes.iter().enumerate() {
+            match ch {
+                b'"' if !in_single => {
+                    in_double = !in_double;
+                    string[i] = true;
+                }
+                b'\'' if !in_double => {
+                    in_single = !in_single;
+                    string[i] = true;
+                }
+                b';' if !in_double && !in_single => break,
+                _ => string[i] = in_double || in_single,
+            }
+        }
+
+        let mut key_sig = vec![false; bytes.len()];
+        for i in 1..bytes.len() {
+            key_sig[i] = match bytes[i] {
+                b'}' => false,
+                b'{' if bytes[i - 1] == b'_' => true,
+                _ => key_sig[i - 1],
+            };
+        }
+
+        Self {
+            comment_start,
+            string,
+            key_sig,
+        }
+    }
+
+    pub(crate) fn in_comment(&self, col: usize) -> bool {
+        self.comment_start.is_some_and(|start| start < col)
+    }
+
+    pub(crate) fn in_string(&self, col: usize) -> bool {
+        self.string.get(col).copied().unwrap_or(false)
+    }
+
+    pub(crate) fn in_key_sig(&self, col: usize) -> bool {
+        if col == 0 || self.key_sig.is_empty() {
+            return false;
+        }
+        self.key_sig[(col - 1).min(self.key_sig.len() - 1)]
+    }
+}
+
 /// Largest char boundary `<= idx` in `s` (clamped to `s.len()`). Keeps
 /// `&s[..idx]` / `&s[idx..]` slicing panic-safe when a caller hands us a
 /// byte offset that lands inside a multi-byte codepoint — e.g. a UTF-16
@@ -107,17 +185,9 @@ pub fn is_in_string(line: &str, col: usize) -> bool {
 }
 
 /// Returns the token touching column `col` on `line`, along with its
-/// `[start, end)` byte-offset span. Ported verbatim from the root LSP
-/// crate's `mml::token_at` (formerly `src/mml/mod.rs`) — walks left from
-/// a whitespace-adjusted `col` to the nearest non-whitespace byte, then
-/// expands to the full run of [`is_token_char`] bytes around it. `^` and
-/// `&` are always treated as single-character tokens (tie/slur
-/// commands), regardless of their neighbors.
-///
-/// Note: this is a distinct implementation from the private,
-/// whitespace-delimited `token_at` in `hover.rs` — the two were not
-/// unified when this helper was absorbed into core; see that module for
-/// details.
+/// `[start, end)` byte-offset span: the cursor walks left over whitespace
+/// to the nearest byte, then the run of [`is_token_char`] bytes around it.
+/// `^` and `&` are always single-character tokens (tie/slur commands).
 pub fn token_at(line: &str, col: usize) -> Option<(&str, usize, usize)> {
     let bytes = line.as_bytes();
     if bytes.is_empty() {
@@ -178,84 +248,70 @@ pub fn tokenize_outside_double_quotes(input: &str) -> Vec<String> {
     tokens
 }
 
+/// Returns the whitespace-delimited run containing column `col`, with its
+/// `[start, end)` byte span.
+pub(crate) fn whitespace_token_at(line: &str, col: usize) -> Option<(&str, usize, usize)> {
+    if col > line.len() {
+        return None;
+    }
+    let bytes = line.as_bytes();
+    let mut start = col;
+    while start > 0 && !is_ws(bytes[start - 1]) {
+        start -= 1;
+    }
+    let mut end = col;
+    while end < line.len() && !is_ws(bytes[end]) {
+        end += 1;
+    }
+    if start >= end {
+        return None;
+    }
+    Some((&line[start..end], start, end))
+}
+
+/// Whitespace as JavaScript's `\s` sees it within ASCII.
+pub(crate) fn is_ws(byte: u8) -> bool {
+    matches!(byte, b' ' | b'\t' | b'\r' | b'\n' | 0x0b | 0x0c)
+}
+
 /// Returns `true` when `token` is an `@<digits>` instrument reference
-/// (e.g. `@12`). Ported verbatim from the root LSP crate's
-/// `mml::is_at_number`.
-///
-/// Note: `hover.rs` has its own private, differently-implemented
-/// `is_at_number` (byte-slice based rather than `Chars`-based); the two
-/// were not unified when this helper was absorbed into core.
+/// (e.g. `@12`).
 pub fn is_at_number(token: &str) -> bool {
-    let mut chars = token.chars();
-    if chars.next() != Some('@') {
-        return false;
-    }
-    let rest: String = chars.collect();
-    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+    token
+        .strip_prefix('@')
+        .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
 }
 
-/// Returns the `(left, right)` byte offsets of the `'...'` run enclosing
+/// Returns the `(left, right)` byte offsets of the `'...'` pair enclosing
 /// `col`, if any — both offsets point at the quote bytes themselves.
-/// Ported verbatim from the root LSP crate's `mml::single_quote_bounds`.
-///
-/// Note: `hover.rs` has its own private, differently-implemented
-/// `single_quote_bounds`; the two were not unified when this helper was
-/// absorbed into core.
+/// Quotes pair up from the start of the line.
 pub fn single_quote_bounds(line: &str, col: usize) -> Option<(usize, usize)> {
-    let bytes = line.as_bytes();
-    let mut left = col.min(line.len().saturating_sub(1));
-    while left > 0 && bytes[left] != b'\'' {
-        left = left.saturating_sub(1);
-    }
-    if bytes[left] != b'\'' {
-        return None;
-    }
-
-    let mut right = col.min(line.len().saturating_sub(1));
-    while right < line.len() && bytes[right] != b'\'' {
-        right += 1;
-    }
-    if right >= line.len() || bytes[right] != b'\'' {
-        return None;
-    }
-    if left >= right {
-        return None;
-    }
-    Some((left, right))
+    quote_bounds(line, col, b'\'')
 }
 
-/// Returns the `(left, right)` byte offsets of the `"..."` run enclosing
+/// Returns the `(left, right)` byte offsets of the `"..."` pair enclosing
 /// `col`, if any — both offsets point at the quote bytes themselves.
-/// Ported verbatim from the root LSP crate's `mml::double_quote_bounds`.
-///
-/// Note: `hover.rs` has its own private, differently-implemented
-/// `double_quote_bounds`; the two were not unified when this helper was
-/// absorbed into core.
+/// Quotes pair up from the start of the line.
 pub fn double_quote_bounds(line: &str, col: usize) -> Option<(usize, usize)> {
-    let bytes = line.as_bytes();
-    let mut left = col.min(line.len().saturating_sub(1));
-    while left > 0 && bytes[left] != b'"' {
-        left = left.saturating_sub(1);
-    }
-    if bytes[left] != b'"' {
-        return None;
-    }
-
-    let mut right = col.min(line.len().saturating_sub(1));
-    while right < line.len() && bytes[right] != b'"' {
-        right += 1;
-    }
-    if right >= line.len() || bytes[right] != b'"' {
-        return None;
-    }
-    if left >= right {
-        return None;
-    }
-    Some((left, right))
+    quote_bounds(line, col, b'"')
 }
 
-/// Byte classifier backing [`token_at`]'s run expansion. Ported verbatim
-/// from the root LSP crate's `mml` module.
+fn quote_bounds(line: &str, col: usize, quote: u8) -> Option<(usize, usize)> {
+    let mut open: Option<usize> = None;
+    for (i, &byte) in line.as_bytes().iter().enumerate() {
+        if byte != quote {
+            continue;
+        }
+        match open.take() {
+            Some(left) if (left..=i).contains(&col) => return Some((left, i)),
+            Some(_) => {}
+            None => open = Some(i),
+        }
+    }
+    None
+}
+
+/// Byte classifier backing [`token_at`]'s run expansion.
 fn is_token_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || matches!(ch, '#' | '@' | '_' | '=' | '*' | '-' | '+' | '{' | '}')
 }
@@ -500,11 +556,44 @@ mod tests {
         assert!(is_in_comment(line, 7));
     }
 
+    // ---------- LineContext -------------------------------------------------
+
+    #[test]
+    fn line_context_matches_the_per_column_scans() {
+        for line in [
+            "",
+            "A c ; d",
+            "A _{+c} cd _{-b} e",
+            "_{+c no close",
+            "'fm3 0011' c \"a;b\" ; 'x' _{c}",
+            "\"a 'b ; c\" ; real",
+            "'; still string' x",
+            "'tl1 -2''tl3 -2' c",
+            "A あ 'モード' ; コメント _{",
+            "}{_{}",
+        ] {
+            let context = LineContext::new(line);
+            for col in 0..line.len() + 3 {
+                assert_eq!(
+                    context.in_comment(col),
+                    is_in_comment(line, col),
+                    "{line:?} {col}"
+                );
+                assert_eq!(
+                    context.in_string(col),
+                    is_in_string(line, col),
+                    "{line:?} {col}"
+                );
+                assert_eq!(
+                    context.in_key_sig(col),
+                    is_in_key_sig(line, col),
+                    "{line:?} {col}"
+                );
+            }
+        }
+    }
+
     // ---------- token_at ----------------------------------------------------
-    //
-    // Ported from the root LSP crate's `mml::token_at`. Distinct from the
-    // private, whitespace-delimited `token_at` in `hover.rs` — see the
-    // doc comment on `token_at` above.
 
     #[test]
     fn token_at_expands_over_special_token_chars() {
@@ -568,10 +657,6 @@ mod tests {
     }
 
     // ---------- is_at_number -------------------------------------------------
-    //
-    // Ported from the root LSP crate's `mml::is_at_number`. Distinct from
-    // the private `is_at_number` in `hover.rs` — see the doc comment on
-    // `is_at_number` above.
 
     #[test]
     fn is_at_number_accepts_at_followed_by_digits() {
@@ -587,11 +672,6 @@ mod tests {
     }
 
     // ---------- single_quote_bounds / double_quote_bounds --------------------
-    //
-    // Ported from the root LSP crate's `mml::single_quote_bounds` /
-    // `mml::double_quote_bounds`. Distinct from the private, differently
-    // implemented `single_quote_bounds` / `double_quote_bounds` in
-    // `hover.rs` — see the doc comments above.
 
     #[test]
     fn single_quote_bounds_finds_enclosing_run() {
@@ -603,6 +683,25 @@ mod tests {
     fn single_quote_bounds_none_outside_any_run() {
         let line = "a 'bc' d";
         assert_eq!(single_quote_bounds(line, 0), None);
+    }
+
+    #[test]
+    fn single_quote_bounds_pairs_quotes_from_the_line_start() {
+        let line = "'a' x 'b'";
+        assert_eq!(single_quote_bounds(line, 4), None);
+        assert_eq!(single_quote_bounds(line, 1), Some((0, 2)));
+        assert_eq!(single_quote_bounds(line, 7), Some((6, 8)));
+        assert_eq!(single_quote_bounds("'open", 2), None);
+    }
+
+    #[test]
+    fn whitespace_token_spans_the_run_around_the_cursor() {
+        assert_eq!(
+            whitespace_token_at("A cde@2fg r", 4),
+            Some(("cde@2fg", 2, 9))
+        );
+        assert_eq!(whitespace_token_at("A  c", 2), None);
+        assert_eq!(whitespace_token_at("A", 5), None);
     }
 
     #[test]

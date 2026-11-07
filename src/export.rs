@@ -1,6 +1,6 @@
 use crate::backend::Backend;
 use crate::ctrmml_cmd::{output_message, run_ctrmml_cmd};
-use crate::utils::{read_file_text, uri_to_path};
+use crate::utils::uri_to_path;
 
 pub(crate) enum ExportFormat {
     Vgm,
@@ -21,12 +21,8 @@ impl Backend {
 
         let cmd_path = self.command_path().await?;
         let text = self
-            .docs
-            .read()
+            .document_text(&uri)
             .await
-            .get(&uri)
-            .cloned()
-            .or_else(|| read_file_text(&uri))
             .ok_or_else(|| "failed to read mml text".to_string())?;
         let output = run_ctrmml_cmd(&cmd_path, "export", Some(&text), |cmd| {
             cmd.arg("export")

@@ -5,6 +5,8 @@
 
 mod types;
 
+use std::collections::{HashMap, HashSet};
+
 pub use types::{
     ArpeggioPattern, ChordStackMode, CompletionPlan, CompletionSettings, CoreCommand,
     CoreCompletionList, CoreItem, CoreItemKind, CoreTextEdit, CursorTickData, DataPayload,
@@ -27,6 +29,7 @@ use crate::docs::{
     META_KEYWORDS_TRIGGER_SUGGEST, OPTION_VALUES, PLATFORM_COMMANDS, PLATFORM_VALUES, RATE_OFFSET,
     TIMESIG_VALUES,
 };
+use crate::instrument_header::{parse_at_number, strip_keyword};
 use crate::key_sig::scan_key_sig_at;
 use crate::octave_scan::scan_channel_context_at;
 use crate::string_model::BorrowedLinesModel;
@@ -412,7 +415,9 @@ struct PcmPathContext {
 
 fn pcm_path_context(prefix: &str) -> Option<PcmPathContext> {
     if prefix.bytes().filter(|byte| *byte == b'"').count() % 2 == 0
-        || !prefix.split_whitespace().any(|token| token == "pcm")
+        || !prefix
+            .split_whitespace()
+            .any(|token| token.eq_ignore_ascii_case("pcm"))
     {
         return None;
     }
@@ -528,20 +533,8 @@ struct FmPatchContext {
 }
 
 fn fm_patch_context(prefix: &str, hierarchy: bool) -> Option<FmPatchContext> {
-    let trimmed = prefix.trim_start();
-    let leading = prefix.len() - trimmed.len();
-    let after_at = trimmed.strip_prefix('@')?;
-    let digits = after_at.bytes().take_while(u8::is_ascii_digit).count();
-    if digits == 0 {
-        return None;
-    }
-    let after_digits = &after_at[digits..];
-    if !after_digits.chars().next().is_some_and(char::is_whitespace) {
-        return None;
-    }
-    let before_fm = after_digits.len() - after_digits.trim_start().len();
-    let fm_and_after = &after_digits[before_fm..];
-    let after_fm = fm_and_after.strip_prefix("fm")?;
+    let keyword_start = instrument_keyword_start(prefix)?;
+    let after_fm = strip_keyword(&prefix[keyword_start..], "fm")?;
     if after_fm
         .chars()
         .next()
@@ -557,26 +550,14 @@ fn fm_patch_context(prefix: &str, hierarchy: bool) -> Option<FmPatchContext> {
         })
         .flatten();
     Some(FmPatchContext {
-        fm_end: leading + 1 + digits + before_fm + 2,
+        fm_end: keyword_start + 2,
         fragment,
     })
 }
 
 fn pcm_instrument_context(prefix: &str) -> Option<usize> {
-    let trimmed = prefix.trim_start();
-    let leading = prefix.len() - trimmed.len();
-    let after_at = trimmed.strip_prefix('@')?;
-    let digits = after_at.bytes().take_while(u8::is_ascii_digit).count();
-    if digits == 0 {
-        return None;
-    }
-    let after_digits = &after_at[digits..];
-    if !after_digits.chars().next().is_some_and(char::is_whitespace) {
-        return None;
-    }
-    let before_pcm = after_digits.len() - after_digits.trim_start().len();
-    let pcm_and_after = &after_digits[before_pcm..];
-    let after_pcm = pcm_and_after.strip_prefix("pcm")?;
+    let keyword_start = instrument_keyword_start(prefix)?;
+    let after_pcm = strip_keyword(&prefix[keyword_start..], "pcm")?;
     if after_pcm
         .chars()
         .next()
@@ -584,7 +565,17 @@ fn pcm_instrument_context(prefix: &str) -> Option<usize> {
     {
         return None;
     }
-    Some(leading + 1 + digits + before_pcm + 3)
+    Some(keyword_start + 3)
+}
+
+/// Byte offset of the type keyword after a leading `@N` and whitespace.
+fn instrument_keyword_start(prefix: &str) -> Option<usize> {
+    let (_, after_number) = parse_at_number(prefix)?;
+    let after_digits = &prefix[after_number..];
+    if !after_digits.chars().next().is_some_and(char::is_whitespace) {
+        return None;
+    }
+    Some(prefix.len() - after_digits.trim_start().len())
 }
 
 fn resolve_pcm_paths(text: &str, pos: Pos, paths: Vec<String>) -> CoreCompletionList {
@@ -610,18 +601,11 @@ fn resolve_pcm_paths(text: &str, pos: Pos, paths: Vec<String>) -> CoreCompletion
             character: byte_offset_to_utf16_character(line, cursor),
         },
     );
-    let mut seen = Vec::new();
+    let mut seen = HashSet::new();
     let items = paths
         .into_iter()
         .filter(|path| path.starts_with(&context.path_prefix))
-        .filter(|path| {
-            if seen.contains(path) {
-                false
-            } else {
-                seen.push(path.clone());
-                true
-            }
-        })
+        .filter(|path| seen.insert(path.clone()))
         .map(|path| CoreItem {
             label: path.clone(),
             label_description: None,
@@ -656,17 +640,10 @@ fn resolve_pcm_instruments(text: &str, pos: Pos, paths: Vec<String>) -> CoreComp
         return CoreCompletionList::empty();
     };
     let range = end_of_line_range(line, pos.line, start);
-    let mut seen = Vec::new();
+    let mut seen = HashSet::new();
     let mut items: Vec<CoreItem> = paths
         .into_iter()
-        .filter(|path| {
-            if seen.contains(path) {
-                false
-            } else {
-                seen.push(path.clone());
-                true
-            }
-        })
+        .filter(|path| seen.insert(path.clone()))
         .map(|path| CoreItem {
             label: path.clone(),
             label_description: None,
@@ -745,7 +722,7 @@ fn resolve_fm_patches(
         .iter()
         .filter(|patch| !patch.rel_path.is_empty() && !patch.mml.trim().is_empty())
         .collect();
-    let mut patch_counts = std::collections::HashMap::new();
+    let mut patch_counts = HashMap::new();
     for patch in &patches {
         *patch_counts
             .entry(patch.rel_path.as_str())
@@ -776,7 +753,7 @@ fn resolve_fm_patches(
 
 fn render_fm_flat_items(
     patches: &[&FmPatchData],
-    patch_counts: &std::collections::HashMap<&str, usize>,
+    patch_counts: &HashMap<&str, usize>,
     range: EditRange,
     additional_edits: &[CoreTextEdit],
 ) -> Vec<CoreItem> {
@@ -834,22 +811,15 @@ fn render_fm_flat_item(
 
 fn render_fm_file_items(
     patches: &[&FmPatchData],
-    patch_counts: &std::collections::HashMap<&str, usize>,
+    patch_counts: &HashMap<&str, usize>,
     range: EditRange,
     additional_edits: &[CoreTextEdit],
 ) -> Vec<CoreItem> {
-    let mut rel_paths = Vec::new();
+    let mut rel_paths = HashSet::new();
     patches
         .iter()
         .copied()
-        .filter(|patch| {
-            if rel_paths.contains(&patch.rel_path.as_str()) {
-                false
-            } else {
-                rel_paths.push(patch.rel_path.as_str());
-                true
-            }
-        })
+        .filter(|patch| rel_paths.insert(patch.rel_path.as_str()))
         .filter_map(|patch| {
             let rel_path = patch.rel_path.as_str();
             let count = patch_counts.get(rel_path).copied().unwrap_or_default();
@@ -1139,15 +1109,10 @@ fn instrument_type_slot(line: &str, cursor: usize, line_index: u32) -> ProviderO
 }
 
 fn is_instrument_type_context(prefix: &str) -> bool {
-    let trimmed = prefix.trim_start();
-    let Some(after_at) = trimmed.strip_prefix('@') else {
+    let Some((_, after_number)) = parse_at_number(prefix) else {
         return false;
     };
-    let digits = after_at.bytes().take_while(u8::is_ascii_digit).count();
-    if digits == 0 {
-        return false;
-    }
-    let Some(after_space) = after_at[digits..].strip_prefix(' ') else {
+    let Some(after_space) = prefix[after_number..].strip_prefix(' ') else {
         return false;
     };
     let typed = after_space.trim_start();
@@ -1585,7 +1550,6 @@ fn arpeggio_slot(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn arpeggio_item(
     label: String,
     body: String,
@@ -1798,7 +1762,7 @@ mod tests {
         let patch = FmPatchData {
             rel_path: "inst/bass.dmp".to_string(),
             name: Some("Bass".to_string()),
-            mml: "@1 fm ; Bass\n; ALG  FB\n    4   7\n".to_string(),
+            mml: "@1 fm ; Bass\n; ALG  FB\n    4   7\n".into(),
             has_macros: false,
         };
         let flat = completion_resolve(
@@ -1837,7 +1801,7 @@ mod tests {
         let patch = FmPatchData {
             rel_path: "banks/kit.dmp".to_string(),
             name: Some("Kick".to_string()),
-            mml: "@1 fm ; Kick\n  4 7\n".to_string(),
+            mml: "@1 fm ; Kick\n  4 7\n".into(),
             has_macros: false,
         };
 
@@ -1865,7 +1829,7 @@ mod tests {
         let patch = FmPatchData {
             rel_path: "banks/kit.dmp".to_string(),
             name: Some("Kick".to_string()),
-            mml: "@1 fm ; Kick\n  4 7\n".to_string(),
+            mml: "@1 fm ; Kick\n  4 7\n".into(),
             has_macros: false,
         };
 
@@ -1893,7 +1857,7 @@ mod tests {
         let patch = |rel_path: &str, mml: &str| FmPatchData {
             rel_path: rel_path.to_string(),
             name: None,
-            mml: mml.to_string(),
+            mml: mml.into(),
             has_macros: false,
         };
         let list = completion_resolve(
@@ -1944,13 +1908,13 @@ mod tests {
                 FmPatchData {
                     rel_path: "banks/kit.dmp".to_string(),
                     name: Some("Kick".to_string()),
-                    mml: "@1 fm ; Kick\n  4 7\n".to_string(),
+                    mml: "@1 fm ; Kick\n  4 7\n".into(),
                     has_macros: false,
                 },
                 FmPatchData {
                     rel_path: "banks/kit.dmp".to_string(),
                     name: Some("Snare".to_string()),
-                    mml: "@1 fm ; Snare\n  3 2\n".to_string(),
+                    mml: "@1 fm ; Snare\n  3 2\n".into(),
                     has_macros: false,
                 },
             ]),
@@ -1983,19 +1947,19 @@ mod tests {
                 FmPatchData {
                     rel_path: "inst/bass.dmp".to_string(),
                     name: Some("Bass".to_string()),
-                    mml: "@1 fm ; Bass\n; ALG  FB\n    4   7\n".to_string(),
+                    mml: "@1 fm ; Bass\n; ALG  FB\n    4   7\n".into(),
                     has_macros: false,
                 },
                 FmPatchData {
                     rel_path: "inst/multi.dmp".to_string(),
                     name: Some("Pad".to_string()),
-                    mml: "@1 fm ; Pad\n; ALG  FB\n    2   0\n".to_string(),
+                    mml: "@1 fm ; Pad\n; ALG  FB\n    2   0\n".into(),
                     has_macros: false,
                 },
                 FmPatchData {
                     rel_path: "inst/multi.dmp".to_string(),
                     name: Some("Brass".to_string()),
-                    mml: "@1 fm ; Brass\n; ALG  FB\n    6   1\n".to_string(),
+                    mml: "@1 fm ; Brass\n; ALG  FB\n    6   1\n".into(),
                     has_macros: true,
                 },
             ]),
@@ -2269,7 +2233,8 @@ mod tests {
 
     #[test]
     fn meta_values_match_all_fixture_tables_and_live_word_range() {
-        let cases: [(&str, u32, &[(&str, &str)]); 4] = [
+        type Case<'a> = (&'a str, u32, &'a [(&'a str, &'a str)]);
+        let cases: [Case; 4] = [
             (
                 "#platform ",
                 10,

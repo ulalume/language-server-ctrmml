@@ -29,8 +29,9 @@ use serde::Serialize;
 
 use crate::brace_state::BraceState;
 use crate::key_sig::scan_key_sig_at;
+use crate::key_sig::KeySig;
 use crate::octave_scan::scan_brace_state_at;
-use crate::string_model::LinesModel;
+use crate::string_model::BorrowedLinesModel;
 use crate::text_scan::{is_in_comment, is_in_key_sig};
 use crate::track_selector::{
     find_enclosing_track_selector_at, parse_leading_track_selector, LineReader,
@@ -75,7 +76,7 @@ pub struct PreviewNoteHit {
 /// (comment, key-sig block, no enclosing track, non-note character,
 /// `+`/`-` not following a note, …).
 pub fn preview_note_at(text: &str, line: u32, col: u32, typed: char) -> Option<PreviewNoteHit> {
-    let model = LinesModel::from_text(text);
+    let model = BorrowedLinesModel::from_text(text);
     let line_one_based = line.saturating_add(1);
     let col_zero = col as usize;
 
@@ -95,9 +96,7 @@ pub fn preview_note_at(text: &str, line: u32, col: u32, typed: char) -> Option<P
     // octave shifts (`<` / `>`) or arithmetic that we don't preview.
     let pulse_col = col_zero;
     let (semitone_letter, accidental_override, pulse_start, pulse_end) = match typed_lower {
-        'c' | 'd' | 'e' | 'f' | 'g' | 'a' | 'b' | 'h' => {
-            (typed_lower, None, pulse_col as u32, pulse_col as u32 + 1)
-        }
+        'a'..='h' => (typed_lower, None, pulse_col as u32, pulse_col as u32 + 1),
         '+' | '-' => {
             // Look at the previous character on the line. If it's a
             // note letter, override that note's key-sig accidental.
@@ -106,7 +105,7 @@ pub fn preview_note_at(text: &str, line: u32, col: u32, typed: char) -> Option<P
             }
             let prev = line_text.as_bytes().get(col_zero - 1).copied()? as char;
             let prev_lower = prev.to_ascii_lowercase();
-            if !matches!(prev_lower, 'c' | 'd' | 'e' | 'f' | 'g' | 'a' | 'b' | 'h') {
+            if !matches!(prev_lower, 'a'..='h') {
                 return None;
             }
             let acc: i32 = if typed_lower == '+' { 1 } else { -1 };
@@ -131,7 +130,7 @@ pub fn preview_note_at(text: &str, line: u32, col: u32, typed: char) -> Option<P
         return None;
     }
 
-    let key_sig_accidental = context.key_sig_offset(semitone_letter) as i32;
+    let key_sig_accidental = context.key_sig_offset(semitone_letter);
     let effective_accidental = accidental_override.unwrap_or(key_sig_accidental);
     let octave = context.octave;
     let midi_signed = (octave - 1) * 12 + semitone + effective_accidental;
@@ -174,27 +173,17 @@ struct Context {
     octave: i32,
     noise_mode: u8,
     has_track: bool,
-    /// 12-entry key-sig offsets keyed by `c..b`.
-    key_sig_offsets: [i32; 7],
+    key_sig: KeySig,
 }
 
 impl Context {
     fn key_sig_offset(&self, letter: char) -> i32 {
-        let idx = match letter {
-            'c' => 0,
-            'd' => 1,
-            'e' => 2,
-            'f' => 3,
-            'g' => 4,
-            'a' => 5,
-            'b' | 'h' => 6,
-            _ => return 0,
-        };
-        self.key_sig_offsets[idx]
+        let letter = if letter == 'h' { 'b' } else { letter };
+        self.key_sig.get_or_zero(letter) as i32
     }
 }
 
-fn scan_context(model: &LinesModel, line: u32, col: u32) -> Context {
+fn scan_context(model: &dyn LineReader, line: u32, col: u32) -> Context {
     let mut tempo: i32 = -1;
     let mut length: i32 = -1;
     let mut quantize: i32 = -1;
@@ -254,10 +243,6 @@ fn scan_context(model: &LinesModel, line: u32, col: u32) -> Context {
     let octave = octaves.get(active).copied().unwrap_or(DEFAULT_OCTAVE);
 
     let key_sig = scan_key_sig_at(model, line, col);
-    let mut key_sig_offsets = [0i32; 7];
-    for (i, letter) in ['c', 'd', 'e', 'f', 'g', 'a', 'b'].iter().enumerate() {
-        key_sig_offsets[i] = key_sig.get_or_zero(*letter) as i32;
-    }
 
     Context {
         tempo: if tempo >= 0 {
@@ -287,7 +272,7 @@ fn scan_context(model: &LinesModel, line: u32, col: u32) -> Context {
             _ => 0,
         },
         has_track,
-        key_sig_offsets,
+        key_sig,
     }
 }
 
@@ -389,7 +374,6 @@ mod tests {
         let text = "A o5 c";
         let hit = preview_note_at(text, 0, 5, 'c').unwrap();
         assert_eq!(hit.midi, 48);
-        assert!(hit.has_track_ok());
     }
 
     #[test]
@@ -462,11 +446,5 @@ mod tests {
         // `+` on its own line — no preceding note letter to attach to.
         let text = "A +";
         assert!(preview_note_at(text, 0, 2, '+').is_none());
-    }
-
-    impl PreviewNoteHit {
-        fn has_track_ok(&self) -> bool {
-            self.midi > 0 || self.midi == 0
-        }
     }
 }

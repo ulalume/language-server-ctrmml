@@ -9,7 +9,7 @@
 
 use ctrmml_lang_core::{
     chord::chord_natural_semitones, find_enclosing_track_selector, find_fm_block_at,
-    find_psg_block_at, scan_brace_state_at, scan_key_sig_at, LinesModel,
+    find_psg_block_at, is_in_comment, scan_brace_state_at, scan_key_sig_at, BorrowedLinesModel,
 };
 
 const NOTE_NAMES_SHARP: [&str; 12] = [
@@ -80,11 +80,14 @@ pub(crate) fn note_hover_text(
     character: u32,
     line_content: &str,
 ) -> Option<(String, usize, usize)> {
+    if is_in_comment(line_content, character as usize) {
+        return None;
+    }
     let (letter, explicit_acc, start, end) = note_at(line_content, character as usize)?;
 
     let line = line_zero_based + 1;
     let col = character + 1;
-    let model = LinesModel::from_text(doc_text);
+    let model = BorrowedLinesModel::from_text(doc_text);
 
     // Suppress inside FM/PSG instrument blocks — bytes like `b` in
     // `1,0,12,7,0,28,b,0,5,0` aren't notes.
@@ -213,6 +216,13 @@ mod tests {
         let (md, _, _) = note_hover_text(doc, 0, 10, "A _{F} o4 b").unwrap();
         // (4-1)*12 + 11 + (-1) = 36 + 10 = 46.
         assert!(md.contains("MIDI **46**"), "missing midi 46 in {md:?}");
+    }
+
+    #[test]
+    fn hover_text_none_inside_a_comment() {
+        let line = "A o4 cdef ; a bridge";
+        assert!(note_hover_text(line, 0, 12, line).is_none());
+        assert!(note_hover_text(line, 0, 5, line).is_some());
     }
 
     #[test]

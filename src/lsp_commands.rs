@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use ctrmml_lang_core::{
+    track_selector::LineReader,
     transpose::{transpose_selection, Direction, Selection},
-    LinesModel,
+    utf16_character_to_byte_offset, BorrowedLinesModel,
 };
 use serde_json::{json, Value};
 use tower_lsp::lsp_types::{
@@ -136,30 +137,26 @@ pub(crate) fn transpose_code_action(
     doc_text: &str,
     direction: Direction,
 ) -> Option<CodeAction> {
-    let model = LinesModel::from_text(doc_text);
+    let model = BorrowedLinesModel::from_text(doc_text);
+    // Selection lines and columns are 1-based, columns in bytes.
+    let column = |position: Position| {
+        let line = model.get_line_content(position.line + 1);
+        utf16_character_to_byte_offset(line, position.character) as u32 + 1
+    };
     let sel = Selection {
-        // LSP Position is 0-based; ctrmml-lang-core Selection is 1-based.
         start_line_number: range.start.line + 1,
-        start_column: range.start.character + 1,
+        start_column: column(range.start),
         end_line_number: range.end.line + 1,
-        end_column: range.end.character + 1,
+        end_column: column(range.end),
     };
     let edit = transpose_selection(&model, sel, direction)?;
     let title = match direction {
         Direction::Up => "ctrmml: transpose up (semitone)",
         Direction::Down => "ctrmml: transpose down (semitone)",
     };
+    // The edit replaces exactly the selection.
     let text_edit = TextEdit {
-        range: Range {
-            start: Position {
-                line: edit.start_line_number - 1,
-                character: edit.start_column - 1,
-            },
-            end: Position {
-                line: edit.end_line_number - 1,
-                character: edit.end_column - 1,
-            },
-        },
+        range,
         new_text: edit.text,
     };
     let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
@@ -228,6 +225,25 @@ fn command_action(title: &str, command: &str, arguments: Vec<Value>) -> CodeActi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn transposed(text: &str, range: Range) -> Option<String> {
+        let uri = Url::parse("file:///song.mml").expect("uri");
+        let action = transpose_code_action(&uri, range, text, Direction::Up)?;
+        let mut changes = action.edit?.changes?;
+        let edit = changes.remove(&uri)?.pop()?;
+        assert_eq!(edit.range, range);
+        Some(edit.new_text)
+    }
+
+    #[test]
+    fn transpose_selection_counts_utf16_units() {
+        // `あ` is one UTF-16 unit and three bytes.
+        let range = Range {
+            start: Position::new(0, 9),
+            end: Position::new(0, 11),
+        };
+        assert_eq!(transposed("A 'あ' o4 cd\n", range).as_deref(), Some("c+d+"));
+    }
 
     #[test]
     fn patch_formats_stays_out_of_the_command_lists() {

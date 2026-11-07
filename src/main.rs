@@ -7,13 +7,13 @@ mod diagnostics;
 mod export;
 mod fill_measure;
 mod fm_completion;
+mod link;
 mod lsp;
 mod lsp_commands;
-mod mdslink;
 mod note_hover;
 mod playback;
-mod quickrom;
 mod utils;
+mod workspace_files;
 
 use serde_json::Value;
 use tower::Service;

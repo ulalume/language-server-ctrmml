@@ -19,6 +19,7 @@ pub mod code_lens;
 pub mod completion;
 pub mod docs;
 pub mod hover;
+pub mod instrument_header;
 pub mod instrument_preview;
 pub mod key_sig;
 pub mod octave_scan;
@@ -38,9 +39,7 @@ pub use arpeggio::{
 pub use beat_fill::{
     generate_measure_rests, is_after_bar_line, measure_remainder_ticks, ticks_to_mml_rest,
 };
-pub use block_finder::{
-    find_block_at, find_fm_block_at, find_psg_block_at, InstrumentBlock, InstrumentKind,
-};
+pub use block_finder::{find_block_at, find_fm_block_at, find_psg_block_at, InstrumentBlock};
 pub use brace_state::BraceState;
 pub use chord::{
     accidental_char, chord_natural_semitones, render_chord, render_generic_chord,
@@ -56,10 +55,12 @@ pub use completion::{
     CoreTextEdit, CursorTickData, DataPayload, DataRequest, EditRange, FmPatchData, InsertFormat,
     InsertSpec, Pos,
 };
-pub use hover::{hover_at, HoverInfo};
-pub use instrument_preview::{
-    build_preview_mml, extract_instrument_block, ExtractedBlock, InstrumentType,
+pub use hover::{hover_at, hover_at_utf16, HoverInfo};
+pub use instrument_header::{
+    instrument_header_at, instrument_header_for_keyword_line, parse_at_number, InstrumentHeader,
+    InstrumentType,
 };
+pub use instrument_preview::{build_preview_mml, extract_instrument_block, ExtractedBlock};
 pub use key_sig::{default_key_sig, parse_key_sig, scale_for_name, scan_key_sig_at, KeySig};
 pub use octave_scan::{scan_brace_state_at, scan_channel_context_at, ChannelContext};
 pub use preview_note::{preview_note_at, PreviewNoteHit};
@@ -67,7 +68,7 @@ pub use psg_parser::{
     compute_timeline, node_effective_length, node_start_frame, parse_psg_mml, serialize_psg_mml,
     total_duration, PsgEnvelope, PsgNode, TimePoint,
 };
-pub use string_model::LinesModel;
+pub use string_model::{BorrowedLinesModel, LinesModel};
 pub use text_scan::{
     double_quote_bounds, is_at_number, is_in_comment, is_in_key_sig, single_quote_bounds, token_at,
     tokenize_outside_double_quotes,

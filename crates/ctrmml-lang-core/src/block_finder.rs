@@ -1,11 +1,8 @@
 //! Instrument block finder — ported from
 //! `web-ctrmml/src/mml/block-finder.ts`.
 //!
-//! Locates `@N fm` or `@N psg` blocks at a cursor line. The TS version
-//! exposes a fully generic [`find_block_at`] (parameterized by header
-//! and stop matchers) plus FM- and PSG-specialized wrappers; this port
-//! mirrors that shape, using closures in place of TypeScript's
-//! `RegExp` arguments.
+//! Locates `@N fm`, `@N psg` or `@N pcm` blocks at a cursor line. Headers
+//! are parsed by [`crate::instrument_header`].
 //!
 //! Block layout the finder recognises:
 //!
@@ -24,6 +21,7 @@
 //! Block end is the line *before* any of: `@`/`#` header, leading track
 //! selector, or two consecutive blank lines.
 
+use crate::instrument_header::{instrument_header_at, InstrumentType};
 use crate::track_selector::{parse_leading_track_selector, LineReader};
 
 /// One instrument-block region.
@@ -37,103 +35,15 @@ pub struct InstrumentBlock {
     pub instrument_number: u32,
 }
 
-/// Which instrument category to look for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InstrumentKind {
-    Fm,
-    Psg,
-    Pcm,
-}
-
-/// Single-line header match: returns `Some(instrument_number)` when the
-/// **trimmed** `line` is an `@N kind` header for `kind`, otherwise
-/// `None`.
-///
-/// The TS regex is `/^@(\d+)\s+<kind>\b/i`. We implement that without
-/// pulling in the `regex` crate: strip the leading `@`, read digits,
-/// require whitespace, then read the keyword followed by a non-word
-/// boundary.
-fn match_header(line_trimmed: &str, kind: InstrumentKind) -> Option<u32> {
-    let rest = line_trimmed.strip_prefix('@')?;
-    let bytes = rest.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() && bytes[i].is_ascii_digit() {
-        i += 1;
-    }
-    if i == 0 {
-        return None;
-    }
-    let num: u32 = rest[..i].parse().ok()?;
-    // Require at least one whitespace separator.
-    let after_num = &rest[i..];
-    let trimmed_after = after_num.trim_start();
-    if trimmed_after.len() == after_num.len() {
-        return None;
-    }
-    let keyword: &[u8] = match kind {
-        InstrumentKind::Fm => b"fm",
-        InstrumentKind::Psg => b"psg",
-        InstrumentKind::Pcm => b"pcm",
-    };
-    let kbytes = trimmed_after.as_bytes();
-    if kbytes.len() < keyword.len() {
-        return None;
-    }
-    for (a, b) in kbytes[..keyword.len()].iter().zip(keyword.iter()) {
-        if a.to_ascii_lowercase() != *b {
-            return None;
-        }
-    }
-    // Word boundary: next char (if any) must not be alphanumeric or `_`.
-    if let Some(&next) = kbytes.get(keyword.len()) {
-        if next == b'_' || next.is_ascii_alphanumeric() {
-            return None;
-        }
-    }
-    Some(num)
-}
-
-/// Returns `true` when the trimmed line is a header of any of the kinds
-/// listed in `stop_kinds`. Used to detect when an instrument block ends
-/// because a header of a different category begins.
-fn matches_any_stop(line_trimmed: &str, stop_kinds: &[InstrumentKind]) -> bool {
-    stop_kinds
-        .iter()
-        .any(|k| match_header(line_trimmed, *k).is_some())
-}
-
-/// Returns `Some(n)` when the trimmed line is `@N` alone (optionally
-/// followed by a `;` comment), as in a multi-line header layout.
-fn match_bare_at_n(line_trimmed: &str) -> Option<u32> {
-    let rest = line_trimmed.strip_prefix('@')?;
-    let bytes = rest.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() && bytes[i].is_ascii_digit() {
-        i += 1;
-    }
-    if i == 0 {
-        return None;
-    }
-    let num: u32 = rest[..i].parse().ok()?;
-    let after = rest[i..].trim_start();
-    if after.is_empty() || after.starts_with(';') {
-        Some(num)
-    } else {
-        None
-    }
-}
-
-/// Find an instrument block of `kind` at `line_number` (1-based).
+/// Find an instrument block of type `target` at `line_number` (1-based).
 ///
 /// Scans upward to locate the header line, then downward to find the
 /// block's end. Returns `None` if the cursor is not inside a matching
-/// block, or if a `stop_kinds` header is encountered before finding the
-/// target.
+/// block or another header is met first.
 pub fn find_block_at(
     model: &dyn LineReader,
     line_number: u32,
-    target: InstrumentKind,
-    stop_kinds: &[InstrumentKind],
+    target: InstrumentType,
 ) -> Option<InstrumentBlock> {
     let total_lines = model.get_line_count();
 
@@ -143,52 +53,26 @@ pub fn find_block_at(
 
     let mut i = line_number;
     loop {
-        let raw = model.get_line_content(i);
-        let line = raw.trim();
-
-        // Single-line header.
-        if let Some(n) = match_header(line, target) {
+        if let Some(header) = instrument_header_at(model, i) {
+            if header.instrument_type() != Some(target) {
+                return None;
+            }
             header_line = i;
-            instrument_number = n;
+            instrument_number = header.number;
             break;
         }
 
-        // Multi-line header: `@N` alone, then keyword on a later non-blank
-        // non-comment line within three lines.
-        if let Some(n) = match_bare_at_n(line) {
-            let mut found = false;
-            let probe_end = (i + 3).min(total_lines);
-            for j in (i + 1)..=probe_end {
-                let next_trimmed = model.get_line_content(j).trim();
-                if next_trimmed.is_empty() || next_trimmed.starts_with(';') {
-                    continue;
-                }
-                let synthetic = format!("@{n} {next_trimmed}");
-                if let Some(syn_n) = match_header(&synthetic, target) {
-                    header_line = i;
-                    instrument_number = syn_n;
-                    found = true;
-                }
-                break;
-            }
-            if found {
-                break;
-            }
-            // `@N` for a different instrument category — stop.
-            return None;
-        }
-
-        // Hard stops: any `@` or `#` header, the stop-kind list, or a
-        // leading track selector marker.
+        // Hard stops: any other `@` or `#` line, or a leading track selector.
+        let raw = model.get_line_content(i);
+        let line = raw.trim();
         if line.starts_with('@')
             || line.starts_with('#')
-            || matches_any_stop(line, stop_kinds)
             || parse_leading_track_selector(raw).is_some()
         {
             return None;
         }
 
-        if i == 1 {
+        if i <= 1 {
             break;
         }
         i -= 1;
@@ -244,32 +128,17 @@ pub fn find_block_at(
 
 /// Find an FM instrument block (`@N fm`) at `line_number`.
 pub fn find_fm_block_at(model: &dyn LineReader, line_number: u32) -> Option<InstrumentBlock> {
-    find_block_at(
-        model,
-        line_number,
-        InstrumentKind::Fm,
-        &[InstrumentKind::Psg],
-    )
+    find_block_at(model, line_number, InstrumentType::Fm)
 }
 
 /// Find a PSG instrument block (`@N psg`) at `line_number`.
 pub fn find_psg_block_at(model: &dyn LineReader, line_number: u32) -> Option<InstrumentBlock> {
-    find_block_at(
-        model,
-        line_number,
-        InstrumentKind::Psg,
-        &[InstrumentKind::Fm, InstrumentKind::Pcm],
-    )
+    find_block_at(model, line_number, InstrumentType::Psg)
 }
 
 /// Find a PCM instrument block (`@N pcm`) at `line_number`.
 pub fn find_pcm_block_at(model: &dyn LineReader, line_number: u32) -> Option<InstrumentBlock> {
-    find_block_at(
-        model,
-        line_number,
-        InstrumentKind::Pcm,
-        &[InstrumentKind::Fm, InstrumentKind::Psg],
-    )
+    find_block_at(model, line_number, InstrumentType::Pcm)
 }
 
 #[cfg(test)]
@@ -277,55 +146,27 @@ mod tests {
     use super::*;
     use crate::string_model::LinesModel;
 
-    // ---- match_header --------------------------------------------------------
+    // ---- headers -------------------------------------------------------------
 
     #[test]
-    fn matches_inline_fm_header() {
-        assert_eq!(match_header("@5 fm", InstrumentKind::Fm), Some(5));
+    fn header_type_is_case_insensitive() {
+        let model = LinesModel::new(["@7 FM", "\t31,0,12,7,0,28,0,0,5,0"]);
+        assert_eq!(
+            find_fm_block_at(&model, 2).map(|b| b.instrument_number),
+            Some(7)
+        );
     }
 
     #[test]
-    fn matches_fm_with_trailing_data() {
-        assert_eq!(match_header("@5 fm 1 1 1 1", InstrumentKind::Fm), Some(5));
+    fn header_needs_whitespace_after_the_number() {
+        let model = LinesModel::new(["@5fm", "\t31,0,12,7,0,28,0,0,5,0"]);
+        assert!(find_fm_block_at(&model, 2).is_none());
     }
 
     #[test]
-    fn rejects_wrong_kind() {
-        assert!(match_header("@5 psg", InstrumentKind::Fm).is_none());
-    }
-
-    #[test]
-    fn rejects_word_boundary_violation() {
-        // `fmt` should not match `fm` (no word boundary).
-        assert!(match_header("@5 fmt", InstrumentKind::Fm).is_none());
-    }
-
-    #[test]
-    fn case_insensitive() {
-        assert_eq!(match_header("@7 FM", InstrumentKind::Fm), Some(7));
-        assert_eq!(match_header("@7 Psg", InstrumentKind::Psg), Some(7));
-    }
-
-    #[test]
-    fn rejects_missing_whitespace() {
-        assert!(match_header("@5fm", InstrumentKind::Fm).is_none());
-    }
-
-    // ---- match_bare_at_n -----------------------------------------------------
-
-    #[test]
-    fn bare_at_n_matches_with_trailing_comment() {
-        assert_eq!(match_bare_at_n("@12 ; lead patch"), Some(12));
-    }
-
-    #[test]
-    fn bare_at_n_matches_just_digits() {
-        assert_eq!(match_bare_at_n("@3"), Some(3));
-    }
-
-    #[test]
-    fn bare_at_n_rejects_with_keyword() {
-        assert!(match_bare_at_n("@3 fm").is_none());
+    fn header_keyword_needs_a_token_boundary() {
+        let model = LinesModel::new(["@5 fmt", "\t31,0,12,7,0,28,0,0,5,0"]);
+        assert!(find_fm_block_at(&model, 2).is_none());
     }
 
     // ---- find_fm_block_at / find_psg_block_at -------------------------------

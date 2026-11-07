@@ -2,36 +2,43 @@ use serde_json::Value;
 use tower_lsp::{
     jsonrpc::Result,
     lsp_types::{
-        CodeActionOrCommand, CodeActionParams, CodeActionProviderCapability, CodeLens,
+        CodeAction, CodeActionContext, CodeActionKind, CodeActionOptions, CodeActionOrCommand,
+        CodeActionParams, CodeActionProviderCapability, CodeActionTriggerKind, CodeLens,
         CodeLensOptions, CodeLensParams, Command, CompletionItem, CompletionItemKind,
         CompletionItemLabelDetails, CompletionList, CompletionOptions, CompletionParams,
-        CompletionResponse, CompletionTextEdit, DidSaveTextDocumentParams, Documentation,
-        ExecuteCommandOptions, ExecuteCommandParams, GotoDefinitionParams, GotoDefinitionResponse,
-        Hover, HoverContents, HoverParams, HoverProviderCapability, InitializeParams,
-        InitializeResult, InsertTextFormat, InsertTextMode, Location, MarkupContent, MarkupKind,
-        MessageActionItem, MessageType, OneOf, Position, Range, SaveOptions, ServerCapabilities,
-        TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
-        TextDocumentSyncSaveOptions, TextEdit,
+        CompletionResponse, CompletionTextEdit, DidChangeTextDocumentParams,
+        DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
+        Documentation, ExecuteCommandOptions, ExecuteCommandParams, GotoDefinitionParams,
+        GotoDefinitionResponse, Hover, HoverContents, HoverParams, HoverProviderCapability,
+        InitializeParams, InitializeResult, InsertTextFormat, InsertTextMode, Location,
+        MarkupContent, MarkupKind, MessageActionItem, MessageType, OneOf, Position, Range,
+        SaveOptions, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
+        TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit,
     },
     LanguageServer,
 };
 
-use crate::backend::Backend;
-use crate::completion::scan_pcm_paths;
+use std::time::Duration;
+
+use crate::backend::{Backend, Session};
+use crate::check::CHECK_DEBOUNCE;
 use crate::config::{
-    apply_completion_client_defaults, completion_settings_from_value, config_from_value, ClientKind,
+    apply_completion_client_defaults, completion_settings_from_value, config_from_value,
+    ClientKind, Config,
 };
+use crate::diagnostics::publish_check_diagnostics;
 use crate::export::ExportFormat;
-use crate::fill_measure::{fetch_cursor_tick, fill_measure_code_action};
+use crate::fill_measure::{
+    fetch_cursor_tick, fill_measure_action, fill_measure_edit, FillMeasureTarget,
+};
+use crate::link::{relative_path_display, LinkSource, LinkTool};
 use crate::lsp_commands::{
     code_actions, command_ids, transpose_code_action, CMD_EXPORT_VGM, CMD_EXPORT_WAV,
     CMD_MDSLINK_DIRECTORY, CMD_MDSLINK_FILE, CMD_MDSLINK_FROM_CONFIG, CMD_MDSLINK_MENU,
     CMD_PATCH_FORMATS, CMD_PLAY, CMD_PLAY_FROM_CURSOR, CMD_PREVIEW_PATCH, CMD_QUICKROM_DIRECTORY,
     CMD_QUICKROM_FILE, CMD_QUICKROM_FROM_CONFIG, CMD_QUICKROM_MENU, CMD_SAVE_PATCH, CMD_STOP,
 };
-use crate::mdslink::MdslinkRunResult;
 use crate::note_hover::note_hover_text;
-use crate::quickrom::QuickromRunResult;
 use crate::utils::{is_mml_uri, line_at};
 use ctrmml_lang_core::completion::{
     completion_plan, completion_resolve, CompletionPlan, CoreCommand, CoreCompletionList, CoreItem,
@@ -39,8 +46,9 @@ use ctrmml_lang_core::completion::{
 };
 use ctrmml_lang_core::transpose::Direction;
 use ctrmml_lang_core::{
-    build_preview_mml, code_lens_with_config, extract_instrument_block, hover_at, is_in_comment,
-    token_at, CodeLensConfig, IconStyle, InstrumentType,
+    build_preview_mml, byte_offset_to_utf16_character, code_lens_with_config,
+    extract_instrument_block, hover_at, instrument_header::strip_keyword, is_in_comment, token_at,
+    utf16_character_to_byte_offset, CodeLensConfig, ExtractedBlock, IconStyle, InstrumentType,
 };
 
 #[tower_lsp::async_trait]
@@ -48,7 +56,6 @@ impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         let client_kind =
             ClientKind::from_name(params.client_info.as_ref().map(|info| info.name.as_str()));
-        *self.client_kind.write().await = client_kind;
         let supports_completion_as_is = params
             .capabilities
             .text_document
@@ -57,7 +64,18 @@ impl LanguageServer for Backend {
             .and_then(|completion| completion.completion_item.as_ref())
             .and_then(|item| item.insert_text_mode_support.as_ref())
             .is_some_and(|support| support.value_set.contains(&InsertTextMode::AS_IS));
-        *self.supports_completion_as_is.write().await = supports_completion_as_is;
+        let supports_code_action_resolve = params
+            .capabilities
+            .text_document
+            .as_ref()
+            .and_then(|text_document| text_document.code_action.as_ref())
+            .is_some_and(|code_action| {
+                code_action.data_support == Some(true)
+                    && code_action
+                        .resolve_support
+                        .as_ref()
+                        .is_some_and(|support| support.properties.iter().any(|p| p == "edit"))
+            });
 
         let mut roots = Vec::new();
         if let Some(folders) = params.workspace_folders {
@@ -71,13 +89,13 @@ impl LanguageServer for Backend {
                 roots.push(path);
             }
         }
-        *self.roots.write().await = roots;
 
+        let mut config = Config::default();
         let mut completion_settings = Default::default();
         let mut hierarchy_explicit = false;
         if let Some(options) = params.initialization_options {
-            if let Some(config) = config_from_value(&options) {
-                *self.config.write().await = config;
+            if let Some(options_config) = config_from_value(&options) {
+                config = options_config;
             }
             (completion_settings, hierarchy_explicit) = completion_settings_from_value(&options);
         }
@@ -85,7 +103,14 @@ impl LanguageServer for Backend {
         // Compatibility until native extensions send completion settings:
         // client-name sniffing may fill only an omitted hierarchy flag.
         apply_completion_client_defaults(&mut completion_settings, hierarchy_explicit, client_kind);
-        *self.completion_settings.write().await = completion_settings;
+        self.start_session(Session {
+            client_kind,
+            roots,
+            config,
+            completion_settings,
+            supports_completion_as_is,
+            supports_code_action_resolve,
+        });
 
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
@@ -123,7 +148,14 @@ impl LanguageServer for Backend {
                     commands: command_ids(client_kind),
                     ..ExecuteCommandOptions::default()
                 }),
-                code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+                code_action_provider: Some(if supports_code_action_resolve {
+                    CodeActionProviderCapability::Options(CodeActionOptions {
+                        resolve_provider: Some(true),
+                        ..CodeActionOptions::default()
+                    })
+                } else {
+                    CodeActionProviderCapability::Simple(true)
+                }),
                 code_lens_provider: Some(CodeLensOptions {
                     resolve_provider: Some(false),
                 }),
@@ -133,15 +165,15 @@ impl LanguageServer for Backend {
         })
     }
 
-    async fn did_open(&self, params: tower_lsp::lsp_types::DidOpenTextDocumentParams) {
+    async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
         let text = params.text_document.text;
         self.docs.write().await.insert(uri.clone(), text);
         *self.last_doc.write().await = Some(uri.clone());
-        let _ = self.run_check(uri).await;
+        self.schedule_check(uri, Duration::ZERO);
     }
 
-    async fn did_change(&self, params: tower_lsp::lsp_types::DidChangeTextDocumentParams) {
+    async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
         let mut latest_text: Option<String> = None;
         if let Some(change) = params.content_changes.into_iter().last() {
@@ -158,12 +190,26 @@ impl LanguageServer for Backend {
         if let Some(text) = latest_text.as_ref() {
             self.push_playback_update(&uri, text).await;
         }
-        let _ = self.run_check(uri).await;
+        self.schedule_check(uri, CHECK_DEBOUNCE);
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        self.schedule_check(params.text_document.uri.to_string(), Duration::ZERO);
+    }
+
+    /// Forget the document and its check results. A playback started from
+    /// it keeps playing until stopped.
+    async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
-        let _ = self.run_check(uri).await;
+        self.docs.write().await.remove(&uri);
+        self.cancel_check(&uri);
+        {
+            let mut last_doc = self.last_doc.write().await;
+            if last_doc.as_deref() == Some(uri.as_str()) {
+                *last_doc = None;
+            }
+        }
+        publish_check_diagnostics(&self.client, &self.diagnostics, &uri, Vec::new()).await;
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
@@ -173,52 +219,35 @@ impl LanguageServer for Backend {
             .uri
             .to_string();
         let position = params.text_document_position_params.position;
-        let text = self
-            .docs
-            .read()
-            .await
-            .get(&uri)
-            .cloned()
-            .unwrap_or_default();
-        let line = line_at(&text, position.line).unwrap_or_default();
+        let docs = self.docs.read().await;
+        let Some(text) = docs.get(&uri) else {
+            return Ok(None);
+        };
+        let line = line_at(text, position.line);
+        let col = utf16_character_to_byte_offset(line, position.character);
 
         // Generic hover (commands, key sigs, platform commands, FM/2op/PSG
         // params, instrument definitions, …) lives in `ctrmml-lang-core` so
         // web-ctrmml, vscode-ctrmml, and zed-ctrmml all share the same
-        // behaviour. It already short-circuits on comments.
-        if let Some(info) = hover_at(&text, position.line, position.character) {
-            return Ok(Some(Hover {
-                contents: HoverContents::Markup(MarkupContent {
-                    kind: MarkupKind::Markdown,
-                    value: info.markdown,
-                }),
-                range: Some(Range {
-                    start: Position::new(info.line, info.start),
-                    end: Position::new(info.line, info.end),
-                }),
-            }));
-        }
-
-        // Last layer: note hover. Resolves the absolute MIDI pitch
-        // plus the ambient key-sig context for a note letter at the
-        // cursor. Suppressed inside FM/PSG blocks and outside any
-        // track selector.
-        if let Some((value, start, end)) =
-            note_hover_text(&text, position.line, position.character, &line)
-        {
-            return Ok(Some(Hover {
-                contents: HoverContents::Markup(MarkupContent {
-                    kind: MarkupKind::Markdown,
-                    value,
-                }),
-                range: Some(Range {
-                    start: Position::new(position.line, start as u32),
-                    end: Position::new(position.line, end as u32),
-                }),
-            }));
-        }
-
-        Ok(None)
+        // behaviour. It already short-circuits on comments. Note hover is
+        // the last layer.
+        let (value, start, end) = match hover_at(text, position.line, col as u32) {
+            Some(info) => (info.markdown, info.start as usize, info.end as usize),
+            None => match note_hover_text(text, position.line, col as u32, line) {
+                Some(found) => found,
+                None => return Ok(None),
+            },
+        };
+        Ok(Some(Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value,
+            }),
+            range: Some(Range {
+                start: Position::new(position.line, byte_offset_to_utf16_character(line, start)),
+                end: Position::new(position.line, byte_offset_to_utf16_character(line, end)),
+            }),
+        }))
     }
 
     async fn goto_definition(
@@ -234,41 +263,24 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
         let position = params.text_document_position_params.position;
-        let text = self
-            .docs
-            .read()
-            .await
-            .get(&uri)
-            .cloned()
-            .unwrap_or_default();
-        let line = line_at(&text, position.line).unwrap_or_default();
-        let col = position.character as usize;
-        if is_in_comment(&line, col) {
+        let docs = self.docs.read().await;
+        let Some(text) = docs.get(&uri) else {
+            return Ok(None);
+        };
+        let line = line_at(text, position.line);
+        let col = utf16_character_to_byte_offset(line, position.character);
+        if is_in_comment(line, col) {
             return Ok(None);
         }
-
-        let target = match definition_target_at(&line, col) {
-            Some(value) => value,
-            None => return Ok(None),
+        let Some(range) =
+            definition_target_at(line, col).and_then(|target| find_definition(text, &target))
+        else {
+            return Ok(None);
         };
-
-        let range = match target {
-            DefinitionTarget::Instrument(num) => find_instrument_definition(&text, &num),
-            DefinitionTarget::AtMeta { prefix, num } => {
-                find_prefixed_definition(&text, prefix, &num)
-            }
-            DefinitionTarget::Track(num) => find_track_definition(&text, &num),
-        };
-
-        if let Some(range) = range {
-            let location = Location {
-                uri: params.text_document_position_params.text_document.uri,
-                range,
-            };
-            return Ok(Some(GotoDefinitionResponse::Scalar(location)));
-        }
-
-        Ok(None)
+        Ok(Some(GotoDefinitionResponse::Scalar(Location {
+            uri: params.text_document_position_params.text_document.uri,
+            range,
+        })))
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -285,8 +297,7 @@ impl LanguageServer for Backend {
             .get(&uri)
             .cloned()
             .unwrap_or_default();
-        let roots = self.roots.read().await.clone();
-        let settings = self.completion_settings.read().await.clone();
+        let settings = self.session().completion_settings.clone();
         let pos = Pos {
             line: position.line,
             character: position.character,
@@ -300,10 +311,10 @@ impl LanguageServer for Backend {
             CompletionPlan::Done(list) => list,
             CompletionPlan::NeedsData(request) => {
                 let payload = match request {
-                    DataRequest::PcmPaths => DataPayload::PcmPaths(scan_pcm_paths(&uri, &roots)),
-                    DataRequest::PcmFiles => DataPayload::PcmFiles(scan_pcm_paths(&uri, &roots)),
+                    DataRequest::PcmPaths => DataPayload::PcmPaths(self.pcm_paths(&uri).await),
+                    DataRequest::PcmFiles => DataPayload::PcmFiles(self.pcm_paths(&uri).await),
                     DataRequest::FmPatches { .. } => {
-                        DataPayload::FmPatches(self.fetch_fm_patches(&uri, &roots).await)
+                        DataPayload::FmPatches(self.fetch_fm_patches(&uri).await)
                     }
                     DataRequest::CursorTick => {
                         let timing = match self.command_path().await {
@@ -325,7 +336,7 @@ impl LanguageServer for Backend {
                 completion_resolve(&text, pos, trigger, &settings, payload)
             }
         };
-        let supports_as_is = *self.supports_completion_as_is.read().await;
+        let supports_as_is = self.session().supports_completion_as_is;
         Ok(Some(core_completion_response(list, supports_as_is)))
     }
 
@@ -341,8 +352,7 @@ impl LanguageServer for Backend {
             .get(&uri)
             .cloned()
             .unwrap_or_default();
-        let client_kind = *self.client_kind.read().await;
-        let config = code_lens_config(client_kind);
+        let config = code_lens_config(self.session().client_kind);
         let mut out = Vec::new();
         for lens in code_lens_with_config(&text, config) {
             // The lens's anchor span is the entire line; clients are free
@@ -406,21 +416,23 @@ impl LanguageServer for Backend {
                     }
                 }
             }
-            // Fill-measure spawns a `ctrmml-cmd find-cursor-tick`
-            // subprocess to compute the cursor's playback tick;
-            // pre-checks inside the function gate that so the typical
-            // outside-track / inside-FM case skips the spawn.
-            if let Ok(cmd_path) = self.command_path().await {
-                if let Some(action) = fill_measure_code_action(
-                    &cmd_path,
-                    &params.text_document.uri,
-                    &text,
-                    params.range.start.line,
-                    params.range.start.character,
-                )
-                .await
-                {
+            // Fill-measure's edit needs a `ctrmml-cmd find-cursor-tick`
+            // run, so it is computed only when the client resolves the
+            // action or the user asked for actions explicitly.
+            if let Some(mut action) = fill_measure_action(&text, start.line, start.character) {
+                let target = FillMeasureTarget {
+                    uri: params.text_document.uri.clone(),
+                    line: start.line,
+                    character: start.character,
+                };
+                if self.session().supports_code_action_resolve {
+                    action.data = Some(target.into_data());
                     actions.push(action);
+                } else if is_explicit_request(&params.context) {
+                    action.edit = self.fill_measure_edit(&target, &text).await;
+                    if action.edit.is_some() {
+                        actions.push(action);
+                    }
                 }
             }
         }
@@ -433,363 +445,26 @@ impl LanguageServer for Backend {
         ))
     }
 
+    async fn code_action_resolve(&self, mut action: CodeAction) -> Result<CodeAction> {
+        let Some(target) = action.data.as_ref().and_then(FillMeasureTarget::from_data) else {
+            return Ok(action);
+        };
+        if let Some(text) = self.document_text(target.uri.as_str()).await {
+            action.edit = self.fill_measure_edit(&target, &text).await;
+        }
+        Ok(action)
+    }
+
     async fn execute_command(&self, params: ExecuteCommandParams) -> Result<Option<Value>> {
-        let args = params.arguments;
-        match params.command.as_str() {
-            CMD_PLAY => {
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                if let Err(err) = self.start_playback(uri, None).await {
-                    let _ = self.client.show_message(MessageType::ERROR, err).await;
-                }
-            }
-            CMD_PLAY_FROM_CURSOR => {
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                let line = args.get(1).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                let col = args.get(2).and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                if let Err(err) = self.start_playback(uri, Some((line, col))).await {
-                    let _ = self.client.show_message(MessageType::ERROR, err).await;
-                }
-            }
-            CMD_STOP => {
-                self.stop_playback().await;
-            }
-            CMD_EXPORT_VGM => {
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                match self.run_export(uri, ExportFormat::Vgm).await {
-                    Ok(path) => {
-                        let roots = self.roots.read().await.clone();
-                        let display = relative_path_display(&path, &roots);
-                        let _ = self
-                            .client
-                            .show_message(MessageType::INFO, format!("exported {display}"))
-                            .await;
-                    }
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                    }
-                }
-            }
-            CMD_EXPORT_WAV => {
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                match self.run_export(uri, ExportFormat::Wav).await {
-                    Ok(path) => {
-                        let roots = self.roots.read().await.clone();
-                        let display = relative_path_display(&path, &roots);
-                        let _ = self
-                            .client
-                            .show_message(MessageType::INFO, format!("exported {display}"))
-                            .await;
-                    }
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                    }
-                }
-            }
-            CMD_MDSLINK_FILE => {
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                run_mdslink_command(self, CMD_MDSLINK_FILE, uri).await;
-            }
-            CMD_MDSLINK_DIRECTORY => {
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                run_mdslink_command(self, CMD_MDSLINK_DIRECTORY, uri).await;
-            }
-            CMD_MDSLINK_FROM_CONFIG => {
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                run_mdslink_command(self, CMD_MDSLINK_FROM_CONFIG, uri).await;
-            }
-            CMD_MDSLINK_MENU => {
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                if let Some(command) = select_menu_command(
-                    self,
-                    "mdslink",
-                    &[
-                        ("mdslink file", CMD_MDSLINK_FILE),
-                        ("mdslink directory", CMD_MDSLINK_DIRECTORY),
-                        ("mdslink from mdslink.json", CMD_MDSLINK_FROM_CONFIG),
-                    ],
-                )
-                .await
-                {
-                    run_mdslink_command(self, command, uri).await;
-                }
-            }
-            CMD_QUICKROM_FILE => {
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                run_quickrom_command(self, CMD_QUICKROM_FILE, uri).await;
-            }
-            CMD_QUICKROM_DIRECTORY => {
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                run_quickrom_command(self, CMD_QUICKROM_DIRECTORY, uri).await;
-            }
-            CMD_QUICKROM_FROM_CONFIG => {
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                run_quickrom_command(self, CMD_QUICKROM_FROM_CONFIG, uri).await;
-            }
-            CMD_QUICKROM_MENU => {
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                if let Some(command) = select_menu_command(
-                    self,
-                    "quickrom",
-                    &[
-                        ("quickrom file", CMD_QUICKROM_FILE),
-                        ("quickrom directory", CMD_QUICKROM_DIRECTORY),
-                        ("quickrom from quickrom.json", CMD_QUICKROM_FROM_CONFIG),
-                    ],
-                )
-                .await
-                {
-                    run_quickrom_command(self, command, uri).await;
-                }
-            }
-            CMD_PREVIEW_PATCH => {
-                // Args from the code-lens dispatch in `ctrmml-lang-core`:
-                //   [uri, line_str, type, channel, instrument_number_str]
-                // The LSP layer prepended the uri before forwarding; the
-                // lang-core side keeps the line as a string in LSP wire
-                // form (zero-based).
-                // lang-core emits the line as a string; vscode-ctrmml may
-                // forward it as a number once it grows its own typed
-                // wrapper. Accept either shape.
-                let parsed = parse_preview_patch_args(&args);
-                let uri = match parsed.uri {
-                    Some(uri) => uri,
-                    None => match self.resolve_uri_arg(&args).await {
-                        Ok(uri) => uri,
-                        Err(err) => {
-                            let _ = self.client.show_message(MessageType::ERROR, err).await;
-                            return Ok(None);
-                        }
-                    },
-                };
-                let ty = match InstrumentType::parse(&parsed.instrument_type) {
-                    Some(ty) => ty,
-                    None => {
-                        let _ = self
-                            .client
-                            .show_message(
-                                MessageType::ERROR,
-                                format!(
-                                    "previewPatch: unknown instrument type `{}`",
-                                    parsed.instrument_type
-                                ),
-                            )
-                            .await;
-                        return Ok(None);
-                    }
-                };
-                let doc_text = self.docs.read().await.get(&uri).cloned();
-                let Some(doc_text) = doc_text else {
-                    let _ = self
-                        .client
-                        .show_message(MessageType::ERROR, "previewPatch: document not in cache")
-                        .await;
-                    return Ok(None);
-                };
-                let Some(block) = extract_instrument_block(&doc_text, parsed.line, ty) else {
-                    let _ = self
-                        .client
-                        .show_message(
-                            MessageType::ERROR,
-                            format!(
-                                "previewPatch: no @N {} block at line {}",
-                                parsed.instrument_type, parsed.line
-                            ),
-                        )
-                        .await;
-                    return Ok(None);
-                };
-                let preview = build_preview_mml(&doc_text, &block, &parsed.channel);
-                if let Err(err) = self.start_playback_with_text(uri, preview, None).await {
-                    let _ = self.client.show_message(MessageType::ERROR, err).await;
-                }
-            }
-            CMD_PATCH_FORMATS => {
-                return Ok(Some(
-                    serde_json::to_value(ym2612_format::formats()).unwrap_or(Value::Null),
-                ));
-            }
-            CMD_SAVE_PATCH => {
-                // Args: [uri, line, type, target_path, format?]. The client
-                // shows the save dialog so it knows where the user wants
-                // the patch to land; the LSP then runs the conversion.
-                let uri = match self.resolve_uri_arg(&args).await {
-                    Ok(uri) => uri,
-                    Err(err) => {
-                        let _ = self.client.show_message(MessageType::ERROR, err).await;
-                        return Ok(None);
-                    }
-                };
-                let line = args
-                    .get(1)
-                    .and_then(|v| {
-                        v.as_u64()
-                            .or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))
-                    })
-                    .unwrap_or(0) as u32;
-                let type_str = args.get(2).and_then(|v| v.as_str()).unwrap_or("");
-                let target_str = args.get(3).and_then(|v| v.as_str()).unwrap_or("");
-                let format_override = args.get(4).and_then(|v| v.as_str());
-                if target_str.is_empty() {
-                    let _ = self
-                        .client
-                        .show_message(MessageType::ERROR, "savePatch: missing target path")
-                        .await;
-                    return Ok(None);
-                }
-                let ty = match InstrumentType::parse(type_str) {
-                    Some(ty) => ty,
-                    None => {
-                        let _ = self
-                            .client
-                            .show_message(
-                                MessageType::ERROR,
-                                format!("savePatch: unknown instrument type `{type_str}`"),
-                            )
-                            .await;
-                        return Ok(None);
-                    }
-                };
-                let doc_text = self.docs.read().await.get(&uri).cloned();
-                let Some(doc_text) = doc_text else {
-                    let _ = self
-                        .client
-                        .show_message(MessageType::ERROR, "savePatch: document not in cache")
-                        .await;
-                    return Ok(None);
-                };
-                let Some(block) = extract_instrument_block(&doc_text, line, ty) else {
-                    let _ = self
-                        .client
-                        .show_message(
-                            MessageType::ERROR,
-                            format!("savePatch: no @N {type_str} block at line {line}"),
-                        )
-                        .await;
-                    return Ok(None);
-                };
-                let target = std::path::PathBuf::from(target_str);
-                let format = format_override.map(str::to_string).or_else(|| {
-                    target
-                        .extension()
-                        .and_then(|extension| extension.to_str())
-                        .map(str::to_ascii_lowercase)
-                });
-                let Some(format) = format else {
-                    let _ = self
-                        .client
-                        .show_message(MessageType::ERROR, "savePatch: missing target format")
-                        .await;
-                    return Ok(None);
-                };
-                let converted = ym2612_format::convert(
-                    block.mml_text.as_bytes(),
-                    "input.mml",
-                    Some("mml"),
-                    0,
-                    &format,
-                );
-                let data = match converted {
-                    Ok(data) => data,
-                    Err(err) => {
-                        let _ = self
-                            .client
-                            .show_message(MessageType::ERROR, format!("savePatch: {err}"))
-                            .await;
-                        return Ok(None);
-                    }
-                };
-                match tokio::fs::write(&target, data).await {
-                    Ok(()) => {
-                        let display = target_str
-                            .rsplit(std::path::MAIN_SEPARATOR)
-                            .next()
-                            .unwrap_or(target_str);
-                        let _ = self
-                            .client
-                            .show_message(MessageType::INFO, format!("saved {display}"))
-                            .await;
-                    }
-                    Err(err) => {
-                        let _ = self
-                            .client
-                            .show_message(MessageType::ERROR, format!("savePatch: {err}"))
-                            .await;
-                    }
-                }
-            }
-            _ => {}
+        if params.command == CMD_PATCH_FORMATS {
+            return Ok(Some(
+                serde_json::to_value(ym2612_format::formats()).unwrap_or(Value::Null),
+            ));
+        }
+        match self.run_command(&params.command, &params.arguments).await {
+            Ok(Some(message)) => self.client.show_message(MessageType::INFO, message).await,
+            Ok(None) => {}
+            Err(message) => self.client.show_message(MessageType::ERROR, message).await,
         }
         Ok(None)
     }
@@ -797,6 +472,177 @@ impl LanguageServer for Backend {
     async fn shutdown(&self) -> Result<()> {
         Ok(())
     }
+}
+
+impl Backend {
+    /// Run an `executeCommand`. `Ok(Some(text))` is a message for the user.
+    async fn run_command(
+        &self,
+        command: &str,
+        args: &[Value],
+    ) -> std::result::Result<Option<String>, String> {
+        if let Some((tool, source)) = link_command(command) {
+            let uri = self.resolve_uri_arg(args).await?;
+            return self.run_link(tool, source, &uri).await.map(Some);
+        }
+        match command {
+            CMD_PLAY => {
+                let uri = self.resolve_uri_arg(args).await?;
+                self.start_playback(uri, None).await?;
+            }
+            CMD_PLAY_FROM_CURSOR => {
+                let uri = self.resolve_uri_arg(args).await?;
+                let line = args.get(1).and_then(Value::as_u64).unwrap_or(0) as u32;
+                let character = args.get(2).and_then(Value::as_u64).unwrap_or(0) as u32;
+                self.start_playback(uri, Some((line, character))).await?;
+            }
+            CMD_STOP => self.stop_playback().await,
+            CMD_EXPORT_VGM | CMD_EXPORT_WAV => {
+                let format = if command == CMD_EXPORT_VGM {
+                    ExportFormat::Vgm
+                } else {
+                    ExportFormat::Wav
+                };
+                let uri = self.resolve_uri_arg(args).await?;
+                let path = self.run_export(uri, format).await?;
+                let display = relative_path_display(&path, &self.session().roots);
+                return Ok(Some(format!("exported {display}")));
+            }
+            CMD_MDSLINK_MENU | CMD_QUICKROM_MENU => {
+                let tool = if command == CMD_MDSLINK_MENU {
+                    LinkTool::Mdslink
+                } else {
+                    LinkTool::Quickrom
+                };
+                let uri = self.resolve_uri_arg(args).await?;
+                let Some(source) = self.select_link_source(tool).await? else {
+                    return Ok(None);
+                };
+                return self.run_link(tool, source, &uri).await.map(Some);
+            }
+            CMD_PREVIEW_PATCH => {
+                let patch = parse_patch_args(args);
+                let uri = self.resolve_uri_arg(args).await?;
+                let (text, block) = self.patch_block(&uri, &patch, "previewPatch").await?;
+                let preview = build_preview_mml(&text, &block, &patch.target);
+                self.start_playback_with_text(uri, preview, None).await?;
+            }
+            CMD_SAVE_PATCH => {
+                // The client picks the target file and may name its format.
+                let patch = parse_patch_args(args);
+                if patch.target.is_empty() {
+                    return Err("savePatch: missing target path".to_string());
+                }
+                let uri = self.resolve_uri_arg(args).await?;
+                let (_, block) = self.patch_block(&uri, &patch, "savePatch").await?;
+                let target = std::path::PathBuf::from(&patch.target);
+                let format = args
+                    .get(4)
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| {
+                        target
+                            .extension()
+                            .and_then(|extension| extension.to_str())
+                            .map(str::to_ascii_lowercase)
+                    })
+                    .ok_or_else(|| "savePatch: missing target format".to_string())?;
+                let data = ym2612_format::convert(
+                    block.mml_text.as_bytes(),
+                    "input.mml",
+                    Some("mml"),
+                    0,
+                    &format,
+                )
+                .map_err(|err| format!("savePatch: {err}"))?;
+                tokio::fs::write(&target, data)
+                    .await
+                    .map_err(|err| format!("savePatch: {err}"))?;
+                let name = target
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or(patch.target);
+                return Ok(Some(format!("saved {name}")));
+            }
+            _ => {}
+        }
+        Ok(None)
+    }
+
+    /// The document text and the `@N <type>` block the patch arguments name.
+    async fn patch_block(
+        &self,
+        uri: &str,
+        patch: &PatchArgs,
+        command: &str,
+    ) -> std::result::Result<(String, ExtractedBlock), String> {
+        let ty = InstrumentType::parse(&patch.instrument_type).ok_or_else(|| {
+            format!(
+                "{command}: unknown instrument type `{}`",
+                patch.instrument_type
+            )
+        })?;
+        let text = self
+            .document_text(uri)
+            .await
+            .ok_or_else(|| format!("{command}: failed to read the document"))?;
+        let block = extract_instrument_block(&text, patch.line, ty).ok_or_else(|| {
+            format!(
+                "{command}: no @N {} block at line {}",
+                patch.instrument_type, patch.line
+            )
+        })?;
+        Ok((text, block))
+    }
+
+    async fn select_link_source(
+        &self,
+        tool: LinkTool,
+    ) -> std::result::Result<Option<LinkSource>, String> {
+        let choices = tool.source_titles();
+        let actions = choices
+            .iter()
+            .map(|(title, _)| MessageActionItem {
+                title: title.clone(),
+                properties: Default::default(),
+            })
+            .collect();
+        let name = tool.name();
+        let selected = self
+            .client
+            .show_message_request(MessageType::INFO, format!("ctrmml: {name}"), Some(actions))
+            .await
+            .map_err(|err| format!("failed to open {name} menu: {err}"))?;
+        Ok(selected.and_then(|selected| {
+            choices
+                .into_iter()
+                .find(|(title, _)| *title == selected.title)
+                .map(|(_, source)| source)
+        }))
+    }
+
+    async fn fill_measure_edit(
+        &self,
+        target: &FillMeasureTarget,
+        text: &str,
+    ) -> Option<tower_lsp::lsp_types::WorkspaceEdit> {
+        let cmd_path = self.command_path().await.ok()?;
+        fill_measure_edit(&cmd_path, &target.uri, text, target.line, target.character).await
+    }
+}
+
+/// Whether the user asked for code actions (rather than the client asking
+/// on a cursor move), or asked for refactorings by kind.
+fn is_explicit_request(context: &CodeActionContext) -> bool {
+    let rewrite = CodeActionKind::REFACTOR_REWRITE;
+    let rewrite = rewrite.as_str();
+    context.trigger_kind == Some(CodeActionTriggerKind::INVOKED)
+        || context.only.as_ref().is_some_and(|kinds| {
+            kinds.iter().any(|kind| {
+                let kind = kind.as_str();
+                rewrite == kind || rewrite.starts_with(&format!("{kind}."))
+            })
+        })
 }
 
 fn code_lens_config(client_kind: ClientKind) -> CodeLensConfig {
@@ -810,15 +656,18 @@ fn code_lens_config(client_kind: ClientKind) -> CodeLensConfig {
     }
 }
 
+/// Arguments of the patch commands, `[uri, line, type, target, ...]`. The
+/// line may be a number or a string; `target` is the channel to preview on
+/// or the file to save to.
 #[derive(Debug, PartialEq, Eq)]
-struct PreviewPatchArgs {
+struct PatchArgs {
     uri: Option<String>,
     line: u32,
     instrument_type: String,
-    channel: String,
+    target: String,
 }
 
-fn parse_preview_patch_args(args: &[Value]) -> PreviewPatchArgs {
+fn parse_patch_args(args: &[Value]) -> PatchArgs {
     let line = args
         .get(1)
         .and_then(|value| {
@@ -827,20 +676,30 @@ fn parse_preview_patch_args(args: &[Value]) -> PreviewPatchArgs {
                 .or_else(|| value.as_str().and_then(|line| line.parse::<u64>().ok()))
         })
         .unwrap_or(0) as u32;
-    PreviewPatchArgs {
+    let text = |index: usize| {
+        args.get(index)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    PatchArgs {
         uri: args.first().and_then(Value::as_str).map(str::to_string),
         line,
-        instrument_type: args
-            .get(2)
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        channel: args
-            .get(3)
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
+        instrument_type: text(2),
+        target: text(3),
     }
+}
+
+fn link_command(command: &str) -> Option<(LinkTool, LinkSource)> {
+    Some(match command {
+        CMD_MDSLINK_FILE => (LinkTool::Mdslink, LinkSource::File),
+        CMD_MDSLINK_DIRECTORY => (LinkTool::Mdslink, LinkSource::Directory),
+        CMD_MDSLINK_FROM_CONFIG => (LinkTool::Mdslink, LinkSource::Config),
+        CMD_QUICKROM_FILE => (LinkTool::Quickrom, LinkSource::File),
+        CMD_QUICKROM_DIRECTORY => (LinkTool::Quickrom, LinkSource::Directory),
+        CMD_QUICKROM_FROM_CONFIG => (LinkTool::Quickrom, LinkSource::Config),
+        _ => return None,
+    })
 }
 
 fn single_trigger_character(value: String) -> Option<char> {
@@ -927,299 +786,46 @@ fn core_edit_range(range: EditRange) -> Range {
     }
 }
 
-async fn select_menu_command(
-    backend: &Backend,
-    menu_name: &str,
-    choices: &[(&'static str, &'static str)],
-) -> Option<&'static str> {
-    let actions: Vec<MessageActionItem> = choices
-        .iter()
-        .map(|(title, _)| MessageActionItem {
-            title: (*title).to_string(),
-            properties: Default::default(),
-        })
-        .collect();
-    let selected = match backend
-        .client
-        .show_message_request(
-            MessageType::INFO,
-            format!("ctrmml: {menu_name}"),
-            Some(actions),
-        )
-        .await
-    {
-        Ok(item) => item,
-        Err(err) => {
-            let _ = backend
-                .client
-                .show_message(
-                    MessageType::ERROR,
-                    format!("failed to open {menu_name} menu: {err}"),
-                )
-                .await;
-            return None;
-        }
-    }?;
-
-    choices
-        .iter()
-        .find(|(title, _)| *title == selected.title.as_str())
-        .map(|(_, command)| *command)
-}
-
-async fn run_mdslink_command(backend: &Backend, command: &str, uri: String) {
-    let result = match command {
-        CMD_MDSLINK_FILE => backend.run_mdslink_single(uri).await,
-        CMD_MDSLINK_DIRECTORY => backend.run_mdslink_directory(uri).await,
-        CMD_MDSLINK_FROM_CONFIG => backend.run_mdslink_config(uri).await,
-        _ => {
-            let _ = backend
-                .client
-                .show_message(
-                    MessageType::ERROR,
-                    format!("unsupported mdslink command: {command}"),
-                )
-                .await;
-            return;
-        }
-    };
-    handle_mdslink_result(backend, result).await;
-}
-
-async fn run_quickrom_command(backend: &Backend, command: &str, uri: String) {
-    let result = match command {
-        CMD_QUICKROM_FILE => backend.run_quickrom_single(uri).await,
-        CMD_QUICKROM_DIRECTORY => backend.run_quickrom_directory(uri).await,
-        CMD_QUICKROM_FROM_CONFIG => backend.run_quickrom_config(uri).await,
-        _ => {
-            let _ = backend
-                .client
-                .show_message(
-                    MessageType::ERROR,
-                    format!("unsupported quickrom command: {command}"),
-                )
-                .await;
-            return;
-        }
-    };
-    handle_quickrom_result(backend, result).await;
-}
-
-async fn handle_mdslink_result(
-    backend: &Backend,
-    result: std::result::Result<MdslinkRunResult, String>,
-) {
-    match result {
-        Ok(result) => {
-            let roots = backend.roots.read().await.clone();
-            let seq = relative_path_display(&result.outputs.seq_output, &roots);
-            let pcm = relative_path_display(&result.outputs.pcm_output, &roots);
-            let inc = relative_path_display(&result.outputs.asm_header_output, &roots);
-            let header = relative_path_display(&result.outputs.c_header_output, &roots);
-            let mut message = format!("mdslink outputs: {seq}, {pcm}, {inc}, {header}");
-            if let Some(warning) = result.warning {
-                message.push_str(";\n\n**warning**: ");
-                message.push_str(&warning);
-            }
-            let _ = backend
-                .client
-                .show_message(MessageType::INFO, message)
-                .await;
-        }
-        Err(err) => {
-            let _ = backend.client.show_message(MessageType::ERROR, err).await;
-        }
-    }
-}
-
-async fn handle_quickrom_result(
-    backend: &Backend,
-    result: std::result::Result<QuickromRunResult, String>,
-) {
-    match result {
-        Ok(result) => {
-            let roots = backend.roots.read().await.clone();
-            let rom = relative_path_display(&result.rom_output, &roots);
-            let mut message = format!("quickrom output: {rom}");
-            if let Some(warning) = result.warning {
-                message.push_str(";\n\n**warning**: ");
-                message.push_str(&warning);
-            }
-            let _ = backend
-                .client
-                .show_message(MessageType::INFO, message)
-                .await;
-        }
-        Err(err) => {
-            let _ = backend.client.show_message(MessageType::ERROR, err).await;
-        }
-    }
-}
-
-fn relative_path_display(path: &std::path::Path, roots: &[std::path::PathBuf]) -> String {
-    if let Some(root) = best_workspace_root(path, roots) {
-        if let Some(rel) = pathdiff::diff_paths(path, root) {
-            return rel.to_string_lossy().to_string();
-        }
-    }
-    path.to_string_lossy().to_string()
-}
-
-fn best_workspace_root(
-    path: &std::path::Path,
-    roots: &[std::path::PathBuf],
-) -> Option<std::path::PathBuf> {
-    let mut best: Option<std::path::PathBuf> = None;
-    for root in roots {
-        if path.starts_with(root) {
-            let replace = match &best {
-                Some(existing) => root.components().count() > existing.components().count(),
-                None => true,
-            };
-            if replace {
-                best = Some(root.clone());
-            }
-        }
-    }
-    best
-}
-
-enum DefinitionTarget {
-    Instrument(String),
-    AtMeta { prefix: &'static str, num: String },
-    Track(String),
+/// A `prefix<digits>` reference: `@N` instruments, `@EN` / `@MN` / `@PN`
+/// definitions and `*N` tracks.
+struct DefinitionTarget {
+    prefix: &'static str,
+    digits: String,
 }
 
 fn definition_target_at(line: &str, col: usize) -> Option<DefinitionTarget> {
     let (token, _start, _end) = token_at(line, col)?;
-    let mut chars = token.chars();
-    let first = chars.next()?;
-    if first == '@' {
-        let rest: String = chars.collect();
-        if let Some(stripped) = rest.strip_prefix('E') {
-            let digits = stripped
-                .chars()
-                .take_while(|ch| ch.is_ascii_digit())
-                .collect::<String>();
-            if !digits.is_empty() {
-                return Some(DefinitionTarget::AtMeta {
-                    prefix: "@E",
-                    num: digits,
-                });
-            }
-        }
-        if let Some(stripped) = rest.strip_prefix('M') {
-            let digits = stripped
-                .chars()
-                .take_while(|ch| ch.is_ascii_digit())
-                .collect::<String>();
-            if !digits.is_empty() {
-                return Some(DefinitionTarget::AtMeta {
-                    prefix: "@M",
-                    num: digits,
-                });
-            }
-        }
-        if let Some(stripped) = rest.strip_prefix('P') {
-            let digits = stripped
-                .chars()
-                .take_while(|ch| ch.is_ascii_digit())
-                .collect::<String>();
-            if !digits.is_empty() {
-                return Some(DefinitionTarget::AtMeta {
-                    prefix: "@P",
-                    num: digits,
-                });
-            }
-        }
-        let digits = rest
-            .chars()
-            .take_while(|ch| ch.is_ascii_digit())
-            .collect::<String>();
-        if !digits.is_empty() {
-            return Some(DefinitionTarget::Instrument(digits));
-        }
-        return None;
-    }
-    if first == '*' {
-        let digits = chars
-            .take_while(|ch| ch.is_ascii_digit())
-            .collect::<String>();
-        if !digits.is_empty() {
-            return Some(DefinitionTarget::Track(digits));
-        }
-    }
-    None
+    let prefix = ["@E", "@M", "@P", "@", "*"].into_iter().find(|prefix| {
+        token
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with(|ch: char| ch.is_ascii_digit()))
+    })?;
+    let digits = token[prefix.len()..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect();
+    Some(DefinitionTarget { prefix, digits })
 }
 
-fn find_instrument_definition(text: &str, target: &str) -> Option<Range> {
-    find_prefixed_definition(text, "@", target)
-}
-
-fn find_prefixed_definition(text: &str, prefix: &str, target: &str) -> Option<Range> {
+/// The first line that defines `target`: `prefix<digits>` at the start of
+/// the line, followed by whitespace, `;` or the end of the line.
+fn find_definition(text: &str, target: &DefinitionTarget) -> Option<Range> {
     for (idx, line) in text.lines().enumerate() {
-        let trimmed = line.trim_start();
-        if trimmed.is_empty() || trimmed.starts_with(';') {
+        let start = line.len() - line.trim_start().len();
+        let Some(rest) = strip_keyword(&line[start..], target.prefix) else {
             continue;
-        }
-        if !trimmed.starts_with(prefix) {
-            continue;
-        }
-        let mut end = prefix.len();
-        while end < trimmed.len() {
-            let ch = trimmed.as_bytes()[end] as char;
-            if ch.is_ascii_digit() {
-                end += 1;
-            } else {
-                break;
-            }
-        }
-        if end == prefix.len() {
-            continue;
-        }
-        if trimmed.get(prefix.len()..end)? != target {
-            continue;
-        }
-        let start_col = line.len() - trimmed.len();
-        let range = Range {
-            start: Position::new(idx as u32, start_col as u32),
-            end: Position::new(idx as u32, (start_col + end) as u32),
         };
-        return Some(range);
-    }
-    None
-}
-
-fn find_track_definition(text: &str, target: &str) -> Option<Range> {
-    for (idx, line) in text.lines().enumerate() {
-        let trimmed = line.trim_start();
-        if trimmed.is_empty() || trimmed.starts_with(';') {
+        let Some(after) = rest.strip_prefix(target.digits.as_str()) else {
             continue;
-        }
-        if !trimmed.starts_with('*') {
-            continue;
-        }
-        let mut end = 1;
-        while end < trimmed.len() {
-            let ch = trimmed.as_bytes()[end] as char;
-            if ch.is_ascii_digit() {
-                end += 1;
-            } else {
-                break;
-            }
-        }
-        if end == 1 {
-            continue;
-        }
-        if trimmed.get(1..end)? != target {
-            continue;
-        }
-        let start_col = line.len() - trimmed.len();
-        let range = Range {
-            start: Position::new(idx as u32, start_col as u32),
-            end: Position::new(idx as u32, (start_col + end) as u32),
         };
-        return Some(range);
+        if !after.is_empty() && !after.starts_with(|ch: char| ch.is_whitespace() || ch == ';') {
+            continue;
+        }
+        let end = start + target.prefix.len() + target.digits.len();
+        return Some(Range {
+            start: Position::new(idx as u32, byte_offset_to_utf16_character(line, start)),
+            end: Position::new(idx as u32, byte_offset_to_utf16_character(line, end)),
+        });
     }
     None
 }
@@ -1229,6 +835,32 @@ mod tests {
     use ctrmml_lang_core::completion::{CoreTextEdit, InsertSpec};
 
     use super::*;
+
+    #[test]
+    fn fill_measure_runs_on_explicit_requests_only() {
+        let context = |trigger_kind, only: Option<Vec<CodeActionKind>>| CodeActionContext {
+            diagnostics: Vec::new(),
+            only,
+            trigger_kind,
+        };
+        assert!(!is_explicit_request(&context(
+            Some(CodeActionTriggerKind::AUTOMATIC),
+            None
+        )));
+        assert!(!is_explicit_request(&context(None, None)));
+        assert!(is_explicit_request(&context(
+            Some(CodeActionTriggerKind::INVOKED),
+            None
+        )));
+        assert!(is_explicit_request(&context(
+            None,
+            Some(vec![CodeActionKind::REFACTOR])
+        )));
+        assert!(!is_explicit_request(&context(
+            None,
+            Some(vec![CodeActionKind::QUICKFIX])
+        )));
+    }
 
     #[test]
     fn patch_format_values_carry_the_fields_clients_read() {
@@ -1402,6 +1034,36 @@ mod tests {
         assert_eq!(other[0].command_id.as_deref(), Some(CMD_PREVIEW_PATCH));
     }
 
+    fn definition(text: &str, line: &str, col: usize) -> Option<Range> {
+        find_definition(text, &definition_target_at(line, col)?)
+    }
+
+    #[test]
+    fn definitions_are_found_by_prefix_and_number() {
+        let text = "@10 fm\n@1 psg 15\n@E1 1 2\n*3 c d\nA @1 @E1 *3\n";
+        let line = "A @1 @E1 *3";
+        assert_eq!(definition(text, line, 3).map(|r| r.start.line), Some(1));
+        assert_eq!(definition(text, line, 6).map(|r| r.start.line), Some(2));
+        assert_eq!(definition(text, line, 10).map(|r| r.start.line), Some(3));
+        assert_eq!(
+            definition(text, line, 3).map(|r| (r.start.character, r.end.character)),
+            Some((0, 2))
+        );
+    }
+
+    #[test]
+    fn definition_ranges_count_utf16_units() {
+        // `あ` is one UTF-16 unit and three bytes.
+        let text = "\u{3000}@1 fm\nA @1\n";
+        let range = definition(text, "A @1", 3).expect("definition");
+        assert_eq!((range.start.character, range.end.character), (1, 3));
+    }
+
+    #[test]
+    fn a_definition_needs_a_boundary_after_its_number() {
+        assert_eq!(definition("@1fm\nA @1\n", "A @1", 3), None);
+    }
+
     #[test]
     fn preview_lens_arguments_round_trip_through_handler_parser() {
         let lens = code_lens_with_config("@7 fm\n", code_lens_config(ClientKind::Other))
@@ -1413,12 +1075,12 @@ mod tests {
         let mut wire_args = vec![Value::String("file:///song.mml".to_string())];
         wire_args.extend(lens.arguments.into_iter().map(Value::String));
         assert_eq!(
-            parse_preview_patch_args(&wire_args),
-            PreviewPatchArgs {
+            parse_patch_args(&wire_args),
+            PatchArgs {
                 uri: Some("file:///song.mml".to_string()),
                 line: 0,
                 instrument_type: "fm".to_string(),
-                channel: "A".to_string(),
+                target: "A".to_string(),
             }
         );
     }

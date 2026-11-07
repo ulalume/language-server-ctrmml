@@ -12,8 +12,6 @@
 //! it replaces, so the migration in Phase 5 is a mechanical
 //! file-by-file swap.
 
-#![allow(clippy::too_many_arguments)]
-
 use ctrmml_lang_core::{
     chord::{
         render_chord as core_render_chord, render_generic_chord as core_render_generic_chord,
@@ -24,7 +22,7 @@ use ctrmml_lang_core::{
         ChordSize, RootAccidental, CHORDS_3, CHORDS_4,
     },
     transpose::{transpose_selection, Direction, Selection},
-    KeySig, LinesModel,
+    BorrowedLinesModel, KeySig,
 };
 use wasm_bindgen::prelude::*;
 
@@ -79,7 +77,7 @@ pub fn transpose(
     end_column: u32,
     direction: i32,
 ) -> Option<TransposeResult> {
-    let model = LinesModel::from_text(doc_text);
+    let model = BorrowedLinesModel::from_text(doc_text);
     let dir = if direction >= 0 {
         Direction::Up
     } else {
@@ -205,7 +203,7 @@ fn decode_root_accidental(v: i32) -> Option<RootAccidental> {
 fn key_sig_from_slice(arr: &[i8]) -> KeySig {
     let mut k = KeySig::new();
     for (i, &val) in arr.iter().enumerate().take(7) {
-        let letter = [b'c', b'd', b'e', b'f', b'g', b'a', b'b'][i] as char;
+        let letter = b"cdefgab"[i] as char;
         k.set(letter, val);
     }
     k
@@ -392,7 +390,7 @@ pub fn scan_channel_context(
     num_channels: u32,
     track_line: u32,
 ) -> ChannelContextResult {
-    let model = LinesModel::from_text(doc_text);
+    let model = BorrowedLinesModel::from_text(doc_text);
     let track_line = if track_line == 0 {
         None
     } else {
@@ -425,7 +423,7 @@ pub fn scan_channel_context(
 /// Replaces `scanKeySigAt` from `web-ctrmml/src/mml/key-sig.ts`.
 #[wasm_bindgen]
 pub fn scan_key_sig(doc_text: &str, line: u32, column: u32) -> Vec<i8> {
-    let model = LinesModel::from_text(doc_text);
+    let model = BorrowedLinesModel::from_text(doc_text);
     let sig = ctrmml_lang_core::scan_key_sig_at(&model, line, column);
     let letters = ['c', 'd', 'e', 'f', 'g', 'a', 'b'];
     letters.iter().map(|&l| sig.get_or_zero(l)).collect()
@@ -563,7 +561,7 @@ pub struct InstrumentBlockResult {
 /// Replaces `findFmBlockAt` from `web-ctrmml/src/mml/block-finder.ts`.
 #[wasm_bindgen]
 pub fn find_fm_block_at(doc_text: &str, line: u32) -> Option<InstrumentBlockResult> {
-    let model = LinesModel::from_text(doc_text);
+    let model = BorrowedLinesModel::from_text(doc_text);
     ctrmml_lang_core::find_fm_block_at(&model, line).map(|b| InstrumentBlockResult {
         start_line: b.start_line,
         end_line: b.end_line,
@@ -576,7 +574,7 @@ pub fn find_fm_block_at(doc_text: &str, line: u32) -> Option<InstrumentBlockResu
 /// Replaces `findPsgBlockAt` from `web-ctrmml/src/mml/block-finder.ts`.
 #[wasm_bindgen]
 pub fn find_psg_block_at(doc_text: &str, line: u32) -> Option<InstrumentBlockResult> {
-    let model = LinesModel::from_text(doc_text);
+    let model = BorrowedLinesModel::from_text(doc_text);
     ctrmml_lang_core::find_psg_block_at(&model, line).map(|b| InstrumentBlockResult {
         start_line: b.start_line,
         end_line: b.end_line,
@@ -673,7 +671,7 @@ pub fn parse_leading_track_selector(line: &str) -> Option<LeadingTrackSelectorRe
 /// the line number rather than the full selector span list).
 #[wasm_bindgen]
 pub fn find_track_selector_line(doc_text: &str, line: u32) -> u32 {
-    let model = LinesModel::from_text(doc_text);
+    let model = BorrowedLinesModel::from_text(doc_text);
     ctrmml_lang_core::find_enclosing_track_selector_at(&model, line)
         .map(|(_sel, ln)| ln)
         .unwrap_or(0)
@@ -708,34 +706,14 @@ pub fn docs_json() -> String {
         .expect("docs::all_docs serializes to JSON")
 }
 
-/// Resolve a hover at `(line, col)` (zero-based) in `text`. Returns a JSON
-/// object `{ markdown, line, start, end }` (the column range is in byte
-/// offsets within the line, which equal char / UTF-16 offsets for ASCII
-/// MML), or the literal `"null"` when the cursor isn't on a documented
-/// construct.
+/// Resolve a hover at `(line, col)` (zero-based, `col` in UTF-16 code
+/// units) in `text`. Returns a JSON object `{ markdown, line, start, end }`
+/// with the range in UTF-16 code units, or the literal `"null"` when the
+/// cursor isn't on a documented construct.
 #[wasm_bindgen]
 pub fn hover_at_json(text: &str, line: u32, col: u32) -> String {
-    let wire = ctrmml_lang_core::hover_at(text, line, col).map(HoverInfoWire::from);
-    serde_json::to_string(&wire).expect("hover info serializes to JSON")
-}
-
-#[derive(serde::Serialize)]
-struct HoverInfoWire {
-    markdown: String,
-    line: u32,
-    start: u32,
-    end: u32,
-}
-
-impl From<ctrmml_lang_core::HoverInfo> for HoverInfoWire {
-    fn from(info: ctrmml_lang_core::HoverInfo) -> Self {
-        Self {
-            markdown: info.markdown,
-            line: info.line,
-            start: info.start,
-            end: info.end,
-        }
-    }
+    serde_json::to_string(&ctrmml_lang_core::hover_at_utf16(text, line, col))
+        .expect("hover info serializes to JSON")
 }
 
 /// Enumerate code-lens entries for `text` as a JSON array. Each entry is
@@ -885,6 +863,21 @@ mod tests {
     #[test]
     fn version_is_non_empty() {
         assert!(!version().is_empty());
+    }
+
+    #[test]
+    fn hover_json_keeps_its_shape() {
+        let value: serde_json::Value =
+            serde_json::from_str(&hover_at_json("A @1 c", 0, 2)).expect("hover JSON");
+        let object = value.as_object().expect("hover object");
+        let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["end", "line", "markdown", "start"]);
+        assert_eq!(
+            (value["line"].as_u64(), value["start"].as_u64()),
+            (Some(0), Some(2))
+        );
+        assert_eq!(hover_at_json("; c", 0, 2), "null");
     }
 
     #[test]

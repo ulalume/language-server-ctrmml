@@ -12,35 +12,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::block_finder::{find_block_at, InstrumentKind};
-use crate::string_model::LinesModel;
+use crate::block_finder::find_block_at;
+use crate::instrument_header::InstrumentType;
+use crate::string_model::BorrowedLinesModel;
 use crate::track_selector::LineReader;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum InstrumentType {
-    Fm,
-    Psg,
-    Pcm,
-}
-
-impl InstrumentType {
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "fm" => Some(Self::Fm),
-            "psg" => Some(Self::Psg),
-            "pcm" => Some(Self::Pcm),
-            _ => None,
-        }
-    }
-    fn as_kind(self) -> InstrumentKind {
-        match self {
-            Self::Fm => InstrumentKind::Fm,
-            Self::Psg => InstrumentKind::Psg,
-            Self::Pcm => InstrumentKind::Pcm,
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtractedBlock {
@@ -60,18 +35,17 @@ pub fn extract_instrument_block(
     anchor_line: u32,
     ty: InstrumentType,
 ) -> Option<ExtractedBlock> {
-    let model = LinesModel::from_text(text);
+    let model = BorrowedLinesModel::from_text(text);
     // block_finder uses 1-based line numbers internally.
     let one_based = anchor_line.saturating_add(1);
-    let region = find_block_at(&model, one_based, ty.as_kind(), &[])?;
+    let region = find_block_at(&model, one_based, ty)?;
 
     // Re-extract the MML text from the model's view rather than slicing
     // bytes — this keeps line-ending normalisation aligned with how the
     // model already split the input.
-    let mut lines: Vec<String> = Vec::new();
-    for i in region.start_line..=region.end_line {
-        lines.push(model.get_line_content(i).to_string());
-    }
+    let lines: Vec<&str> = (region.start_line..=region.end_line)
+        .map(|i| model.get_line_content(i))
+        .collect();
     Some(ExtractedBlock {
         instrument_number: region.instrument_number,
         instrument_type: ty,
@@ -109,7 +83,7 @@ fn detect_platform(text: &str) -> Option<String> {
     for line in text.lines() {
         let trimmed = line.trim_start();
         if let Some(rest) = trimmed.strip_prefix("#platform") {
-            let value = rest.trim().split_whitespace().next()?;
+            let value = rest.split_whitespace().next()?;
             return Some(value.to_string());
         }
     }

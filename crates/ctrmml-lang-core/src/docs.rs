@@ -941,33 +941,14 @@ pub const TWO_OP_PARAM_DOCS: &[DocEntry] = &[
 // Lookup helpers
 // ---------------------------------------------------------------------------
 
-fn nonempty(s: &'static str) -> Option<&'static str> {
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+/// The first entry of `table` whose key is `key`.
+pub fn find_entry(table: &'static [DocEntry], key: &str) -> Option<&'static DocEntry> {
+    table.iter().find(|entry| entry.key == key)
 }
 
-fn lookup_doc(table: &'static [DocEntry], key: &str) -> Option<&'static str> {
-    table
-        .iter()
-        .find(|e| e.key == key)
-        .and_then(|e| nonempty(e.doc))
-}
-
-fn lookup_doc_by_label(table: &'static [DocEntry], label: &str) -> Option<&'static str> {
-    table
-        .iter()
-        .find(|e| e.label == label)
-        .and_then(|e| nonempty(e.doc))
-}
-
-pub fn command_completion_label(key: &str) -> Option<&'static str> {
-    COMMAND_COMPLETIONS
-        .iter()
-        .find(|entry| entry.key == key)
-        .map(|entry| entry.label)
+/// The first entry of `table` whose label is `label`.
+pub fn find_entry_by_label(table: &'static [DocEntry], label: &str) -> Option<&'static DocEntry> {
+    table.iter().find(|entry| entry.label == label)
 }
 
 pub fn meta_doc(label: &str) -> Option<&'static str> {
@@ -980,44 +961,12 @@ pub fn meta_doc(label: &str) -> Option<&'static str> {
     })
 }
 
-pub fn platform_value_doc(label: &str) -> Option<&'static str> {
-    lookup_doc(PLATFORM_VALUES, label)
-}
-
-pub fn option_value_doc(label: &str) -> Option<&'static str> {
-    lookup_doc(OPTION_VALUES, label)
-}
-
-pub fn timesig_value_doc(label: &str) -> Option<&'static str> {
-    lookup_doc(TIMESIG_VALUES, label)
-}
-
-pub fn group_value_doc(label: &str) -> Option<&'static str> {
-    lookup_doc(GROUP_VALUES, label)
-}
-
 /// Snippet body for the "Default FM template" item the FM completer
 /// appends at the bottom of its file-suggestion list. Body starts with
 /// a leading space so it concatenates cleanly with the preceding `fm`
 /// keyword (`@N fm` + this snippet = `@N fm ; default …`).
 pub const FM_DEFAULT_TEMPLATE: &str =
     " ; ${1:default}\n; ALG  FB\n    ${2:3}   ${3:4}\n;  AR  DR  SR  RR  SL  TL  KS  ML  DT SSG\n   ${4:31}   ${5:0}   ${6:0}   ${7:5}   ${8:0}   ${9:48}   ${10:0}   ${11:1}   ${12:3}   ${13:0} ; OP1\n   ${14:31}   ${15:0}   ${16:0}   ${17:5}   ${18:0}   ${19:36}   ${20:0}   ${21:1}   ${22:3}   ${23:0} ; OP2\n   ${24:31}   ${25:0}   ${26:0}   ${27:5}   ${28:0}   ${29:24}   ${30:0}   ${31:1}   ${32:3}   ${33:0} ; OP3\n   ${34:31}   ${35:0}   ${36:0}   ${37:5}   ${38:0}   ${39:12}   ${40:0}   ${41:1}   ${42:4}   ${43:0} ; OP4\n";
-
-pub fn instrument_doc(label: &str) -> Option<&'static str> {
-    lookup_doc(INSTRUMENT_TYPES, label)
-}
-
-pub fn rate_offset_doc(label: &str) -> Option<&'static str> {
-    lookup_doc(RATE_OFFSET, label)
-}
-
-pub fn rate_offset_label(label: &str) -> Option<&'static str> {
-    RATE_OFFSET.iter().find(|e| e.key == label).map(|e| e.label)
-}
-
-pub fn command_doc(label: &str) -> Option<&'static str> {
-    lookup_doc(COMMAND_COMPLETIONS, label)
-}
 
 /// Resolve a command entry, preferring the signed variant when `signed=true`.
 /// Several commands (`V`, `p`, `k`, `K`) ship two entries that share the same
@@ -1045,34 +994,6 @@ pub fn command_entry(key: &str, signed: bool) -> Option<(&'static str, &'static 
         return None;
     }
     Some((entry.label, entry.doc))
-}
-
-pub fn at_meta_doc(label: &str) -> Option<&'static str> {
-    lookup_doc_by_label(AT_META, label)
-}
-
-pub fn platform_command_doc(key: &str) -> Option<&'static str> {
-    lookup_doc(PLATFORM_COMMANDS, key)
-}
-
-pub fn platform_command_label(key: &str) -> Option<&'static str> {
-    PLATFORM_COMMANDS
-        .iter()
-        .find(|e| e.key == key)
-        .map(|e| e.label)
-}
-
-pub fn fm_param_doc(key: &str) -> Option<(&'static str, &'static str)> {
-    FM_PARAM_DOCS
-        .iter()
-        .find(|entry| entry.key == key)
-        .map(|entry| (entry.label, entry.doc))
-}
-
-pub fn two_op_param_doc(index: usize) -> Option<(&'static str, &'static str)> {
-    TWO_OP_PARAM_DOCS
-        .get(index)
-        .map(|entry| (entry.label, entry.doc))
 }
 
 /// Title shown at the top of every track-selector hover bubble and the
