@@ -16,8 +16,8 @@ use std::collections::HashMap;
 
 use ctrmml_lang_core::{
     find_enclosing_track_selector, find_fm_block_at, find_psg_block_at, generate_measure_rests,
-    is_after_bar_line, scan_time_signature, track_selector::LineReader, BorrowedLinesModel,
-    CursorTickData, TimeSignature,
+    is_after_bar_line, scan_time_signature, track_selector::LineReader,
+    utf16_character_to_byte_offset, BorrowedLinesModel, CursorTickData, TimeSignature,
 };
 use serde::Deserialize;
 use tower_lsp::lsp_types::{
@@ -25,7 +25,7 @@ use tower_lsp::lsp_types::{
 };
 
 use crate::ctrmml_cmd::{output_message, run_ctrmml_cmd};
-use crate::utils::uri_to_path;
+use crate::utils::{line_at, uri_to_path};
 
 /// JSON payload from `ctrmml-cmd find-cursor-tick`.
 #[derive(Debug, Deserialize)]
@@ -43,7 +43,8 @@ pub(crate) async fn fetch_cursor_tick(
     line_zero_based: u32,
     character: u32,
 ) -> Option<CursorTickData> {
-    let path = uri_to_path(&uri.to_string());
+    let path = uri_to_path(uri.as_ref());
+    let col = utf16_character_to_byte_offset(line_at(doc_text, line_zero_based), character);
     let output = run_ctrmml_cmd(cmd_path, "find-cursor-tick", Some(doc_text), |cmd| {
         cmd.arg("find-cursor-tick").arg("--stdin");
         if let Some(p) = path.as_deref() {
@@ -52,7 +53,7 @@ pub(crate) async fn fetch_cursor_tick(
         cmd.arg("--line")
             .arg(line_zero_based.to_string())
             .arg("--col")
-            .arg(character.to_string());
+            .arg(col.to_string());
     })
     .await
     .ok()?;
@@ -87,8 +88,8 @@ fn pre_check<'a>(
     character: u32,
 ) -> Option<(TimeSignature, bool)> {
     let line = line_zero_based + 1;
-    let col = character + 1;
     let model = BorrowedLinesModel::from_text(doc_text);
+    let col = utf16_character_to_byte_offset(model.get_line_content(line), character) as u32 + 1;
 
     if find_fm_block_at(&model, line).is_some() {
         return None;
@@ -215,6 +216,14 @@ mod tests {
     fn pre_check_rejects_timesig_no() {
         let doc = "#timesig no\nA cdef |\n";
         assert!(pre_check(doc, 1, 7).is_none());
+    }
+
+    #[test]
+    fn pre_check_reads_the_column_in_utf16_units() {
+        // `あ` is one UTF-16 unit and three bytes; the cursor sits after `|`.
+        let doc = "A 'あ' cdef |\n";
+        let (_, after_bar) = pre_check(doc, 0, 13).expect("pre-check should pass");
+        assert!(after_bar);
     }
 
     #[test]

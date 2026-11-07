@@ -55,7 +55,7 @@ pub use completion::{
     CoreTextEdit, CursorTickData, DataPayload, DataRequest, EditRange, FmPatchData, InsertFormat,
     InsertSpec, Pos,
 };
-pub use hover::{hover_at, HoverInfo};
+pub use hover::{hover_at, hover_at_utf16, HoverInfo};
 pub use instrument_header::{
     instrument_header_at, instrument_header_for_keyword_line, parse_at_number, InstrumentHeader,
     InstrumentType,

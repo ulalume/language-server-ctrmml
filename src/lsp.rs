@@ -45,9 +45,9 @@ use ctrmml_lang_core::completion::{
 };
 use ctrmml_lang_core::transpose::Direction;
 use ctrmml_lang_core::{
-    build_preview_mml, code_lens_with_config, extract_instrument_block, hover_at,
-    instrument_header::strip_keyword, is_in_comment, token_at, CodeLensConfig, IconStyle,
-    InstrumentType,
+    build_preview_mml, byte_offset_to_utf16_character, code_lens_with_config,
+    extract_instrument_block, hover_at, instrument_header::strip_keyword, is_in_comment, token_at,
+    utf16_character_to_byte_offset, CodeLensConfig, IconStyle, InstrumentType,
 };
 
 #[tower_lsp::async_trait]
@@ -198,52 +198,35 @@ impl LanguageServer for Backend {
             .uri
             .to_string();
         let position = params.text_document_position_params.position;
-        let text = self
-            .docs
-            .read()
-            .await
-            .get(&uri)
-            .cloned()
-            .unwrap_or_default();
-        let line = line_at(&text, position.line).unwrap_or_default();
+        let docs = self.docs.read().await;
+        let Some(text) = docs.get(&uri) else {
+            return Ok(None);
+        };
+        let line = line_at(text, position.line);
+        let col = utf16_character_to_byte_offset(line, position.character);
 
         // Generic hover (commands, key sigs, platform commands, FM/2op/PSG
         // params, instrument definitions, …) lives in `ctrmml-lang-core` so
         // web-ctrmml, vscode-ctrmml, and zed-ctrmml all share the same
-        // behaviour. It already short-circuits on comments.
-        if let Some(info) = hover_at(&text, position.line, position.character) {
-            return Ok(Some(Hover {
-                contents: HoverContents::Markup(MarkupContent {
-                    kind: MarkupKind::Markdown,
-                    value: info.markdown,
-                }),
-                range: Some(Range {
-                    start: Position::new(info.line, info.start),
-                    end: Position::new(info.line, info.end),
-                }),
-            }));
-        }
-
-        // Last layer: note hover. Resolves the absolute MIDI pitch
-        // plus the ambient key-sig context for a note letter at the
-        // cursor. Suppressed inside FM/PSG blocks and outside any
-        // track selector.
-        if let Some((value, start, end)) =
-            note_hover_text(&text, position.line, position.character, &line)
-        {
-            return Ok(Some(Hover {
-                contents: HoverContents::Markup(MarkupContent {
-                    kind: MarkupKind::Markdown,
-                    value,
-                }),
-                range: Some(Range {
-                    start: Position::new(position.line, start as u32),
-                    end: Position::new(position.line, end as u32),
-                }),
-            }));
-        }
-
-        Ok(None)
+        // behaviour. It already short-circuits on comments. Note hover is
+        // the last layer.
+        let (value, start, end) = match hover_at(text, position.line, col as u32) {
+            Some(info) => (info.markdown, info.start as usize, info.end as usize),
+            None => match note_hover_text(text, position.line, col as u32, line) {
+                Some(found) => found,
+                None => return Ok(None),
+            },
+        };
+        Ok(Some(Hover {
+            contents: HoverContents::Markup(MarkupContent {
+                kind: MarkupKind::Markdown,
+                value,
+            }),
+            range: Some(Range {
+                start: Position::new(position.line, byte_offset_to_utf16_character(line, start)),
+                end: Position::new(position.line, byte_offset_to_utf16_character(line, end)),
+            }),
+        }))
     }
 
     async fn goto_definition(
@@ -259,33 +242,24 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
         let position = params.text_document_position_params.position;
-        let text = self
-            .docs
-            .read()
-            .await
-            .get(&uri)
-            .cloned()
-            .unwrap_or_default();
-        let line = line_at(&text, position.line).unwrap_or_default();
-        let col = position.character as usize;
-        if is_in_comment(&line, col) {
-            return Ok(None);
-        }
-
-        let Some(target) = definition_target_at(&line, col) else {
+        let docs = self.docs.read().await;
+        let Some(text) = docs.get(&uri) else {
             return Ok(None);
         };
-        let range = find_definition(&text, &target);
-
-        if let Some(range) = range {
-            let location = Location {
-                uri: params.text_document_position_params.text_document.uri,
-                range,
-            };
-            return Ok(Some(GotoDefinitionResponse::Scalar(location)));
+        let line = line_at(text, position.line);
+        let col = utf16_character_to_byte_offset(line, position.character);
+        if is_in_comment(line, col) {
+            return Ok(None);
         }
-
-        Ok(None)
+        let Some(range) =
+            definition_target_at(line, col).and_then(|target| find_definition(text, &target))
+        else {
+            return Ok(None);
+        };
+        Ok(Some(GotoDefinitionResponse::Scalar(Location {
+            uri: params.text_document_position_params.text_document.uri,
+            range,
+        })))
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -1135,8 +1109,8 @@ fn find_definition(text: &str, target: &DefinitionTarget) -> Option<Range> {
         }
         let end = start + target.prefix.len() + target.digits.len();
         return Some(Range {
-            start: Position::new(idx as u32, start as u32),
-            end: Position::new(idx as u32, end as u32),
+            start: Position::new(idx as u32, byte_offset_to_utf16_character(line, start)),
+            end: Position::new(idx as u32, byte_offset_to_utf16_character(line, end)),
         });
     }
     None
@@ -1335,6 +1309,14 @@ mod tests {
             definition(text, line, 3).map(|r| (r.start.character, r.end.character)),
             Some((0, 2))
         );
+    }
+
+    #[test]
+    fn definition_ranges_count_utf16_units() {
+        // `あ` is one UTF-16 unit and three bytes.
+        let text = "\u{3000}@1 fm\nA @1\n";
+        let range = definition(text, "A @1", 3).expect("definition");
+        assert_eq!((range.start.character, range.end.character), (1, 3));
     }
 
     #[test]

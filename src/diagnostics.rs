@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use ctrmml_lang_core::byte_offset_to_utf16_character;
 use serde::Deserialize;
 use tokio::sync::Mutex;
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, Url};
@@ -47,30 +48,21 @@ pub(crate) fn diagnostics_for_positions(
     text: &str,
     positions: &[HighlightPosition],
 ) -> Vec<Diagnostic> {
-    let lines: Vec<&str> = text.lines().collect();
+    let lines = split_lines(text);
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
 
     for pos in positions {
-        let line = pos.line as usize;
-        if line >= lines.len() {
+        let Some(line) = lines.get(pos.line as usize) else {
+            continue;
+        };
+        if !seen.insert((pos.line, pos.col)) {
             continue;
         }
-        let line_len = lines[line].len() as u32;
-        let mut col = pos.col;
-        if col > line_len {
-            col = line_len;
-        }
-        let end = (col + 1).min(line_len);
-        let key = (pos.line as u64) << 32 | pos.col as u64;
-        if !seen.insert(key) {
-            continue;
-        }
+        let start = floor_char_boundary(line, pos.col as usize);
+        let end = ceil_char_boundary(line, start + 1);
         out.push(Diagnostic {
-            range: Range {
-                start: Position::new(pos.line, col),
-                end: Position::new(pos.line, end),
-            },
+            range: utf16_range(line, pos.line, start, end),
             severity: Some(DiagnosticSeverity::HINT),
             source: Some("ctrmml-playback".to_string()),
             message: "playback".to_string(),
@@ -95,45 +87,37 @@ pub(crate) fn diagnostic_for_playback_error(message: String) -> Diagnostic {
 }
 
 pub(crate) fn diagnostics_for_check_report(text: &str, report: &CheckReport) -> Vec<Diagnostic> {
-    let mut out = Vec::new();
-    for msg in &report.errors {
-        if let Some(diag) = diagnostic_for_check_message(text, msg, DiagnosticSeverity::ERROR) {
-            out.push(diag);
-        }
-    }
-    for msg in &report.warnings {
-        if let Some(diag) = diagnostic_for_check_message(text, msg, DiagnosticSeverity::WARNING) {
-            out.push(diag);
-        }
-    }
-    out
+    let lines = split_lines(text);
+    let errors = report
+        .errors
+        .iter()
+        .map(|msg| (msg, DiagnosticSeverity::ERROR));
+    let warnings = report
+        .warnings
+        .iter()
+        .map(|msg| (msg, DiagnosticSeverity::WARNING));
+    errors
+        .chain(warnings)
+        .filter_map(|(msg, severity)| diagnostic_for_check_message(&lines, msg, severity))
+        .collect()
 }
 
+/// `message` carries a 1-based line and byte column and a byte length.
 fn diagnostic_for_check_message(
-    text: &str,
+    lines: &[&str],
     message: &CheckMessage,
     severity: DiagnosticSeverity,
 ) -> Option<Diagnostic> {
     if message.message.trim().is_empty() {
         return None;
     }
-    let lines: Vec<&str> = text.lines().collect();
     let line_idx = message.line.saturating_sub(1);
-    let mut col = message.col.saturating_sub(1);
-    let line_len = lines
-        .get(line_idx as usize)
-        .map(|line| line.len() as u32)
-        .unwrap_or(0);
-    if col > line_len {
-        col = line_len;
-    }
-    let length = message.length;
-    let end = if line_len == 0 {
-        col
-    } else if length > 0 {
-        (col + length).min(line_len)
+    let line = lines.get(line_idx as usize).copied().unwrap_or("");
+    let start = floor_char_boundary(line, message.col.saturating_sub(1) as usize);
+    let end = if line.is_empty() {
+        start
     } else {
-        (col + 1).min(line_len)
+        ceil_char_boundary(line, start + message.length.max(1) as usize)
     };
     let code = if message.code.trim().is_empty() {
         None
@@ -141,16 +125,43 @@ fn diagnostic_for_check_message(
         Some(NumberOrString::String(message.code.clone()))
     };
     Some(Diagnostic {
-        range: Range {
-            start: Position::new(line_idx, col),
-            end: Position::new(line_idx, end),
-        },
+        range: utf16_range(line, line_idx, start, end),
         severity: Some(severity),
         source: Some("ctrmml-check".to_string()),
         message: message.message.clone(),
         code,
         ..Diagnostic::default()
     })
+}
+
+fn split_lines(text: &str) -> Vec<&str> {
+    text.split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .collect()
+}
+
+fn floor_char_boundary(line: &str, index: usize) -> usize {
+    let mut index = index.min(line.len());
+    while !line.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+fn ceil_char_boundary(line: &str, index: usize) -> usize {
+    let mut index = index.min(line.len());
+    while !line.is_char_boundary(index) {
+        index += 1;
+    }
+    index
+}
+
+/// An LSP range for the byte span `start..end` of `line`.
+fn utf16_range(line: &str, line_idx: u32, start: usize, end: usize) -> Range {
+    Range {
+        start: Position::new(line_idx, byte_offset_to_utf16_character(line, start)),
+        end: Position::new(line_idx, byte_offset_to_utf16_character(line, end)),
+    }
 }
 
 /// Per-URI diagnostic layers. `publishDiagnostics` replaces the whole set
@@ -416,6 +427,47 @@ mod tests {
 
         assert!(published.is_empty());
         assert!(store.entries.is_empty());
+    }
+
+    fn check_message(line: u32, col: u32, length: u32) -> CheckMessage {
+        CheckMessage {
+            message: "bad".to_string(),
+            line,
+            col,
+            length,
+            code: String::new(),
+        }
+    }
+
+    #[test]
+    fn check_ranges_count_utf16_units_after_japanese_text() {
+        // `あい` is two UTF-16 units and six bytes; `c` is byte 9, 1-based col 10.
+        let report = CheckReport {
+            errors: vec![check_message(2, 10, 2)],
+            warnings: vec![check_message(1, 1, 0)],
+        };
+        let diagnostics = diagnostics_for_check_report("; x\nA あい cd e\n", &report);
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(diagnostics[0].range.start, Position::new(1, 5));
+        assert_eq!(diagnostics[0].range.end, Position::new(1, 7));
+        assert_eq!(diagnostics[1].severity, Some(DiagnosticSeverity::WARNING));
+        assert_eq!(diagnostics[1].range.end, Position::new(0, 1));
+    }
+
+    #[test]
+    fn highlight_ranges_count_utf16_units_after_japanese_text() {
+        let positions = [HighlightPosition { line: 0, col: 8 }];
+        let diagnostics = diagnostics_for_positions("A 'あ' c\n", &positions);
+        assert_eq!(diagnostics[0].range.start, Position::new(0, 6));
+        assert_eq!(diagnostics[0].range.end, Position::new(0, 7));
+    }
+
+    #[test]
+    fn highlights_on_multibyte_text_cover_the_whole_character() {
+        let positions = [HighlightPosition { line: 0, col: 2 }];
+        let diagnostics = diagnostics_for_positions("A あ\n", &positions);
+        assert_eq!(diagnostics[0].range.start, Position::new(0, 2));
+        assert_eq!(diagnostics[0].range.end, Position::new(0, 3));
     }
 
     #[test]

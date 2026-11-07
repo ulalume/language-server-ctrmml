@@ -708,14 +708,13 @@ pub fn docs_json() -> String {
         .expect("docs::all_docs serializes to JSON")
 }
 
-/// Resolve a hover at `(line, col)` (zero-based) in `text`. Returns a JSON
-/// object `{ markdown, line, start, end }` (the column range is in byte
-/// offsets within the line, which equal char / UTF-16 offsets for ASCII
-/// MML), or the literal `"null"` when the cursor isn't on a documented
-/// construct.
+/// Resolve a hover at `(line, col)` (zero-based, `col` in UTF-16 code
+/// units) in `text`. Returns a JSON object `{ markdown, line, start, end }`
+/// with the range in UTF-16 code units, or the literal `"null"` when the
+/// cursor isn't on a documented construct.
 #[wasm_bindgen]
 pub fn hover_at_json(text: &str, line: u32, col: u32) -> String {
-    serde_json::to_string(&ctrmml_lang_core::hover_at(text, line, col))
+    serde_json::to_string(&ctrmml_lang_core::hover_at_utf16(text, line, col))
         .expect("hover info serializes to JSON")
 }
 

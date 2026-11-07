@@ -9,6 +9,7 @@
 
 use serde::Serialize;
 
+use crate::completion::{byte_offset_to_utf16_character, utf16_character_to_byte_offset};
 use crate::docs::{self, DocEntry};
 use crate::instrument_header::{
     instrument_header_at, instrument_header_for_keyword_line, InstrumentHeader,
@@ -96,6 +97,18 @@ pub fn hover_at(text: &str, line: u32, col: u32) -> Option<HoverInfo> {
         .or_else(|| track_hit(line_content, col_usize))
         .or_else(|| hover_hit_line(line_content, col_usize))?;
     Some(hit.into_info(line))
+}
+
+/// [`hover_at`] with the column and the returned range in UTF-16 code
+/// units, as LSP and Monaco count them.
+pub fn hover_at_utf16(text: &str, line: u32, character: u32) -> Option<HoverInfo> {
+    let doc = BorrowedLinesModel::from_text(text);
+    let line_text = doc.get_line_content(line.saturating_add(1));
+    let col = utf16_character_to_byte_offset(line_text, character);
+    let mut info = hover_at(text, line, col as u32)?;
+    info.start = byte_offset_to_utf16_character(line_text, info.start as usize);
+    info.end = byte_offset_to_utf16_character(line_text, info.end as usize);
+    Some(info)
 }
 
 /// Format `(label, body)` into the same markdown shape used by the web
@@ -1014,6 +1027,14 @@ mod tests {
         let info = hover_at("@2 PSG 15\n", 0, 7).expect("PSG volume hover");
         assert!(info.markdown.starts_with("`PSG envelope volume`"));
         assert_eq!(span(&info), (7, 9));
+    }
+
+    #[test]
+    fn utf16_hover_counts_columns_after_japanese_text() {
+        // `あ` is one UTF-16 unit and three bytes.
+        let info = hover_at_utf16("A 'あ' @1 c", 0, 7).expect("hover on @1");
+        assert_eq!(span(&info), (6, 8));
+        assert!(info.markdown.starts_with("`@<num>`"));
     }
 
     #[test]
