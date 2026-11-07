@@ -16,8 +16,8 @@ use std::collections::HashMap;
 
 use ctrmml_lang_core::{
     find_enclosing_track_selector, find_fm_block_at, find_psg_block_at, generate_measure_rests,
-    is_after_bar_line, scan_time_signature, track_selector::LineReader, CursorTickData, LinesModel,
-    TimeSignature,
+    is_after_bar_line, scan_time_signature, track_selector::LineReader, BorrowedLinesModel,
+    CursorTickData, TimeSignature,
 };
 use serde::Deserialize;
 use tower_lsp::lsp_types::{
@@ -88,7 +88,7 @@ fn pre_check<'a>(
 ) -> Option<(TimeSignature, bool)> {
     let line = line_zero_based + 1;
     let col = character + 1;
-    let model = LinesModel::from_text(doc_text);
+    let model = BorrowedLinesModel::from_text(doc_text);
 
     if find_fm_block_at(&model, line).is_some() {
         return None;

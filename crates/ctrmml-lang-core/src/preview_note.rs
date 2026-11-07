@@ -29,8 +29,9 @@ use serde::Serialize;
 
 use crate::brace_state::BraceState;
 use crate::key_sig::scan_key_sig_at;
+use crate::key_sig::KeySig;
 use crate::octave_scan::scan_brace_state_at;
-use crate::string_model::LinesModel;
+use crate::string_model::BorrowedLinesModel;
 use crate::text_scan::{is_in_comment, is_in_key_sig};
 use crate::track_selector::{
     find_enclosing_track_selector_at, parse_leading_track_selector, LineReader,
@@ -75,7 +76,7 @@ pub struct PreviewNoteHit {
 /// (comment, key-sig block, no enclosing track, non-note character,
 /// `+`/`-` not following a note, …).
 pub fn preview_note_at(text: &str, line: u32, col: u32, typed: char) -> Option<PreviewNoteHit> {
-    let model = LinesModel::from_text(text);
+    let model = BorrowedLinesModel::from_text(text);
     let line_one_based = line.saturating_add(1);
     let col_zero = col as usize;
 
@@ -131,7 +132,7 @@ pub fn preview_note_at(text: &str, line: u32, col: u32, typed: char) -> Option<P
         return None;
     }
 
-    let key_sig_accidental = context.key_sig_offset(semitone_letter) as i32;
+    let key_sig_accidental = context.key_sig_offset(semitone_letter);
     let effective_accidental = accidental_override.unwrap_or(key_sig_accidental);
     let octave = context.octave;
     let midi_signed = (octave - 1) * 12 + semitone + effective_accidental;
@@ -174,27 +175,17 @@ struct Context {
     octave: i32,
     noise_mode: u8,
     has_track: bool,
-    /// 12-entry key-sig offsets keyed by `c..b`.
-    key_sig_offsets: [i32; 7],
+    key_sig: KeySig,
 }
 
 impl Context {
     fn key_sig_offset(&self, letter: char) -> i32 {
-        let idx = match letter {
-            'c' => 0,
-            'd' => 1,
-            'e' => 2,
-            'f' => 3,
-            'g' => 4,
-            'a' => 5,
-            'b' | 'h' => 6,
-            _ => return 0,
-        };
-        self.key_sig_offsets[idx]
+        let letter = if letter == 'h' { 'b' } else { letter };
+        self.key_sig.get_or_zero(letter) as i32
     }
 }
 
-fn scan_context(model: &LinesModel, line: u32, col: u32) -> Context {
+fn scan_context(model: &dyn LineReader, line: u32, col: u32) -> Context {
     let mut tempo: i32 = -1;
     let mut length: i32 = -1;
     let mut quantize: i32 = -1;
@@ -254,10 +245,6 @@ fn scan_context(model: &LinesModel, line: u32, col: u32) -> Context {
     let octave = octaves.get(active).copied().unwrap_or(DEFAULT_OCTAVE);
 
     let key_sig = scan_key_sig_at(model, line, col);
-    let mut key_sig_offsets = [0i32; 7];
-    for (i, letter) in ['c', 'd', 'e', 'f', 'g', 'a', 'b'].iter().enumerate() {
-        key_sig_offsets[i] = key_sig.get_or_zero(*letter) as i32;
-    }
 
     Context {
         tempo: if tempo >= 0 {
@@ -287,7 +274,7 @@ fn scan_context(model: &LinesModel, line: u32, col: u32) -> Context {
             _ => 0,
         },
         has_track,
-        key_sig_offsets,
+        key_sig,
     }
 }
 

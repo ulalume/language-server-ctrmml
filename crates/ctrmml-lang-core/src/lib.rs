@@ -68,7 +68,7 @@ pub use psg_parser::{
     compute_timeline, node_effective_length, node_start_frame, parse_psg_mml, serialize_psg_mml,
     total_duration, PsgEnvelope, PsgNode, TimePoint,
 };
-pub use string_model::LinesModel;
+pub use string_model::{BorrowedLinesModel, LinesModel};
 pub use text_scan::{
     double_quote_bounds, is_at_number, is_in_comment, is_in_key_sig, single_quote_bounds, token_at,
     tokenize_outside_double_quotes,

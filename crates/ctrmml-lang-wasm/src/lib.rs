@@ -24,7 +24,7 @@ use ctrmml_lang_core::{
         ChordSize, RootAccidental, CHORDS_3, CHORDS_4,
     },
     transpose::{transpose_selection, Direction, Selection},
-    KeySig, LinesModel,
+    BorrowedLinesModel, KeySig,
 };
 use wasm_bindgen::prelude::*;
 
@@ -79,7 +79,7 @@ pub fn transpose(
     end_column: u32,
     direction: i32,
 ) -> Option<TransposeResult> {
-    let model = LinesModel::from_text(doc_text);
+    let model = BorrowedLinesModel::from_text(doc_text);
     let dir = if direction >= 0 {
         Direction::Up
     } else {
@@ -392,7 +392,7 @@ pub fn scan_channel_context(
     num_channels: u32,
     track_line: u32,
 ) -> ChannelContextResult {
-    let model = LinesModel::from_text(doc_text);
+    let model = BorrowedLinesModel::from_text(doc_text);
     let track_line = if track_line == 0 {
         None
     } else {
@@ -425,7 +425,7 @@ pub fn scan_channel_context(
 /// Replaces `scanKeySigAt` from `web-ctrmml/src/mml/key-sig.ts`.
 #[wasm_bindgen]
 pub fn scan_key_sig(doc_text: &str, line: u32, column: u32) -> Vec<i8> {
-    let model = LinesModel::from_text(doc_text);
+    let model = BorrowedLinesModel::from_text(doc_text);
     let sig = ctrmml_lang_core::scan_key_sig_at(&model, line, column);
     let letters = ['c', 'd', 'e', 'f', 'g', 'a', 'b'];
     letters.iter().map(|&l| sig.get_or_zero(l)).collect()
@@ -563,7 +563,7 @@ pub struct InstrumentBlockResult {
 /// Replaces `findFmBlockAt` from `web-ctrmml/src/mml/block-finder.ts`.
 #[wasm_bindgen]
 pub fn find_fm_block_at(doc_text: &str, line: u32) -> Option<InstrumentBlockResult> {
-    let model = LinesModel::from_text(doc_text);
+    let model = BorrowedLinesModel::from_text(doc_text);
     ctrmml_lang_core::find_fm_block_at(&model, line).map(|b| InstrumentBlockResult {
         start_line: b.start_line,
         end_line: b.end_line,
@@ -576,7 +576,7 @@ pub fn find_fm_block_at(doc_text: &str, line: u32) -> Option<InstrumentBlockResu
 /// Replaces `findPsgBlockAt` from `web-ctrmml/src/mml/block-finder.ts`.
 #[wasm_bindgen]
 pub fn find_psg_block_at(doc_text: &str, line: u32) -> Option<InstrumentBlockResult> {
-    let model = LinesModel::from_text(doc_text);
+    let model = BorrowedLinesModel::from_text(doc_text);
     ctrmml_lang_core::find_psg_block_at(&model, line).map(|b| InstrumentBlockResult {
         start_line: b.start_line,
         end_line: b.end_line,
@@ -673,7 +673,7 @@ pub fn parse_leading_track_selector(line: &str) -> Option<LeadingTrackSelectorRe
 /// the line number rather than the full selector span list).
 #[wasm_bindgen]
 pub fn find_track_selector_line(doc_text: &str, line: u32) -> u32 {
-    let model = LinesModel::from_text(doc_text);
+    let model = BorrowedLinesModel::from_text(doc_text);
     ctrmml_lang_core::find_enclosing_track_selector_at(&model, line)
         .map(|(_sel, ln)| ln)
         .unwrap_or(0)

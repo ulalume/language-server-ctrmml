@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use ctrmml_lang_core::{
     transpose::{transpose_selection, Direction, Selection},
-    LinesModel,
+    BorrowedLinesModel,
 };
 use serde_json::{json, Value};
 use tower_lsp::lsp_types::{
@@ -136,7 +136,7 @@ pub(crate) fn transpose_code_action(
     doc_text: &str,
     direction: Direction,
 ) -> Option<CodeAction> {
-    let model = LinesModel::from_text(doc_text);
+    let model = BorrowedLinesModel::from_text(doc_text);
     let sel = Selection {
         // LSP Position is 0-based; ctrmml-lang-core Selection is 1-based.
         start_line_number: range.start.line + 1,

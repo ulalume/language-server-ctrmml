@@ -9,7 +9,7 @@
 
 use ctrmml_lang_core::{
     chord::chord_natural_semitones, find_enclosing_track_selector, find_fm_block_at,
-    find_psg_block_at, scan_brace_state_at, scan_key_sig_at, LinesModel,
+    find_psg_block_at, scan_brace_state_at, scan_key_sig_at, BorrowedLinesModel,
 };
 
 const NOTE_NAMES_SHARP: [&str; 12] = [
@@ -84,7 +84,7 @@ pub(crate) fn note_hover_text(
 
     let line = line_zero_based + 1;
     let col = character + 1;
-    let model = LinesModel::from_text(doc_text);
+    let model = BorrowedLinesModel::from_text(doc_text);
 
     // Suppress inside FM/PSG instrument blocks — bytes like `b` in
     // `1,0,12,7,0,28,b,0,5,0` aren't notes.
