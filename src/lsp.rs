@@ -5,23 +5,28 @@ use tower_lsp::{
         CodeActionOrCommand, CodeActionParams, CodeActionProviderCapability, CodeLens,
         CodeLensOptions, CodeLensParams, Command, CompletionItem, CompletionItemKind,
         CompletionItemLabelDetails, CompletionList, CompletionOptions, CompletionParams,
-        CompletionResponse, CompletionTextEdit, DidSaveTextDocumentParams, Documentation,
-        ExecuteCommandOptions, ExecuteCommandParams, GotoDefinitionParams, GotoDefinitionResponse,
-        Hover, HoverContents, HoverParams, HoverProviderCapability, InitializeParams,
-        InitializeResult, InsertTextFormat, InsertTextMode, Location, MarkupContent, MarkupKind,
-        MessageActionItem, MessageType, OneOf, Position, Range, SaveOptions, ServerCapabilities,
-        TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions,
-        TextDocumentSyncSaveOptions, TextEdit,
+        CompletionResponse, CompletionTextEdit, DidChangeTextDocumentParams,
+        DidCloseTextDocumentParams, DidOpenTextDocumentParams, DidSaveTextDocumentParams,
+        Documentation, ExecuteCommandOptions, ExecuteCommandParams, GotoDefinitionParams,
+        GotoDefinitionResponse, Hover, HoverContents, HoverParams, HoverProviderCapability,
+        InitializeParams, InitializeResult, InsertTextFormat, InsertTextMode, Location,
+        MarkupContent, MarkupKind, MessageActionItem, MessageType, OneOf, Position, Range,
+        SaveOptions, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
+        TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit,
     },
     LanguageServer,
 };
 
+use std::time::Duration;
+
 use crate::backend::{Backend, Session};
+use crate::check::CHECK_DEBOUNCE;
 use crate::completion::scan_pcm_paths;
 use crate::config::{
     apply_completion_client_defaults, completion_settings_from_value, config_from_value,
     ClientKind, Config,
 };
+use crate::diagnostics::publish_check_diagnostics;
 use crate::export::ExportFormat;
 use crate::fill_measure::{fetch_cursor_tick, fill_measure_code_action};
 use crate::lsp_commands::{
@@ -139,15 +144,15 @@ impl LanguageServer for Backend {
         })
     }
 
-    async fn did_open(&self, params: tower_lsp::lsp_types::DidOpenTextDocumentParams) {
+    async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
         let text = params.text_document.text;
         self.docs.write().await.insert(uri.clone(), text);
         *self.last_doc.write().await = Some(uri.clone());
-        let _ = self.run_check(uri).await;
+        self.schedule_check(uri, Duration::ZERO);
     }
 
-    async fn did_change(&self, params: tower_lsp::lsp_types::DidChangeTextDocumentParams) {
+    async fn did_change(&self, params: DidChangeTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
         let mut latest_text: Option<String> = None;
         if let Some(change) = params.content_changes.into_iter().last() {
@@ -164,12 +169,26 @@ impl LanguageServer for Backend {
         if let Some(text) = latest_text.as_ref() {
             self.push_playback_update(&uri, text).await;
         }
-        let _ = self.run_check(uri).await;
+        self.schedule_check(uri, CHECK_DEBOUNCE);
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        self.schedule_check(params.text_document.uri.to_string(), Duration::ZERO);
+    }
+
+    /// Forget the document and its check results. A playback started from
+    /// it keeps playing until stopped.
+    async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri.to_string();
-        let _ = self.run_check(uri).await;
+        self.docs.write().await.remove(&uri);
+        self.cancel_check(&uri);
+        {
+            let mut last_doc = self.last_doc.write().await;
+            if last_doc.as_deref() == Some(uri.as_str()) {
+                *last_doc = None;
+            }
+        }
+        publish_check_diagnostics(&self.client, &self.diagnostics, &uri, Vec::new()).await;
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {

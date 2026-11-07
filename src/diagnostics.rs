@@ -157,83 +157,6 @@ fn diagnostic_for_check_message(
     })
 }
 
-pub(crate) fn diagnostic_for_check(text: &str, output: &str) -> Option<Diagnostic> {
-    let (line_idx, col_idx, message) = output
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                return None;
-            }
-            parse_error_line(trimmed)
-        })
-        .next()?;
-    let lines: Vec<&str> = text.lines().collect();
-    let mut col = col_idx;
-    let line_len = lines
-        .get(line_idx as usize)
-        .map(|line| line.len() as u32)
-        .unwrap_or(0);
-    if col > line_len {
-        col = line_len;
-    }
-    let end = if line_len == 0 {
-        col
-    } else {
-        (col + 1).min(line_len)
-    };
-    Some(Diagnostic {
-        range: Range {
-            start: Position::new(line_idx, col),
-            end: Position::new(line_idx, end),
-        },
-        severity: Some(DiagnosticSeverity::ERROR),
-        source: Some("ctrmml-check".to_string()),
-        message,
-        ..Diagnostic::default()
-    })
-}
-
-fn parse_error_line(line: &str) -> Option<(u32, u32, String)> {
-    let line = line.strip_prefix("Playback error: ").unwrap_or(line).trim();
-    if let Some(rest) = line.strip_prefix("line ") {
-        let mut parts = rest.splitn(2, ':');
-        let line_str = parts.next()?.trim();
-        let message = parts.next()?.trim_start();
-        let line_num: u32 = line_str.parse().ok()?;
-        return Some((line_num.saturating_sub(1), 0, message.to_string()));
-    }
-
-    let parts: Vec<&str> = line.split(':').collect();
-    if parts.len() < 3 {
-        return None;
-    }
-
-    for idx in (1..parts.len() - 1).rev() {
-        let col_str = parts[idx].trim();
-        if col_str.is_empty() || !col_str.chars().all(|c| c.is_ascii_digit()) {
-            continue;
-        }
-        let line_str = parts[idx - 1].trim();
-        if line_str.is_empty() || !line_str.chars().all(|c| c.is_ascii_digit()) {
-            continue;
-        }
-        let line_num: u32 = line_str.parse().ok()?;
-        let col_num: u32 = col_str.parse().ok()?;
-        let mut message = parts[idx + 1..].join(":").trim_start().to_string();
-        if let Some(stripped) = message.strip_suffix("(ctrmml-check)") {
-            message = stripped.trim_end().to_string();
-        }
-        return Some((
-            line_num.saturating_sub(1),
-            col_num.saturating_sub(1),
-            message,
-        ));
-    }
-
-    None
-}
-
 /// Per-URI diagnostic layers. `publishDiagnostics` replaces the whole set
 /// for a URI, so check results and playback markers are kept apart here
 /// and published merged.
@@ -363,7 +286,7 @@ pub(crate) async fn expire_playback_diagnostics_on_check(store: &DiagnosticStore
 
 /// Callers hold the store lock across this await so publishes reach the
 /// client in the order their layers were computed.
-async fn publish(client: &Client, uri: &str, diagnostics: Vec<Diagnostic>) {
+pub(crate) async fn publish(client: &Client, uri: &str, diagnostics: Vec<Diagnostic>) {
     if let Ok(parsed) = uri.parse() {
         client.publish_diagnostics(parsed, diagnostics, None).await;
     }

@@ -10,6 +10,7 @@ use tower_lsp::Client;
 
 use ctrmml_lang_core::completion::CompletionSettings;
 
+use crate::check::CheckQueue;
 use crate::config::{ClientKind, Config};
 use crate::ctrmml_cmd::resolve_command_path;
 use crate::diagnostics::DiagnosticStoreHandle;
@@ -36,6 +37,7 @@ pub(crate) struct Backend {
     command_path: Arc<OnceCell<String>>,
     pub(crate) fm_instrument_cache: Arc<Mutex<Option<FmInstrumentCache>>>,
     pub(crate) diagnostics: DiagnosticStoreHandle,
+    pub(crate) checks: Arc<std::sync::Mutex<CheckQueue>>,
     pub(crate) playback: Arc<Mutex<Option<Playback>>>,
     pub(crate) playback_seq: Arc<AtomicU64>,
     pub(crate) last_doc: Arc<RwLock<Option<String>>>,
@@ -50,6 +52,7 @@ impl Backend {
             command_path: Arc::default(),
             fm_instrument_cache: Arc::default(),
             diagnostics: Arc::default(),
+            checks: Arc::default(),
             playback: Arc::default(),
             playback_seq: Arc::default(),
             last_doc: Arc::default(),
