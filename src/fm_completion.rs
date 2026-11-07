@@ -296,6 +296,19 @@ mod tests {
     }
 
     #[test]
+    fn lfo_comment_carries_no_rate_when_the_patch_has_none() {
+        let mut dmp =
+            ym2612_format::convert(SAMPLE_MML.as_bytes(), "input.mml", Some("mml"), 0, "dmp")
+                .expect("convert mml to dmp");
+        dmp[3] = 2; // FMS
+        dmp[6] = 1; // AMS
+        let parsed = ym2612_format::parse(&dmp, "lfo", Some("dmp")).expect("parse dmp");
+        let mml = parsed.patches[0].mml.as_deref().expect("mml text");
+        assert!(mml.contains("; 'lfo 1 2' ; LFO"), "{mml}");
+        assert!(!mml.contains("lforate"), "{mml}");
+    }
+
+    #[test]
     fn cached_patches_convert_to_relative_core_contract() {
         let root = temp_test_dir("fm-data");
         let document_dir = root.join("songs");
