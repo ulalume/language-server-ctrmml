@@ -13,7 +13,7 @@ use crate::ctrmml_cmd::CTRMML_CMD_NAME;
 use crate::diagnostics::{
     clear_playback_diagnostics, diagnostic_for_playback_error, diagnostics_for_positions,
     expire_playback_diagnostics_on_check, publish_playback_diagnostics, DiagnosticStoreHandle,
-    HighlightPosition, PlaybackMessage,
+    PlaybackMessage, PlaybackPosition,
 };
 use crate::utils::{read_file_text, uri_to_path};
 
@@ -182,7 +182,7 @@ impl Backend {
             let mut reader = BufReader::new(stdout).lines();
             let mut playback_error_published = false;
             let mut started = false;
-            let mut last_positions: Option<Vec<HighlightPosition>> = None;
+            let mut last_positions: Option<Vec<PlaybackPosition>> = None;
             let mut file_text: Option<String> = None;
             while let Ok(Some(line)) = reader.next_line().await {
                 if seq.load(Ordering::SeqCst) != token {

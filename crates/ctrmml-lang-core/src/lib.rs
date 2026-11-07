@@ -17,6 +17,7 @@ pub mod brace_state;
 pub mod chord;
 pub mod code_lens;
 pub mod completion;
+pub mod diagnostics;
 pub mod docs;
 pub mod hover;
 pub mod instrument_header;
@@ -54,6 +55,10 @@ pub use completion::{
     CompletionPlan, CompletionSettings, CoreCommand, CoreCompletionList, CoreItem, CoreItemKind,
     CoreTextEdit, CursorTickData, DataPayload, DataRequest, EditRange, FmPatchData, InsertFormat,
     InsertSpec, Pos,
+};
+pub use diagnostics::{
+    check_report_to_diagnostics, playback_ranges, CheckDiagnostic, CheckMessage, CheckReport,
+    PlaybackPosition, Severity,
 };
 pub use hover::{hover_at, hover_at_utf16, HoverInfo};
 pub use instrument_header::{

@@ -1,76 +1,37 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use ctrmml_lang_core::byte_offset_to_utf16_character;
+use ctrmml_lang_core::{check_report_to_diagnostics, playback_ranges, EditRange, Severity};
 use serde::Deserialize;
 use tokio::sync::Mutex;
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, Url};
 use tower_lsp::Client;
 
+pub(crate) use ctrmml_lang_core::{CheckReport, PlaybackPosition};
+
 #[derive(Deserialize)]
 #[serde(tag = "type")]
 pub(crate) enum PlaybackMessage {
     #[serde(rename = "highlight")]
-    Highlight { positions: Vec<HighlightPosition> },
+    Highlight { positions: Vec<PlaybackPosition> },
     #[serde(rename = "playback_error")]
     PlaybackError { message: String },
 }
 
-#[derive(Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct HighlightPosition {
-    pub(crate) line: u32,
-    pub(crate) col: u32,
-}
-
-#[derive(Deserialize)]
-pub(crate) struct CheckReport {
-    #[serde(default)]
-    pub(crate) errors: Vec<CheckMessage>,
-    #[serde(default)]
-    pub(crate) warnings: Vec<CheckMessage>,
-}
-
-#[derive(Deserialize)]
-pub(crate) struct CheckMessage {
-    #[serde(default)]
-    pub(crate) message: String,
-    #[serde(default)]
-    pub(crate) line: u32,
-    #[serde(default)]
-    pub(crate) col: u32,
-    #[serde(default)]
-    pub(crate) length: u32,
-    #[serde(default)]
-    pub(crate) code: String,
-}
-
 pub(crate) fn diagnostics_for_positions(
     text: &str,
-    positions: &[HighlightPosition],
+    positions: &[PlaybackPosition],
 ) -> Vec<Diagnostic> {
-    let lines = split_lines(text);
-    let mut seen = std::collections::HashSet::new();
-    let mut out = Vec::new();
-
-    for pos in positions {
-        let Some(line) = lines.get(pos.line as usize) else {
-            continue;
-        };
-        if !seen.insert((pos.line, pos.col)) {
-            continue;
-        }
-        let start = floor_char_boundary(line, pos.col as usize);
-        let end = ceil_char_boundary(line, start + 1);
-        out.push(Diagnostic {
-            range: utf16_range(line, pos.line, start, end),
+    playback_ranges(text, positions)
+        .into_iter()
+        .map(|range| Diagnostic {
+            range: lsp_range(range),
             severity: Some(DiagnosticSeverity::HINT),
             source: Some("ctrmml-playback".to_string()),
             message: "playback".to_string(),
             ..Diagnostic::default()
-        });
-    }
-
-    out
+        })
+        .collect()
 }
 
 pub(crate) fn diagnostic_for_playback_error(message: String) -> Diagnostic {
@@ -87,80 +48,26 @@ pub(crate) fn diagnostic_for_playback_error(message: String) -> Diagnostic {
 }
 
 pub(crate) fn diagnostics_for_check_report(text: &str, report: &CheckReport) -> Vec<Diagnostic> {
-    let lines = split_lines(text);
-    let errors = report
-        .errors
-        .iter()
-        .map(|msg| (msg, DiagnosticSeverity::ERROR));
-    let warnings = report
-        .warnings
-        .iter()
-        .map(|msg| (msg, DiagnosticSeverity::WARNING));
-    errors
-        .chain(warnings)
-        .filter_map(|(msg, severity)| diagnostic_for_check_message(&lines, msg, severity))
+    check_report_to_diagnostics(text, report)
+        .into_iter()
+        .map(|diagnostic| Diagnostic {
+            range: lsp_range(diagnostic.range),
+            severity: Some(match diagnostic.severity {
+                Severity::Error => DiagnosticSeverity::ERROR,
+                Severity::Warning => DiagnosticSeverity::WARNING,
+            }),
+            source: Some("ctrmml-check".to_string()),
+            message: diagnostic.message,
+            code: diagnostic.code.map(NumberOrString::String),
+            ..Diagnostic::default()
+        })
         .collect()
 }
 
-/// `message` carries a 1-based line and byte column and a byte length.
-fn diagnostic_for_check_message(
-    lines: &[&str],
-    message: &CheckMessage,
-    severity: DiagnosticSeverity,
-) -> Option<Diagnostic> {
-    if message.message.trim().is_empty() {
-        return None;
-    }
-    let line_idx = message.line.saturating_sub(1);
-    let line = lines.get(line_idx as usize).copied().unwrap_or("");
-    let start = floor_char_boundary(line, message.col.saturating_sub(1) as usize);
-    let end = if line.is_empty() {
-        start
-    } else {
-        ceil_char_boundary(line, start + message.length.max(1) as usize)
-    };
-    let code = if message.code.trim().is_empty() {
-        None
-    } else {
-        Some(NumberOrString::String(message.code.clone()))
-    };
-    Some(Diagnostic {
-        range: utf16_range(line, line_idx, start, end),
-        severity: Some(severity),
-        source: Some("ctrmml-check".to_string()),
-        message: message.message.clone(),
-        code,
-        ..Diagnostic::default()
-    })
-}
-
-fn split_lines(text: &str) -> Vec<&str> {
-    text.split('\n')
-        .map(|line| line.strip_suffix('\r').unwrap_or(line))
-        .collect()
-}
-
-fn floor_char_boundary(line: &str, index: usize) -> usize {
-    let mut index = index.min(line.len());
-    while !line.is_char_boundary(index) {
-        index -= 1;
-    }
-    index
-}
-
-fn ceil_char_boundary(line: &str, index: usize) -> usize {
-    let mut index = index.min(line.len());
-    while !line.is_char_boundary(index) {
-        index += 1;
-    }
-    index
-}
-
-/// An LSP range for the byte span `start..end` of `line`.
-fn utf16_range(line: &str, line_idx: u32, start: usize, end: usize) -> Range {
+fn lsp_range(range: EditRange) -> Range {
     Range {
-        start: Position::new(line_idx, byte_offset_to_utf16_character(line, start)),
-        end: Position::new(line_idx, byte_offset_to_utf16_character(line, end)),
+        start: Position::new(range.start.line, range.start.character),
+        end: Position::new(range.end.line, range.end.character),
     }
 }
 
@@ -429,8 +336,8 @@ mod tests {
         assert!(store.entries.is_empty());
     }
 
-    fn check_message(line: u32, col: u32, length: u32) -> CheckMessage {
-        CheckMessage {
+    fn check_message(line: u32, col: u32, length: u32) -> ctrmml_lang_core::CheckMessage {
+        ctrmml_lang_core::CheckMessage {
             message: "bad".to_string(),
             line,
             col,
@@ -456,7 +363,7 @@ mod tests {
 
     #[test]
     fn highlight_ranges_count_utf16_units_after_japanese_text() {
-        let positions = [HighlightPosition { line: 0, col: 8 }];
+        let positions = [PlaybackPosition { line: 0, col: 8 }];
         let diagnostics = diagnostics_for_positions("A 'あ' c\n", &positions);
         assert_eq!(diagnostics[0].range.start, Position::new(0, 6));
         assert_eq!(diagnostics[0].range.end, Position::new(0, 7));
@@ -464,7 +371,7 @@ mod tests {
 
     #[test]
     fn highlights_on_multibyte_text_cover_the_whole_character() {
-        let positions = [HighlightPosition { line: 0, col: 2 }];
+        let positions = [PlaybackPosition { line: 0, col: 2 }];
         let diagnostics = diagnostics_for_positions("A あ\n", &positions);
         assert_eq!(diagnostics[0].range.start, Position::new(0, 2));
         assert_eq!(diagnostics[0].range.end, Position::new(0, 3));
