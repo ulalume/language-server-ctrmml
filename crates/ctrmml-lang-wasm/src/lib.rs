@@ -884,6 +884,18 @@ pub fn preview_note_at_json(text: &str, line: u32, col: u32, typed_char: &str) -
     serde_json::to_string(&hit).expect("preview note serializes to JSON")
 }
 
+/// The playback context at the 0-based `line` and UTF-16 `character`, from
+/// the text before the cursor. Returns `{ track_line, tracks,
+/// active_channel, octave, tempo, length, quantize, volume, key_sig,
+/// noise_mode }`; `track_line` (0-based) and `active_channel` are `null`
+/// outside a track or brace, `key_sig` holds the accidentals of
+/// `c d e f g a b`.
+#[wasm_bindgen]
+pub fn cursor_context_json(text: &str, line: u32, character: u32) -> String {
+    serde_json::to_string(&ctrmml_lang_core::cursor_context(text, line, character))
+        .expect("cursor context serializes to JSON")
+}
+
 /// Place a `ctrmml-cmd check --json` report on `text`. Returns a JSON
 /// array of `{ severity: "error" | "warning", message, code, range }`,
 /// errors first, with `range` as `{ start: { line, character }, end }`
@@ -1079,6 +1091,28 @@ mod tests {
         assert_eq!(
             playback_ranges("A 'あ' c d\nB e", &[0, 0, 1, 5], &[8, 8, 2, 0]),
             [0, 6, 7, 1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn cursor_context_json_shape() {
+        let value: serde_json::Value =
+            serde_json::from_str(&cursor_context_json("AB 'あ' t90 o4 _{-b} {c/e", 0, 23))
+                .expect("context JSON");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "track_line": 0,
+                "tracks": [0, 1],
+                "active_channel": 1,
+                "octave": 4,
+                "tempo": 90,
+                "length": 4,
+                "quantize": 8,
+                "volume": 15,
+                "key_sig": [0, 0, 0, 0, 0, 0, -1],
+                "noise_mode": 0
+            })
         );
     }
 

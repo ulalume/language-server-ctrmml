@@ -28,6 +28,7 @@
 use serde::Serialize;
 
 use crate::brace_state::BraceState;
+use crate::completion::utf16_character_to_byte_offset;
 use crate::key_sig::scan_key_sig_at;
 use crate::key_sig::KeySig;
 use crate::octave_scan::scan_brace_state_at;
@@ -165,12 +166,66 @@ fn natural_semitone(letter: char) -> Option<i32> {
 // Context scan (port of web-ctrmml `scanMmlContext`)
 // ---------------------------------------------------------------------------
 
+/// The playback context at a cursor: what the commands before it set.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CursorContext {
+    /// 0-based line of the enclosing track selector; `None` outside every
+    /// track.
+    pub track_line: Option<u32>,
+    /// Track ids of that selector (`A` is 0, `*32` is 32).
+    pub tracks: Vec<u32>,
+    /// The `{.../...}` branch the cursor is in, 0-based; `None` outside
+    /// braces.
+    pub active_channel: Option<u32>,
+    /// Octave of the cursor's channel (`o5` is 5).
+    pub octave: i32,
+    pub tempo: u32,
+    pub length: u32,
+    /// `Q` value, 1..=8.
+    pub quantize: u32,
+    /// Coarse `v` volume, 0..=15.
+    pub volume: u32,
+    /// Accidentals in semitones for `c d e f g a b`.
+    pub key_sig: [i8; 7],
+    /// The last `'mode N'` (0..=2).
+    pub noise_mode: u8,
+}
+
+/// The context at 0-based `line` and UTF-16 `character`, from the text
+/// before the cursor.
+pub fn cursor_context(text: &str, line: u32, character: u32) -> CursorContext {
+    let model = BorrowedLinesModel::from_text(text);
+    let line_number = line.saturating_add(1);
+    let byte = utf16_character_to_byte_offset(model.get_line_content(line_number), character);
+    let context = scan_context(&model, line_number, byte as u32 + 1);
+    let enclosing = context
+        .has_track
+        .then(|| find_enclosing_track_selector_at(&model, line_number))
+        .flatten();
+    CursorContext {
+        track_line: enclosing.as_ref().map(|(_, ln)| ln - 1),
+        tracks: enclosing
+            .map(|(selector, _)| selector.spans.iter().map(|span| span.track_id).collect())
+            .unwrap_or_default(),
+        active_channel: context.active_channel,
+        octave: context.octave,
+        tempo: context.tempo,
+        length: context.length,
+        quantize: context.quantize,
+        volume: context.volume,
+        key_sig: ['c', 'd', 'e', 'f', 'g', 'a', 'b']
+            .map(|letter| context.key_sig.get_or_zero(letter)),
+        noise_mode: context.noise_mode,
+    }
+}
+
 struct Context {
     tempo: u32,
     length: u32,
     quantize: u32,
     volume: u32,
     octave: i32,
+    active_channel: Option<u32>,
     noise_mode: u8,
     has_track: bool,
     key_sig: KeySig,
@@ -241,6 +296,7 @@ fn scan_context(model: &dyn LineReader, line: u32, col: u32) -> Context {
         .unwrap_or(0)
         .min(octaves.len().saturating_sub(1));
     let octave = octaves.get(active).copied().unwrap_or(DEFAULT_OCTAVE);
+    let active_channel = state.active_channel().map(|channel| channel as u32);
 
     let key_sig = scan_key_sig_at(model, line, col);
 
@@ -266,6 +322,7 @@ fn scan_context(model: &dyn LineReader, line: u32, col: u32) -> Context {
             DEFAULT_VOLUME
         },
         octave,
+        active_channel,
         noise_mode: match noise_mode {
             1 => 1,
             2 => 2,
@@ -439,6 +496,49 @@ mod tests {
         // Uppercase `C` is the whole-note-length command, not a note.
         let text = "A o5 C";
         assert!(preview_note_at(text, 0, 5, 'C').is_none());
+    }
+
+    #[test]
+    fn cursor_context_reads_the_text_before_the_cursor() {
+        let text = "#timesig 3/4\nAB t140 l8 Q6 v10 'mode 2' _{+f} o3 {c/>e} ; t90\n";
+        let ctx = cursor_context(text, 1, 41);
+        assert_eq!(ctx.track_line, Some(1));
+        assert_eq!(ctx.tracks, [0, 1]);
+        assert_eq!(ctx.active_channel, Some(1));
+        assert_eq!(ctx.octave, 4);
+        assert_eq!(
+            (ctx.tempo, ctx.length, ctx.quantize, ctx.volume),
+            (140, 8, 6, 10)
+        );
+        assert_eq!(ctx.key_sig, [0, 0, 0, 1, 0, 0, 0]);
+        assert_eq!(ctx.noise_mode, 2);
+    }
+
+    #[test]
+    fn cursor_context_defaults_outside_tracks() {
+        let ctx = cursor_context("; header\n", 0, 8);
+        assert_eq!(ctx.track_line, None);
+        assert!(ctx.tracks.is_empty());
+        assert_eq!(ctx.active_channel, None);
+        assert_eq!(ctx.octave, DEFAULT_OCTAVE);
+        assert_eq!(
+            (ctx.tempo, ctx.length, ctx.quantize, ctx.volume),
+            (
+                DEFAULT_TEMPO,
+                DEFAULT_LENGTH,
+                DEFAULT_QUANTIZE,
+                DEFAULT_VOLUME
+            )
+        );
+        assert_eq!(ctx.noise_mode, 0);
+    }
+
+    #[test]
+    fn cursor_context_columns_count_utf16_units() {
+        // `あ` is one UTF-16 unit and three bytes; the cursor sits after `>`.
+        let ctx = cursor_context("A 'あ' o4 > c", 0, 10);
+        assert_eq!(ctx.octave, 5);
+        assert_eq!(cursor_context("A 'あ' o4 > c", 0, 9).octave, 4);
     }
 
     #[test]

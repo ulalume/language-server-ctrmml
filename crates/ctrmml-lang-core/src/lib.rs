@@ -70,7 +70,7 @@ pub use instrument_header::{
 pub use instrument_preview::{build_preview_mml, extract_instrument_block, ExtractedBlock};
 pub use key_sig::{default_key_sig, parse_key_sig, scale_for_name, scan_key_sig_at, KeySig};
 pub use octave_scan::{scan_brace_state_at, scan_channel_context_at, ChannelContext};
-pub use preview_note::{preview_note_at, PreviewNoteHit};
+pub use preview_note::{cursor_context, preview_note_at, CursorContext, PreviewNoteHit};
 pub use psg_parser::{
     compute_timeline, node_effective_length, node_start_frame, parse_psg_mml, serialize_psg_mml,
     total_duration, PsgEnvelope, PsgNode, TimePoint,
