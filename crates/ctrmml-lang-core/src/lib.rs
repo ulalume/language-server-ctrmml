@@ -19,6 +19,7 @@ pub mod code_lens;
 pub mod completion;
 pub mod diagnostics;
 pub mod docs;
+pub mod fill_measure;
 pub mod hover;
 pub mod instrument_header;
 pub mod instrument_preview;
@@ -60,6 +61,7 @@ pub use diagnostics::{
     check_report_to_diagnostics, playback_ranges, CheckDiagnostic, CheckMessage, CheckReport,
     PlaybackPosition, Severity,
 };
+pub use fill_measure::{fill_measure_edit, fill_measure_plan, FillMeasureEdit, FillMeasurePlan};
 pub use hover::{hover_at, hover_at_utf16, HoverInfo};
 pub use instrument_header::{
     instrument_header_at, instrument_header_for_keyword_line, parse_at_number, InstrumentHeader,

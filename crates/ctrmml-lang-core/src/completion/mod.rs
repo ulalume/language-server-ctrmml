@@ -16,7 +16,6 @@ pub use types::{
 use crate::arpeggio::{
     chord_defs_for_arpeggio, render_chord_arpeggio_with_pattern, render_generic_arpeggio,
 };
-use crate::beat_fill::{generate_measure_rests, is_after_bar_line};
 use crate::block_finder::{find_fm_block_at, find_psg_block_at};
 use crate::chord::{
     accidental_char, render_chord, render_generic_chord, render_generic_diatonic_dyad,
@@ -29,6 +28,7 @@ use crate::docs::{
     META_KEYWORDS_TRIGGER_SUGGEST, OPTION_VALUES, PLATFORM_COMMANDS, PLATFORM_VALUES, RATE_OFFSET,
     TIMESIG_VALUES,
 };
+use crate::fill_measure::{fill_measure_edit, fill_measure_plan};
 use crate::instrument_header::{parse_at_number, strip_keyword};
 use crate::key_sig::scan_key_sig_at;
 use crate::octave_scan::scan_channel_context_at;
@@ -36,7 +36,6 @@ use crate::string_model::BorrowedLinesModel;
 use crate::text_scan::{
     is_at_number, is_in_comment, is_in_key_sig, tokenize_outside_double_quotes,
 };
-use crate::timesig::scan_time_signature;
 use crate::track_selector::{find_enclosing_track_selector, parse_leading_track_selector};
 use types::ProviderOutcome;
 
@@ -108,7 +107,11 @@ pub fn completion_plan(
 
     // D4: measure fill follows the global guards and owns the `|` trigger.
     if measure_fill_slot(prefix) {
-        return CompletionPlan::NeedsData(DataRequest::CursorTick);
+        let bar = byte_offset_to_utf16_character(line, cursor - 1);
+        return match fill_measure_plan(text, pos.line, bar) {
+            Some(_) => CompletionPlan::NeedsData(DataRequest::CursorTick),
+            None => done_empty(),
+        };
     }
 
     // D5: quoted platform commands.
@@ -1007,10 +1010,7 @@ fn resolve_measure_fill(
     pos: Pos,
     timing: Option<CursorTickData>,
 ) -> CoreCompletionList {
-    let Some(timing) = timing.filter(|timing| timing.ppqn > 0) else {
-        return CoreCompletionList::empty();
-    };
-    let Some(time_signature) = scan_time_signature(text) else {
+    let Some(timing) = timing else {
         return CoreCompletionList::empty();
     };
     let Some(line) = line_at(text, pos.line) else {
@@ -1020,21 +1020,18 @@ fn resolve_measure_fill(
     if cursor == 0 || line.as_bytes().get(cursor - 1) != Some(&b'|') {
         return CoreCompletionList::empty();
     }
-    let after_bar_line = is_after_bar_line(line, cursor as u32);
-    let rests = generate_measure_rests(
-        timing.tick,
-        timing.ppqn,
-        Some(time_signature),
-        after_bar_line,
-    );
-    if rests.is_empty() {
+    // The fill goes where the typed `|` is and replaces it.
+    let bar = byte_offset_to_utf16_character(line, cursor - 1);
+    let Some(fill) = fill_measure_edit(text, pos.line, bar, timing.tick, timing.ppqn)
+        .filter(|fill| !fill.rests.is_empty())
+    else {
         return CoreCompletionList::empty();
-    }
-    let fill = format!("{rests} |");
+    };
+    let fill = fill.edit.new_text;
     let range = EditRange::new(
         Pos {
             line: pos.line,
-            character: byte_offset_to_utf16_character(line, cursor - 1),
+            character: bar,
         },
         Pos {
             line: pos.line,
@@ -1734,6 +1731,35 @@ mod tests {
             ),
             CompletionPlan::NeedsData(DataRequest::CursorTick)
         );
+    }
+
+    #[test]
+    fn measure_fill_skips_instruments_and_ends_of_full_measures() {
+        let plan = |text: &str, character: u32| {
+            completion_plan(
+                text,
+                Pos { line: 1, character },
+                Some('|'),
+                &CompletionSettings::default(),
+            )
+        };
+        assert_eq!(plan("A c\n@1 psg 15 |", 14), done_empty());
+        assert_eq!(plan("#timesig no\nA c |", 5), done_empty());
+
+        let resolve = |tick: u32| {
+            completion_resolve(
+                "A o4 c4\nc4 c4 c4 |",
+                Pos {
+                    line: 1,
+                    character: 10,
+                },
+                Some('|'),
+                &CompletionSettings::default(),
+                DataPayload::CursorTick(Some(CursorTickData { tick, ppqn: 48 })),
+            )
+        };
+        assert!(resolve(192).items.is_empty());
+        assert_eq!(resolve(144).items[0].insert.text, "r4 |");
     }
 
     #[test]

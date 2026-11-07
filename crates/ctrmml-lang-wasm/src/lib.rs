@@ -144,44 +144,34 @@ pub fn scan_time_signature(text: &str) -> Option<TimeSignatureResult> {
 }
 
 // ---------------------------------------------------------------------------
-// Beat-fill — replaces web-ctrmml/src/mml/beat-fill.ts
+// Fill measure
 // ---------------------------------------------------------------------------
 
-/// Generate MML rest notation to fill from `cursor_tick` to the next
-/// bar line.
-///
-/// `numerator` / `denominator` describe the time signature; pass `4`
-/// and `4` for the default. When `numerator == 0` the rest sequence is
-/// always empty (matches the TS "measure lines disabled" branch).
-///
-/// `after_bar_line` controls behavior when the cursor sits exactly on
-/// a measure boundary: `true` fills a full next measure, `false`
-/// returns an empty string.
-///
-/// Replaces `generateMeasureRests` from `web-ctrmml/src/mml/beat-fill.ts`.
+/// Whether a fill applies at the 0-based `line` and UTF-16 `character`.
+/// Returns `{ numerator, denominator, after_bar_line }` or `"null"` inside
+/// `@N fm` / `@N psg` blocks, outside every track and under `#timesig no`.
 #[wasm_bindgen]
-pub fn generate_measure_rests(
-    cursor_tick: u32,
-    ppqn: u32,
-    numerator: u32,
-    denominator: u32,
-    after_bar_line: bool,
-) -> String {
-    if numerator == 0 || denominator == 0 {
-        return String::new();
-    }
-    let ts = ctrmml_lang_core::TimeSignature {
-        numerator,
-        denominator,
-    };
-    ctrmml_lang_core::generate_measure_rests(cursor_tick, ppqn, Some(ts), after_bar_line)
+pub fn fill_measure_plan_json(text: &str, line: u32, character: u32) -> String {
+    serde_json::to_string(&ctrmml_lang_core::fill_measure_plan(text, line, character))
+        .expect("fill plan serializes to JSON")
 }
 
-/// True when the text before a 1-based UTF-16 `column` ends (ignoring
-/// trailing whitespace) with a `|` bar-line marker.
+/// The fill at the position for the cursor's compiled `tick` and the
+/// song's `ppqn`. Returns `{ rests, edit: { range, new_text } }` (an
+/// insertion at the position; `rests` is empty when `new_text` only closes
+/// a full measure with ` |`) or `"null"` where no fill applies.
 #[wasm_bindgen]
-pub fn is_after_bar_line(line_content: &str, column: u32) -> bool {
-    ctrmml_lang_core::is_after_bar_line(line_content, byte_column_1(line_content, column))
+pub fn fill_measure_edit_json(
+    text: &str,
+    line: u32,
+    character: u32,
+    tick: u32,
+    ppqn: u32,
+) -> String {
+    serde_json::to_string(&ctrmml_lang_core::fill_measure_edit(
+        text, line, character, tick, ppqn,
+    ))
+    .expect("fill edit serializes to JSON")
 }
 
 // ---------------------------------------------------------------------------
@@ -1008,24 +998,30 @@ mod tests {
     }
 
     #[test]
-    fn generate_measure_rests_partial() {
-        // ppqn=48, 4/4 → tpm=192. Cursor at tick 48 → 144 left → "r2."
-        assert_eq!(generate_measure_rests(48, 48, 4, 4, false), "r2.");
-    }
+    fn fill_measure_json_shapes() {
+        let plan: serde_json::Value =
+            serde_json::from_str(&fill_measure_plan_json("A c4 |", 0, 6)).expect("plan JSON");
+        assert_eq!(
+            plan,
+            serde_json::json!({"numerator": 4, "denominator": 4, "after_bar_line": true})
+        );
+        assert_eq!(fill_measure_plan_json("#timesig no\nA c4 |", 1, 6), "null");
 
-    #[test]
-    fn generate_measure_rests_disabled_meter() {
-        assert_eq!(generate_measure_rests(48, 48, 0, 4, true), "");
-    }
-
-    #[test]
-    fn is_after_bar_line_yes() {
-        assert!(is_after_bar_line("abc |", 6));
-    }
-
-    #[test]
-    fn is_after_bar_line_no() {
-        assert!(!is_after_bar_line("abc def", 8));
+        let edit: serde_json::Value =
+            serde_json::from_str(&fill_measure_edit_json("A c4", 0, 4, 48, 48)).expect("edit JSON");
+        assert_eq!(
+            edit,
+            serde_json::json!({
+                "rests": "r2.",
+                "edit": {
+                    "range": {
+                        "start": {"line": 0, "character": 4},
+                        "end": {"line": 0, "character": 4}
+                    },
+                    "new_text": "r2. |"
+                }
+            })
+        );
     }
 
     // ---- UTF-16 columns -----------------------------------------------------
@@ -1047,8 +1043,14 @@ mod tests {
 
     #[test]
     fn bar_line_after_japanese_text_is_found() {
-        assert!(is_after_bar_line("A 'あ' c4 |", 11));
-        assert!(!is_after_bar_line("A 'あ' c4 |", 10));
+        let after_bar = |character| {
+            let plan: serde_json::Value =
+                serde_json::from_str(&fill_measure_plan_json("A 'あ' c4 |", 0, character))
+                    .expect("plan JSON");
+            plan["after_bar_line"].as_bool()
+        };
+        assert_eq!(after_bar(10), Some(true));
+        assert_eq!(after_bar(9), Some(false));
     }
 
     #[test]
