@@ -345,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn psg_track_J_labeled_as_noise() {
+    fn psg_track_j_labeled_as_noise() {
         let text = "J 'mode 0' c8 d8\n";
         let lenses = code_lens(text);
         let labels: Vec<&str> = lenses

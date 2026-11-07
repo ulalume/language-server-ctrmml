@@ -1550,7 +1550,6 @@ fn arpeggio_slot(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn arpeggio_item(
     label: String,
     body: String,
@@ -2234,7 +2233,8 @@ mod tests {
 
     #[test]
     fn meta_values_match_all_fixture_tables_and_live_word_range() {
-        let cases: [(&str, u32, &[(&str, &str)]); 4] = [
+        type Case<'a> = (&'a str, u32, &'a [(&'a str, &'a str)]);
+        let cases: [Case; 4] = [
             (
                 "#platform ",
                 10,

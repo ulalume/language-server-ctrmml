@@ -96,9 +96,7 @@ pub fn preview_note_at(text: &str, line: u32, col: u32, typed: char) -> Option<P
     // octave shifts (`<` / `>`) or arithmetic that we don't preview.
     let pulse_col = col_zero;
     let (semitone_letter, accidental_override, pulse_start, pulse_end) = match typed_lower {
-        'c' | 'd' | 'e' | 'f' | 'g' | 'a' | 'b' | 'h' => {
-            (typed_lower, None, pulse_col as u32, pulse_col as u32 + 1)
-        }
+        'a'..='h' => (typed_lower, None, pulse_col as u32, pulse_col as u32 + 1),
         '+' | '-' => {
             // Look at the previous character on the line. If it's a
             // note letter, override that note's key-sig accidental.
@@ -107,7 +105,7 @@ pub fn preview_note_at(text: &str, line: u32, col: u32, typed: char) -> Option<P
             }
             let prev = line_text.as_bytes().get(col_zero - 1).copied()? as char;
             let prev_lower = prev.to_ascii_lowercase();
-            if !matches!(prev_lower, 'c' | 'd' | 'e' | 'f' | 'g' | 'a' | 'b' | 'h') {
+            if !matches!(prev_lower, 'a'..='h') {
                 return None;
             }
             let acc: i32 = if typed_lower == '+' { 1 } else { -1 };
@@ -376,7 +374,6 @@ mod tests {
         let text = "A o5 c";
         let hit = preview_note_at(text, 0, 5, 'c').unwrap();
         assert_eq!(hit.midi, 48);
-        assert!(hit.has_track_ok());
     }
 
     #[test]
@@ -449,11 +446,5 @@ mod tests {
         // `+` on its own line — no preceding note letter to attach to.
         let text = "A +";
         assert!(preview_note_at(text, 0, 2, '+').is_none());
-    }
-
-    impl PreviewNoteHit {
-        fn has_track_ok(&self) -> bool {
-            self.midi > 0 || self.midi == 0
-        }
     }
 }

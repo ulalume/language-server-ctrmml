@@ -12,8 +12,6 @@
 //! it replaces, so the migration in Phase 5 is a mechanical
 //! file-by-file swap.
 
-#![allow(clippy::too_many_arguments)]
-
 use ctrmml_lang_core::{
     chord::{
         render_chord as core_render_chord, render_generic_chord as core_render_generic_chord,
@@ -205,7 +203,7 @@ fn decode_root_accidental(v: i32) -> Option<RootAccidental> {
 fn key_sig_from_slice(arr: &[i8]) -> KeySig {
     let mut k = KeySig::new();
     for (i, &val) in arr.iter().enumerate().take(7) {
-        let letter = [b'c', b'd', b'e', b'f', b'g', b'a', b'b'][i] as char;
+        let letter = b"cdefgab"[i] as char;
         k.set(letter, val);
     }
     k

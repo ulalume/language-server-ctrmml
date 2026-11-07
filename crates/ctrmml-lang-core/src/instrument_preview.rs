@@ -83,7 +83,7 @@ fn detect_platform(text: &str) -> Option<String> {
     for line in text.lines() {
         let trimmed = line.trim_start();
         if let Some(rest) = trimmed.strip_prefix("#platform") {
-            let value = rest.trim().split_whitespace().next()?;
+            let value = rest.split_whitespace().next()?;
             return Some(value.to_string());
         }
     }

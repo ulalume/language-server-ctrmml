@@ -372,7 +372,7 @@ async fn write_update_frame(
     stdin: &mut ChildStdin,
     text: &str,
 ) -> std::result::Result<(), std::io::Error> {
-    let header = format!("UPDATE {}\n", text.as_bytes().len());
+    let header = format!("UPDATE {}\n", text.len());
     stdin.write_all(header.as_bytes()).await?;
     stdin.write_all(text.as_bytes()).await?;
     stdin.write_all(b"\n").await?;

@@ -30,7 +30,7 @@ fn build_duration_table(ppqn: u32) -> Vec<DurationEntry> {
     let mut entries: Vec<DurationEntry> = Vec::with_capacity(DENOMINATORS.len() * 3);
 
     for &d in &DENOMINATORS {
-        if whole % d != 0 {
+        if !whole.is_multiple_of(d) {
             continue;
         }
         let base = whole / d;

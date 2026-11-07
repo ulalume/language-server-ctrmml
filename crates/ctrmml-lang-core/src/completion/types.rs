@@ -228,26 +228,6 @@ fn normalize_setting_variant(value: &str) -> String {
     value.to_ascii_lowercase().replace('-', "_")
 }
 
-#[cfg(test)]
-mod tests {
-    use serde::de::value::{Error, StringDeserializer};
-
-    use super::*;
-
-    #[test]
-    fn completion_setting_enums_accept_case_and_separator_variants() {
-        let arpeggio =
-            ArpeggioPattern::deserialize(StringDeserializer::<Error>::new("UpDown".to_string()))
-                .expect("mixed-case arpeggio pattern");
-        let chord =
-            ChordStackMode::deserialize(StringDeserializer::<Error>::new("stack-up".to_string()))
-                .expect("hyphenated chord stack mode");
-
-        assert_eq!(arpeggio, ArpeggioPattern::UpDown);
-        assert_eq!(chord, ChordStackMode::StackUp);
-    }
-}
-
 /// Host data requested by a completion provider.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -317,4 +297,24 @@ pub enum CompletionPlan {
 pub(crate) enum ProviderOutcome {
     NotApplicable,
     Exclusive(CoreCompletionList),
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::de::value::{Error, StringDeserializer};
+
+    use super::*;
+
+    #[test]
+    fn completion_setting_enums_accept_case_and_separator_variants() {
+        let arpeggio =
+            ArpeggioPattern::deserialize(StringDeserializer::<Error>::new("UpDown".to_string()))
+                .expect("mixed-case arpeggio pattern");
+        let chord =
+            ChordStackMode::deserialize(StringDeserializer::<Error>::new("stack-up".to_string()))
+                .expect("hyphenated chord stack mode");
+
+        assert_eq!(arpeggio, ArpeggioPattern::UpDown);
+        assert_eq!(chord, ChordStackMode::StackUp);
+    }
 }
