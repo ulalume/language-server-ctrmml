@@ -19,6 +19,7 @@ pub mod code_lens;
 pub mod completion;
 pub mod docs;
 pub mod hover;
+pub mod instrument_header;
 pub mod instrument_preview;
 pub mod key_sig;
 pub mod octave_scan;
@@ -38,9 +39,7 @@ pub use arpeggio::{
 pub use beat_fill::{
     generate_measure_rests, is_after_bar_line, measure_remainder_ticks, ticks_to_mml_rest,
 };
-pub use block_finder::{
-    find_block_at, find_fm_block_at, find_psg_block_at, InstrumentBlock, InstrumentKind,
-};
+pub use block_finder::{find_block_at, find_fm_block_at, find_psg_block_at, InstrumentBlock};
 pub use brace_state::BraceState;
 pub use chord::{
     accidental_char, chord_natural_semitones, render_chord, render_generic_chord,
@@ -57,9 +56,11 @@ pub use completion::{
     InsertSpec, Pos,
 };
 pub use hover::{hover_at, HoverInfo};
-pub use instrument_preview::{
-    build_preview_mml, extract_instrument_block, ExtractedBlock, InstrumentType,
+pub use instrument_header::{
+    instrument_header_at, instrument_header_for_keyword_line, parse_at_number, InstrumentHeader,
+    InstrumentType,
 };
+pub use instrument_preview::{build_preview_mml, extract_instrument_block, ExtractedBlock};
 pub use key_sig::{default_key_sig, parse_key_sig, scale_for_name, scan_key_sig_at, KeySig};
 pub use octave_scan::{scan_brace_state_at, scan_channel_context_at, ChannelContext};
 pub use preview_note::{preview_note_at, PreviewNoteHit};

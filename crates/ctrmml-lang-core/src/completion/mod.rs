@@ -27,6 +27,7 @@ use crate::docs::{
     META_KEYWORDS_TRIGGER_SUGGEST, OPTION_VALUES, PLATFORM_COMMANDS, PLATFORM_VALUES, RATE_OFFSET,
     TIMESIG_VALUES,
 };
+use crate::instrument_header::{parse_at_number, strip_keyword};
 use crate::key_sig::scan_key_sig_at;
 use crate::octave_scan::scan_channel_context_at;
 use crate::string_model::BorrowedLinesModel;
@@ -412,7 +413,9 @@ struct PcmPathContext {
 
 fn pcm_path_context(prefix: &str) -> Option<PcmPathContext> {
     if prefix.bytes().filter(|byte| *byte == b'"').count() % 2 == 0
-        || !prefix.split_whitespace().any(|token| token == "pcm")
+        || !prefix
+            .split_whitespace()
+            .any(|token| token.eq_ignore_ascii_case("pcm"))
     {
         return None;
     }
@@ -528,20 +531,8 @@ struct FmPatchContext {
 }
 
 fn fm_patch_context(prefix: &str, hierarchy: bool) -> Option<FmPatchContext> {
-    let trimmed = prefix.trim_start();
-    let leading = prefix.len() - trimmed.len();
-    let after_at = trimmed.strip_prefix('@')?;
-    let digits = after_at.bytes().take_while(u8::is_ascii_digit).count();
-    if digits == 0 {
-        return None;
-    }
-    let after_digits = &after_at[digits..];
-    if !after_digits.chars().next().is_some_and(char::is_whitespace) {
-        return None;
-    }
-    let before_fm = after_digits.len() - after_digits.trim_start().len();
-    let fm_and_after = &after_digits[before_fm..];
-    let after_fm = fm_and_after.strip_prefix("fm")?;
+    let keyword_start = instrument_keyword_start(prefix)?;
+    let after_fm = strip_keyword(&prefix[keyword_start..], "fm")?;
     if after_fm
         .chars()
         .next()
@@ -557,26 +548,14 @@ fn fm_patch_context(prefix: &str, hierarchy: bool) -> Option<FmPatchContext> {
         })
         .flatten();
     Some(FmPatchContext {
-        fm_end: leading + 1 + digits + before_fm + 2,
+        fm_end: keyword_start + 2,
         fragment,
     })
 }
 
 fn pcm_instrument_context(prefix: &str) -> Option<usize> {
-    let trimmed = prefix.trim_start();
-    let leading = prefix.len() - trimmed.len();
-    let after_at = trimmed.strip_prefix('@')?;
-    let digits = after_at.bytes().take_while(u8::is_ascii_digit).count();
-    if digits == 0 {
-        return None;
-    }
-    let after_digits = &after_at[digits..];
-    if !after_digits.chars().next().is_some_and(char::is_whitespace) {
-        return None;
-    }
-    let before_pcm = after_digits.len() - after_digits.trim_start().len();
-    let pcm_and_after = &after_digits[before_pcm..];
-    let after_pcm = pcm_and_after.strip_prefix("pcm")?;
+    let keyword_start = instrument_keyword_start(prefix)?;
+    let after_pcm = strip_keyword(&prefix[keyword_start..], "pcm")?;
     if after_pcm
         .chars()
         .next()
@@ -584,7 +563,17 @@ fn pcm_instrument_context(prefix: &str) -> Option<usize> {
     {
         return None;
     }
-    Some(leading + 1 + digits + before_pcm + 3)
+    Some(keyword_start + 3)
+}
+
+/// Byte offset of the type keyword after a leading `@N` and whitespace.
+fn instrument_keyword_start(prefix: &str) -> Option<usize> {
+    let (_, after_number) = parse_at_number(prefix)?;
+    let after_digits = &prefix[after_number..];
+    if !after_digits.chars().next().is_some_and(char::is_whitespace) {
+        return None;
+    }
+    Some(prefix.len() - after_digits.trim_start().len())
 }
 
 fn resolve_pcm_paths(text: &str, pos: Pos, paths: Vec<String>) -> CoreCompletionList {
@@ -1139,15 +1128,10 @@ fn instrument_type_slot(line: &str, cursor: usize, line_index: u32) -> ProviderO
 }
 
 fn is_instrument_type_context(prefix: &str) -> bool {
-    let trimmed = prefix.trim_start();
-    let Some(after_at) = trimmed.strip_prefix('@') else {
+    let Some((_, after_number)) = parse_at_number(prefix) else {
         return false;
     };
-    let digits = after_at.bytes().take_while(u8::is_ascii_digit).count();
-    if digits == 0 {
-        return false;
-    }
-    let Some(after_space) = after_at[digits..].strip_prefix(' ') else {
+    let Some(after_space) = prefix[after_number..].strip_prefix(' ') else {
         return false;
     };
     let typed = after_space.trim_start();

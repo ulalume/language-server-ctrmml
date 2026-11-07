@@ -39,8 +39,9 @@ use ctrmml_lang_core::completion::{
 };
 use ctrmml_lang_core::transpose::Direction;
 use ctrmml_lang_core::{
-    build_preview_mml, code_lens_with_config, extract_instrument_block, hover_at, is_in_comment,
-    token_at, CodeLensConfig, IconStyle, InstrumentType,
+    build_preview_mml, code_lens_with_config, extract_instrument_block, hover_at,
+    instrument_header::strip_keyword, is_in_comment, token_at, CodeLensConfig, IconStyle,
+    InstrumentType,
 };
 
 #[tower_lsp::async_trait]
@@ -247,18 +248,10 @@ impl LanguageServer for Backend {
             return Ok(None);
         }
 
-        let target = match definition_target_at(&line, col) {
-            Some(value) => value,
-            None => return Ok(None),
+        let Some(target) = definition_target_at(&line, col) else {
+            return Ok(None);
         };
-
-        let range = match target {
-            DefinitionTarget::Instrument(num) => find_instrument_definition(&text, &num),
-            DefinitionTarget::AtMeta { prefix, num } => {
-                find_prefixed_definition(&text, prefix, &num)
-            }
-            DefinitionTarget::Track(num) => find_track_definition(&text, &num),
-        };
+        let range = find_definition(&text, &target);
 
         if let Some(range) = range {
             let location = Location {
@@ -1084,142 +1077,46 @@ fn best_workspace_root(
     best
 }
 
-enum DefinitionTarget {
-    Instrument(String),
-    AtMeta { prefix: &'static str, num: String },
-    Track(String),
+/// A `prefix<digits>` reference: `@N` instruments, `@EN` / `@MN` / `@PN`
+/// definitions and `*N` tracks.
+struct DefinitionTarget {
+    prefix: &'static str,
+    digits: String,
 }
 
 fn definition_target_at(line: &str, col: usize) -> Option<DefinitionTarget> {
     let (token, _start, _end) = token_at(line, col)?;
-    let mut chars = token.chars();
-    let first = chars.next()?;
-    if first == '@' {
-        let rest: String = chars.collect();
-        if let Some(stripped) = rest.strip_prefix('E') {
-            let digits = stripped
-                .chars()
-                .take_while(|ch| ch.is_ascii_digit())
-                .collect::<String>();
-            if !digits.is_empty() {
-                return Some(DefinitionTarget::AtMeta {
-                    prefix: "@E",
-                    num: digits,
-                });
-            }
-        }
-        if let Some(stripped) = rest.strip_prefix('M') {
-            let digits = stripped
-                .chars()
-                .take_while(|ch| ch.is_ascii_digit())
-                .collect::<String>();
-            if !digits.is_empty() {
-                return Some(DefinitionTarget::AtMeta {
-                    prefix: "@M",
-                    num: digits,
-                });
-            }
-        }
-        if let Some(stripped) = rest.strip_prefix('P') {
-            let digits = stripped
-                .chars()
-                .take_while(|ch| ch.is_ascii_digit())
-                .collect::<String>();
-            if !digits.is_empty() {
-                return Some(DefinitionTarget::AtMeta {
-                    prefix: "@P",
-                    num: digits,
-                });
-            }
-        }
-        let digits = rest
-            .chars()
-            .take_while(|ch| ch.is_ascii_digit())
-            .collect::<String>();
-        if !digits.is_empty() {
-            return Some(DefinitionTarget::Instrument(digits));
-        }
-        return None;
-    }
-    if first == '*' {
-        let digits = chars
-            .take_while(|ch| ch.is_ascii_digit())
-            .collect::<String>();
-        if !digits.is_empty() {
-            return Some(DefinitionTarget::Track(digits));
-        }
-    }
-    None
+    let prefix = ["@E", "@M", "@P", "@", "*"].into_iter().find(|prefix| {
+        token
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with(|ch: char| ch.is_ascii_digit()))
+    })?;
+    let digits = token[prefix.len()..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect();
+    Some(DefinitionTarget { prefix, digits })
 }
 
-fn find_instrument_definition(text: &str, target: &str) -> Option<Range> {
-    find_prefixed_definition(text, "@", target)
-}
-
-fn find_prefixed_definition(text: &str, prefix: &str, target: &str) -> Option<Range> {
+/// The first line that defines `target`: `prefix<digits>` at the start of
+/// the line, followed by whitespace, `;` or the end of the line.
+fn find_definition(text: &str, target: &DefinitionTarget) -> Option<Range> {
     for (idx, line) in text.lines().enumerate() {
-        let trimmed = line.trim_start();
-        if trimmed.is_empty() || trimmed.starts_with(';') {
+        let start = line.len() - line.trim_start().len();
+        let Some(rest) = strip_keyword(&line[start..], target.prefix) else {
             continue;
-        }
-        if !trimmed.starts_with(prefix) {
-            continue;
-        }
-        let mut end = prefix.len();
-        while end < trimmed.len() {
-            let ch = trimmed.as_bytes()[end] as char;
-            if ch.is_ascii_digit() {
-                end += 1;
-            } else {
-                break;
-            }
-        }
-        if end == prefix.len() {
-            continue;
-        }
-        if trimmed.get(prefix.len()..end)? != target {
-            continue;
-        }
-        let start_col = line.len() - trimmed.len();
-        let range = Range {
-            start: Position::new(idx as u32, start_col as u32),
-            end: Position::new(idx as u32, (start_col + end) as u32),
         };
-        return Some(range);
-    }
-    None
-}
-
-fn find_track_definition(text: &str, target: &str) -> Option<Range> {
-    for (idx, line) in text.lines().enumerate() {
-        let trimmed = line.trim_start();
-        if trimmed.is_empty() || trimmed.starts_with(';') {
+        let Some(after) = rest.strip_prefix(target.digits.as_str()) else {
             continue;
-        }
-        if !trimmed.starts_with('*') {
-            continue;
-        }
-        let mut end = 1;
-        while end < trimmed.len() {
-            let ch = trimmed.as_bytes()[end] as char;
-            if ch.is_ascii_digit() {
-                end += 1;
-            } else {
-                break;
-            }
-        }
-        if end == 1 {
-            continue;
-        }
-        if trimmed.get(1..end)? != target {
-            continue;
-        }
-        let start_col = line.len() - trimmed.len();
-        let range = Range {
-            start: Position::new(idx as u32, start_col as u32),
-            end: Position::new(idx as u32, (start_col + end) as u32),
         };
-        return Some(range);
+        if !after.is_empty() && !after.starts_with(|ch: char| ch.is_whitespace() || ch == ';') {
+            continue;
+        }
+        let end = start + target.prefix.len() + target.digits.len();
+        return Some(Range {
+            start: Position::new(idx as u32, start as u32),
+            end: Position::new(idx as u32, end as u32),
+        });
     }
     None
 }
@@ -1400,6 +1297,28 @@ mod tests {
         // still reads as a button in clients that render titles verbatim.
         assert_eq!(other[0].title, "▷ FM");
         assert_eq!(other[0].command_id.as_deref(), Some(CMD_PREVIEW_PATCH));
+    }
+
+    fn definition(text: &str, line: &str, col: usize) -> Option<Range> {
+        find_definition(text, &definition_target_at(line, col)?)
+    }
+
+    #[test]
+    fn definitions_are_found_by_prefix_and_number() {
+        let text = "@10 fm\n@1 psg 15\n@E1 1 2\n*3 c d\nA @1 @E1 *3\n";
+        let line = "A @1 @E1 *3";
+        assert_eq!(definition(text, line, 3).map(|r| r.start.line), Some(1));
+        assert_eq!(definition(text, line, 6).map(|r| r.start.line), Some(2));
+        assert_eq!(definition(text, line, 10).map(|r| r.start.line), Some(3));
+        assert_eq!(
+            definition(text, line, 3).map(|r| (r.start.character, r.end.character)),
+            Some((0, 2))
+        );
+    }
+
+    #[test]
+    fn a_definition_needs_a_boundary_after_its_number() {
+        assert_eq!(definition("@1fm\nA @1\n", "A @1", 3), None);
     }
 
     #[test]

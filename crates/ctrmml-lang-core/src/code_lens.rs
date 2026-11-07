@@ -15,7 +15,9 @@
 
 use serde::Serialize;
 
-use crate::track_selector::parse_leading_track_selector;
+use crate::instrument_header::{instrument_header_at, InstrumentType};
+use crate::string_model::BorrowedLinesModel;
+use crate::track_selector::{parse_leading_track_selector, LineReader};
 
 /// One emitted lens.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -100,28 +102,6 @@ impl Default for CodeLensConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PreviewType {
-    Fm,
-    Psg,
-    Pcm,
-}
-
-impl PreviewType {
-    const fn keyword(self) -> &'static str {
-        match self {
-            PreviewType::Fm => "fm",
-            PreviewType::Psg => "psg",
-            PreviewType::Pcm => "pcm",
-        }
-    }
-    const fn arg(self) -> &'static str {
-        self.keyword()
-    }
-}
-
-const PREVIEW_TYPES: [PreviewType; 3] = [PreviewType::Fm, PreviewType::Psg, PreviewType::Pcm];
-
 // Channel descriptions for Mega Drive / MDSDRV. Mirrors
 // `web-ctrmml/src/ui/piano-roll-colors.ts CHANNEL_DESCRIPTIONS`. Platform-
 // independent emission is future work — at the moment ctrmml only targets
@@ -141,23 +121,20 @@ pub fn code_lens(text: &str) -> Vec<CodeLens> {
 
 /// Enumerate code lenses for `text` using consumer-specific options.
 pub fn code_lens_with_config(text: &str, config: CodeLensConfig) -> Vec<CodeLens> {
-    let lines: Vec<&str> = text.lines().collect();
+    let model = BorrowedLinesModel::from_text(text);
     let mut out = Vec::new();
 
-    for (idx, line) in lines.iter().enumerate() {
-        let line_idx = idx as u32;
+    for line_number in 1..=model.get_line_count() {
+        let line_idx = line_number - 1;
 
-        if let Some(def) = find_definition(&lines, idx) {
-            emit_instrument_variants(
-                line_idx,
-                def.preview_type,
-                def.instrument_number,
-                config,
-                &mut out,
-            );
+        if let Some(header) = instrument_header_at(&model, line_number) {
+            if let Some(ty) = header.instrument_type() {
+                emit_instrument_variants(line_idx, ty, header.number, config, &mut out);
+            }
             continue;
         }
 
+        let line = model.get_line_content(line_number);
         if let Some(selector) = parse_leading_track_selector(line) {
             let descs: Vec<&'static str> = selector
                 .spans
@@ -173,73 +150,9 @@ pub fn code_lens_with_config(text: &str, config: CodeLensConfig) -> Vec<CodeLens
     out
 }
 
-struct DefinitionMatch {
-    preview_type: PreviewType,
-    instrument_number: u32,
-}
-
-fn find_definition(lines: &[&str], idx: usize) -> Option<DefinitionMatch> {
-    let trimmed = lines.get(idx)?.trim_start();
-    let (number, after_number) = take_at_number(trimmed)?;
-    let after_number_trimmed = after_number.trim_start();
-
-    // Single-line: `@N type` on the same line.
-    for &ty in &PREVIEW_TYPES {
-        if let Some(rest) = after_number_trimmed.strip_prefix(ty.keyword()) {
-            if rest.is_empty() || rest.starts_with(|c: char| c.is_whitespace() || c == ';') {
-                return Some(DefinitionMatch {
-                    preview_type: ty,
-                    instrument_number: number,
-                });
-            }
-        }
-    }
-
-    // Multi-line: `@N` alone, type keyword on the next non-blank, non-comment line.
-    let after_only_comment = matches!(after_number_trimmed.chars().next(), None | Some(';'));
-    if !after_only_comment {
-        return None;
-    }
-    let lookahead_end = (idx + 3).min(lines.len().saturating_sub(1));
-    for j in (idx + 1)..=lookahead_end {
-        let next = lines.get(j)?.trim();
-        if next.is_empty() || next.starts_with(';') {
-            continue;
-        }
-        for &ty in &PREVIEW_TYPES {
-            if let Some(rest) = next.strip_prefix(ty.keyword()) {
-                if rest.is_empty() || rest.starts_with(|c: char| c.is_whitespace() || c == ';') {
-                    return Some(DefinitionMatch {
-                        preview_type: ty,
-                        instrument_number: number,
-                    });
-                }
-            }
-        }
-        break;
-    }
-    None
-}
-
-fn take_at_number(s: &str) -> Option<(u32, &str)> {
-    let bytes = s.as_bytes();
-    if bytes.first() != Some(&b'@') {
-        return None;
-    }
-    let mut idx = 1;
-    while idx < bytes.len() && (bytes[idx] as char).is_ascii_digit() {
-        idx += 1;
-    }
-    if idx == 1 {
-        return None;
-    }
-    let number: u32 = s[1..idx].parse().ok()?;
-    Some((number, &s[idx..]))
-}
-
 fn emit_instrument_variants(
     line: u32,
-    ty: PreviewType,
+    ty: InstrumentType,
     instrument_number: u32,
     config: CodeLensConfig,
     out: &mut Vec<CodeLens>,
@@ -251,45 +164,45 @@ fn emit_instrument_variants(
     let line_str = line.to_string();
 
     match ty {
-        PreviewType::Fm => {
+        InstrumentType::Fm => {
             if config.include_file_actions {
                 out.push(CodeLens::cmd(
                     line,
                     config.icon_style.title("folder-opened", "Load"),
                     load,
-                    vec![line_str.clone(), ty.arg().to_string()],
+                    vec![line_str.clone(), ty.keyword().to_string()],
                 ));
                 out.push(CodeLens::cmd(
                     line,
                     config.icon_style.title("save", "Save"),
                     save,
-                    vec![line_str.clone(), ty.arg().to_string()],
+                    vec![line_str.clone(), ty.keyword().to_string()],
                 ));
             }
             out.push(CodeLens::cmd(
                 line,
                 config.icon_style.title("play", "FM"),
                 preview,
-                vec![line_str, ty.arg().to_string(), "A".to_string(), n],
+                vec![line_str, ty.keyword().to_string(), "A".to_string(), n],
             ));
         }
-        PreviewType::Pcm => {
+        InstrumentType::Pcm => {
             if config.include_file_actions {
                 out.push(CodeLens::cmd(
                     line,
                     config.icon_style.title("folder-opened", "Load"),
                     load,
-                    vec![line_str.clone(), ty.arg().to_string()],
+                    vec![line_str.clone(), ty.keyword().to_string()],
                 ));
             }
             out.push(CodeLens::cmd(
                 line,
                 config.icon_style.title("play", "pcm"),
                 preview,
-                vec![line_str, ty.arg().to_string(), "F".to_string(), n],
+                vec![line_str, ty.keyword().to_string(), "F".to_string(), n],
             ));
         }
-        PreviewType::Psg => {
+        InstrumentType::Psg => {
             for (label, channel) in [
                 ("Square", "G"),
                 ("Noise mode=0", "J"),
@@ -302,7 +215,7 @@ fn emit_instrument_variants(
                     preview,
                     vec![
                         line_str.clone(),
-                        ty.arg().to_string(),
+                        ty.keyword().to_string(),
                         channel.to_string(),
                         n.clone(),
                     ],
@@ -398,6 +311,17 @@ mod tests {
             .all(|lens| lens.command_id.as_deref() == Some("mml.previewPatch")));
         let titles: Vec<&str> = lenses.iter().map(|lens| lens.title.as_str()).collect();
         assert_eq!(titles, ["$(play) FM", "$(play) pcm"]);
+    }
+
+    #[test]
+    fn header_rules_match_the_block_finder() {
+        // `@1fm` is not a header; `@1 FM` is.
+        assert!(code_lens("@1fm\n").is_empty());
+        let titles: Vec<String> = code_lens("@1 FM\n").into_iter().map(|l| l.title).collect();
+        assert_eq!(
+            titles,
+            ["$(folder-opened) Load", "$(save) Save", "$(play) FM"]
+        );
     }
 
     #[test]

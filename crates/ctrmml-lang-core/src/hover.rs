@@ -8,8 +8,12 @@
 //! of being split by the host editor's word boundaries.
 
 use crate::docs;
+use crate::instrument_header::{
+    instrument_header_at, instrument_header_for_keyword_line, InstrumentHeader,
+};
+use crate::string_model::BorrowedLinesModel;
 use crate::text_scan::is_in_key_sig;
-use crate::track_selector::parse_leading_track_selector;
+use crate::track_selector::{parse_leading_track_selector, LineReader};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HoverInfo {
@@ -47,21 +51,25 @@ impl Hit {
 
 /// Resolve a hover for `text` at zero-based `(line, col)`.
 pub fn hover_at(text: &str, line: u32, col: u32) -> Option<HoverInfo> {
+    let doc = BorrowedLinesModel::from_text(text);
+    if line >= doc.get_line_count() {
+        return None;
+    }
     let line_idx = line as usize;
     let col_usize = col as usize;
-    let line_content = nth_line(text, line_idx)?;
+    let line_content = line_at(&doc, line_idx);
 
     if crate::text_scan::is_in_comment(line_content, col_usize) {
         return None;
     }
 
-    if let Some(hit) = two_op_hover(text, line_idx, col_usize) {
+    if let Some(hit) = two_op_hover(&doc, line_idx, col_usize) {
         return Some(hit.into_info(line));
     }
-    if let Some(hit) = fm_hover(text, line_idx, col_usize) {
+    if let Some(hit) = fm_hover(&doc, line_idx, col_usize) {
         return Some(hit.into_info(line));
     }
-    if let Some(hit) = psg_hover(text, line_idx, col_usize) {
+    if let Some(hit) = psg_hover(&doc, line_idx, col_usize) {
         return Some(hit.into_info(line));
     }
 
@@ -134,7 +142,7 @@ fn hover_hit_line(line: &str, col: usize) -> Option<Hit> {
         if dq_start + 1 < dq_end {
             let prefix = line.get(..dq_start)?.trim_end();
             let tokens: Vec<&str> = prefix.split_whitespace().collect();
-            if let Some(pos) = tokens.iter().rposition(|t| *t == "pcm") {
+            if let Some(pos) = tokens.iter().rposition(|t| t.eq_ignore_ascii_case("pcm")) {
                 if pos > 0 && is_at_number(tokens[pos - 1]) {
                     let path = &line[dq_start + 1..dq_end];
                     if !path.is_empty() {
@@ -742,27 +750,6 @@ fn number_index_at(numbers: &[NumberSpan], col: usize) -> Option<usize> {
     None
 }
 
-fn is_definition_line(line: &str, keyword: &str) -> bool {
-    let trimmed = line.trim_start();
-    if !trimmed.starts_with('@') {
-        return false;
-    }
-    let bytes = trimmed.as_bytes();
-    let mut idx = 1;
-    while idx < bytes.len() && (bytes[idx] as char).is_ascii_digit() {
-        idx += 1;
-    }
-    if idx == 1 {
-        return false;
-    }
-    let rest = trimmed[idx..].trim_start();
-    if !rest.starts_with(keyword) {
-        return false;
-    }
-    let after = &rest[keyword.len()..];
-    after.is_empty() || after.starts_with(|c: char| c.is_whitespace()) || after.starts_with(';')
-}
-
 fn is_numeric_param_line(line: &str, parse_end: usize) -> bool {
     let slice = &line[..parse_end.min(line.len())];
     for ch in slice.chars() {
@@ -783,100 +770,55 @@ fn strip_at_number(line: &str, numbers: Vec<NumberSpan>) -> Vec<NumberSpan> {
     numbers
 }
 
-fn strip_two_op_numbers(line: &str, numbers: Vec<NumberSpan>, parse_end: usize) -> Vec<NumberSpan> {
-    let mut filtered = strip_at_number(line, numbers);
-    if let Some(pos) = line[..parse_end.min(line.len())].find("2op") {
-        filtered.retain(|n| n.start < pos || n.start >= pos + 3);
-    }
-    filtered
+fn line_at<'a>(doc: &'a BorrowedLinesModel, line_idx: usize) -> &'a str {
+    doc.get_line_content(line_idx as u32 + 1)
 }
 
-/// Scan upward from `line_idx` for an `@N <keyword>` anchor. Handles both
-/// single-line (`@1 fm`) and multi-line headers (`@1` alone, `fm` on the
-/// next non-blank line).
-fn find_instrument_anchor(text: &str, line_idx: usize, keyword: &str) -> Option<usize> {
-    let lines: Vec<&str> = text.lines().collect();
+/// The `@N <keyword>` header written on the single line `line_idx`.
+fn definition_header<'a>(
+    doc: &'a BorrowedLinesModel,
+    line_idx: usize,
+    keyword: &str,
+) -> Option<InstrumentHeader<'a>> {
+    let line_number = line_idx as u32 + 1;
+    instrument_header_at(doc, line_number)
+        .filter(|header| header.keyword_line == line_number && header.is(keyword))
+}
+
+/// The header whose `keyword` stands alone on `line_idx`, below a bare `@N`.
+fn keyword_line_header<'a>(
+    doc: &'a BorrowedLinesModel,
+    line_idx: usize,
+    keyword: &str,
+) -> Option<InstrumentHeader<'a>> {
+    instrument_header_for_keyword_line(doc, line_idx as u32 + 1).filter(|header| header.is(keyword))
+}
+
+/// Scan upward from `line_idx` for the `@N` line of a `<keyword>` header.
+fn find_instrument_anchor(
+    doc: &BorrowedLinesModel,
+    line_idx: usize,
+    keyword: &str,
+) -> Option<usize> {
     for idx in (0..=line_idx).rev() {
-        let line = *lines.get(idx)?;
+        let line = line_at(doc, idx);
         let trimmed = line.trim_start();
         if trimmed.starts_with('@') {
-            if is_definition_line(line, keyword) {
-                return Some(idx);
-            }
-            if is_bare_at_number(trimmed) {
-                let lookahead = (idx + 1).min(idx + 3);
-                for j in (idx + 1)..=lookahead.min(lines.len().saturating_sub(1)) {
-                    let next = lines.get(j)?.trim();
-                    if next.is_empty() || next.starts_with(';') {
-                        continue;
-                    }
-                    if let Some(after) = next.strip_prefix(keyword) {
-                        if after.is_empty()
-                            || after.starts_with(|c: char| c.is_whitespace() || c == ';')
-                        {
-                            return Some(idx);
-                        }
-                    }
-                    break;
-                }
-            }
-            return None;
+            return instrument_header_at(doc, idx as u32 + 1)
+                .filter(|header| header.is(keyword))
+                .map(|_| idx);
         }
-        if trimmed.starts_with('#') {
-            return None;
-        }
-        if parse_leading_track_selector(line).is_some() {
+        if trimmed.starts_with('#') || parse_leading_track_selector(line).is_some() {
             return None;
         }
     }
     None
 }
 
-fn is_bare_at_number(trimmed: &str) -> bool {
-    if !trimmed.starts_with('@') {
-        return false;
-    }
-    let bytes = trimmed.as_bytes();
-    let mut idx = 1;
-    while idx < bytes.len() && (bytes[idx] as char).is_ascii_digit() {
-        idx += 1;
-    }
-    if idx == 1 {
-        return false;
-    }
-    let rest = trimmed[idx..].trim_start();
-    rest.is_empty() || rest.starts_with(';')
-}
-
-fn is_multiline_keyword_line(text: &str, line_idx: usize, keyword: &str) -> bool {
-    let lines: Vec<&str> = text.lines().collect();
-    let Some(line) = lines.get(line_idx) else {
-        return false;
-    };
-    let trimmed = line.trim_start();
-    if !trimmed.starts_with(keyword) {
-        return false;
-    }
-    let after = &trimmed[keyword.len()..];
-    if !after.is_empty() && !after.starts_with(|c: char| c.is_whitespace() || c == ';') {
-        return false;
-    }
-    let lower_bound = line_idx.saturating_sub(3);
-    for j in (lower_bound..line_idx).rev() {
-        let prev = lines.get(j).map(|l| l.trim()).unwrap_or("");
-        if prev.is_empty() || prev.starts_with(';') {
-            continue;
-        }
-        return is_bare_at_number(prev);
-    }
-    false
-}
-
-fn fm_operator_index(text: &str, anchor: usize, line_idx: usize) -> Option<usize> {
-    let lines: Vec<&str> = text.lines().collect();
+fn fm_operator_index(doc: &BorrowedLinesModel, anchor: usize, line_idx: usize) -> Option<usize> {
     let mut count = 0usize;
     for idx in (anchor + 1)..=line_idx {
-        let line = *lines.get(idx)?;
+        let line = line_at(doc, idx);
         let trimmed = line.trim_start();
         if trimmed.starts_with('@') {
             break;
@@ -899,15 +841,15 @@ fn fm_operator_index(text: &str, anchor: usize, line_idx: usize) -> Option<usize
 
 const FM_10_KEYS: [&str; 10] = ["AR", "DR", "SR", "RR", "SL", "TL", "KS", "ML", "DT", "SSG"];
 
-fn fm_hover(text: &str, line_idx: usize, col: usize) -> Option<Hit> {
-    let line = nth_line(text, line_idx)?;
+fn fm_hover(doc: &BorrowedLinesModel, line_idx: usize, col: usize) -> Option<Hit> {
+    let line = line_at(doc, line_idx);
     let trimmed = line.trim_start();
     if trimmed.is_empty() || trimmed.starts_with(';') {
         return None;
     }
 
-    let is_anchor = is_definition_line(line, "fm");
-    let is_ml_keyword = !is_anchor && is_multiline_keyword_line(text, line_idx, "fm");
+    let is_anchor = definition_header(doc, line_idx, "fm").is_some();
+    let is_ml_keyword = !is_anchor && keyword_line_header(doc, line_idx, "fm").is_some();
     if trimmed.starts_with('@') && !is_anchor {
         return None;
     }
@@ -940,7 +882,7 @@ fn fm_hover(text: &str, line_idx: usize, col: usize) -> Option<Hit> {
     if !is_numeric_param_line(line, parse_end) {
         return None;
     }
-    let anchor = find_instrument_anchor(text, line_idx.saturating_sub(1), "fm")?;
+    let anchor = find_instrument_anchor(doc, line_idx.saturating_sub(1), "fm")?;
     if line_idx <= anchor {
         return None;
     }
@@ -953,7 +895,7 @@ fn fm_hover(text: &str, line_idx: usize, col: usize) -> Option<Hit> {
         2 => (vec!["ALG", "FB"], None),
         10 => (
             FM_10_KEYS.to_vec(),
-            fm_operator_index(text, anchor, line_idx),
+            fm_operator_index(doc, anchor, line_idx),
         ),
         1 => (vec!["TRS"], None),
         _ => return None,
@@ -975,22 +917,25 @@ fn fm_hover(text: &str, line_idx: usize, col: usize) -> Option<Hit> {
     })
 }
 
-fn two_op_hover(text: &str, line_idx: usize, col: usize) -> Option<Hit> {
-    let line = nth_line(text, line_idx)?;
+fn two_op_hover(doc: &BorrowedLinesModel, line_idx: usize, col: usize) -> Option<Hit> {
+    let line = line_at(doc, line_idx);
     let trimmed = line.trim_start();
     if trimmed.is_empty() || trimmed.starts_with(';') {
         return None;
     }
-    if !is_definition_line(line, "2op") && !is_multiline_keyword_line(text, line_idx, "2op") {
-        return None;
-    }
+    let header = definition_header(doc, line_idx, "2op")
+        .or_else(|| keyword_line_header(doc, line_idx, "2op"))?;
 
     let parse_end = line.find(';').unwrap_or(line.len());
     if col >= parse_end {
         return None;
     }
 
-    let numbers = strip_two_op_numbers(line, parse_numbers(line, parse_end), parse_end);
+    // `2op` itself reads as a number; drop it along with the `@N` digits.
+    let numbers: Vec<NumberSpan> = strip_at_number(line, parse_numbers(line, parse_end))
+        .into_iter()
+        .filter(|n| n.start < header.keyword_start || n.start >= header.keyword_end())
+        .collect();
     if numbers.len() < 6 {
         return None;
     }
@@ -1007,8 +952,8 @@ fn two_op_hover(text: &str, line_idx: usize, col: usize) -> Option<Hit> {
     })
 }
 
-fn psg_hover(text: &str, line_idx: usize, col: usize) -> Option<Hit> {
-    let line = nth_line(text, line_idx)?;
+fn psg_hover(doc: &BorrowedLinesModel, line_idx: usize, col: usize) -> Option<Hit> {
+    let line = line_at(doc, line_idx);
     let trimmed = line.trim_start();
     if trimmed.is_empty() || trimmed.starts_with(';') {
         return None;
@@ -1018,22 +963,17 @@ fn psg_hover(text: &str, line_idx: usize, col: usize) -> Option<Hit> {
     let mut data_start_col: usize = 0;
 
     if trimmed.starts_with('@') {
-        if !is_definition_line(line, "psg") {
-            return None;
-        }
+        let header = definition_header(doc, line_idx, "psg")?;
         in_psg_block = true;
-        let line_offset = line.len() - trimmed.len();
-        let psg_idx = trimmed.find("psg").unwrap_or(0);
-        data_start_col = line_offset + psg_idx + 3;
-    } else if is_multiline_keyword_line(text, line_idx, "psg") {
+        data_start_col = header.keyword_end();
+    } else if let Some(header) = keyword_line_header(doc, line_idx, "psg") {
         in_psg_block = true;
-        let line_offset = line.len() - trimmed.len();
-        data_start_col = line_offset + 3;
+        data_start_col = header.keyword_end();
     } else {
         if parse_leading_track_selector(line).is_some() {
             return None;
         }
-        if find_instrument_anchor(text, line_idx.saturating_sub(1), "psg").is_some() {
+        if find_instrument_anchor(doc, line_idx.saturating_sub(1), "psg").is_some() {
             in_psg_block = true;
         }
     }
@@ -1153,10 +1093,6 @@ fn is_hold_token(token: &str) -> bool {
     idx == bytes.len() && idx > rest_start
 }
 
-fn nth_line(text: &str, idx: usize) -> Option<&str> {
-    text.lines().nth(idx)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1267,6 +1203,26 @@ mod tests {
     fn repeat_block_open_bracket() {
         let info = hover_at("[cdefg]2", 0, 0).unwrap();
         assert!(info.markdown.starts_with("`[ ]`"));
+    }
+
+    #[test]
+    fn fm_parameters_resolve_under_a_multi_line_header() {
+        let text = "@1\n; comment\nfm\n  0 5\n";
+        let info = hover_at(text, 3, 2).expect("ALG hover");
+        assert!(info.markdown.starts_with("`Algorithm"), "{}", info.markdown);
+    }
+
+    #[test]
+    fn fm_parameters_resolve_under_an_upper_case_header() {
+        let info = hover_at("@1 FM\n  0 5\n", 1, 4).expect("FB hover");
+        assert!(info.markdown.starts_with("`Feedback"), "{}", info.markdown);
+    }
+
+    #[test]
+    fn psg_data_starts_after_an_upper_case_keyword() {
+        let info = hover_at("@2 PSG 15\n", 0, 7).expect("PSG volume hover");
+        assert!(info.markdown.starts_with("`PSG envelope volume`"));
+        assert_eq!(span(&info), (7, 9));
     }
 
     #[test]
