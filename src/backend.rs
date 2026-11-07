@@ -96,11 +96,20 @@ impl Backend {
             .flatten()
     }
 
-    /// The `ctrmml-cmd` to run, resolved once per session.
+    /// The `ctrmml-cmd` to run, resolved once per session. Resolution runs
+    /// in its own task, so a cancelled caller does not abort a download.
     pub(crate) async fn command_path(&self) -> std::result::Result<String, String> {
-        self.command_path
-            .get_or_try_init(|| resolve_command_path(self.session().config.command_path.clone()))
-            .await
-            .cloned()
+        if let Some(path) = self.command_path.get() {
+            return Ok(path.clone());
+        }
+        let cell = Arc::clone(&self.command_path);
+        let config_path = self.session().config.command_path.clone();
+        tokio::spawn(async move {
+            cell.get_or_try_init(|| resolve_command_path(config_path))
+                .await
+                .cloned()
+        })
+        .await
+        .map_err(|e| format!("failed to resolve ctrmml-cmd: {e}"))?
     }
 }
