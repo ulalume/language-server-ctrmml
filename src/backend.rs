@@ -14,9 +14,10 @@ use crate::check::CheckQueue;
 use crate::config::{ClientKind, Config};
 use crate::ctrmml_cmd::resolve_command_path;
 use crate::diagnostics::DiagnosticStoreHandle;
-use crate::fm_completion::FmInstrumentCache;
+use crate::fm_completion::FmPatchCache;
 use crate::playback::Playback;
 use crate::utils::read_file_text;
+use crate::workspace_files::WorkspaceFiles;
 
 /// Client facts and settings fixed by `initialize`.
 #[derive(Default)]
@@ -35,7 +36,8 @@ pub(crate) struct Backend {
     pub(crate) docs: Arc<RwLock<HashMap<String, String>>>,
     session: Arc<OnceLock<Session>>,
     command_path: Arc<OnceCell<String>>,
-    pub(crate) fm_instrument_cache: Arc<Mutex<Option<FmInstrumentCache>>>,
+    pub(crate) workspace_files: Arc<WorkspaceFiles>,
+    pub(crate) fm_patches: Arc<FmPatchCache>,
     pub(crate) diagnostics: DiagnosticStoreHandle,
     pub(crate) checks: Arc<std::sync::Mutex<CheckQueue>>,
     pub(crate) playback: Arc<Mutex<Option<Playback>>>,
@@ -50,7 +52,8 @@ impl Backend {
             docs: Arc::default(),
             session: Arc::default(),
             command_path: Arc::default(),
-            fm_instrument_cache: Arc::default(),
+            workspace_files: Arc::default(),
+            fm_patches: Arc::default(),
             diagnostics: Arc::default(),
             checks: Arc::default(),
             playback: Arc::default(),

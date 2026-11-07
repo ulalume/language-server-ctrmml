@@ -1,97 +1,92 @@
-use std::collections::HashSet;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use ctrmml_lang_core::completion::FmPatchData;
-use walkdir::WalkDir;
 
 use crate::backend::Backend;
 use crate::completion::{completion_base_dir, completion_search_roots, relative_completion_path};
-use crate::utils::is_fm_instrument;
+use crate::workspace_files::InstrumentFile;
 
-const CACHE_TTL_SECS: u64 = 60;
-
-pub(crate) struct FmInstrumentCache {
-    entries: Vec<CachedPatch>,
-    last_scan: SystemTime,
-    roots: Vec<PathBuf>,
-    library_version: String,
+/// Patches parsed from each instrument file, reused while the file keeps
+/// its size and modification time.
+#[derive(Default)]
+pub(crate) struct FmPatchCache {
+    files: Mutex<HashMap<PathBuf, ParsedFile>>,
 }
 
-#[derive(Clone)]
+struct ParsedFile {
+    modified: Option<SystemTime>,
+    len: u64,
+    patches: Arc<[CachedPatch]>,
+}
+
 struct CachedPatch {
-    file: String,
     name: String,
     has_macros: bool,
     mml: Arc<str>,
 }
 
-impl FmInstrumentCache {
-    fn is_valid(&self, roots: &[PathBuf], library_version: &str) -> bool {
-        self.library_version == library_version
-            && self.roots == roots
-            && self
-                .last_scan
-                .elapsed()
-                .map(|elapsed| elapsed.as_secs() < CACHE_TTL_SECS)
-                .unwrap_or(false)
+impl FmPatchCache {
+    /// The patches of each file, parsing only new or changed files.
+    fn patches(&self, files: &[InstrumentFile]) -> Vec<(PathBuf, Arc<[CachedPatch]>)> {
+        files
+            .iter()
+            .map(|file| {
+                let cached = self
+                    .files
+                    .lock()
+                    .expect("patch cache lock")
+                    .get(&file.path)
+                    .filter(|parsed| parsed.modified == file.modified && parsed.len == file.len)
+                    .map(|parsed| Arc::clone(&parsed.patches));
+                let patches = cached.unwrap_or_else(|| {
+                    let patches: Arc<[CachedPatch]> = parse_instrument_file(&file.path).into();
+                    self.files.lock().expect("patch cache lock").insert(
+                        file.path.clone(),
+                        ParsedFile {
+                            modified: file.modified,
+                            len: file.len,
+                            patches: Arc::clone(&patches),
+                        },
+                    );
+                    patches
+                });
+                (file.path.clone(), patches)
+            })
+            .collect()
     }
 }
 
-fn scan_instrument_files(uri: &str, roots: &[PathBuf]) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    let mut seen_files = HashSet::new();
-    for root in completion_search_roots(uri, roots) {
-        for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
-            if !entry.path().is_file() || !is_fm_instrument(entry.path()) {
-                continue;
-            }
-            let path = entry.path().to_path_buf();
-            if seen_files.insert(path.clone()) {
-                files.push(path);
-            }
-        }
-    }
-    files
-}
-
-fn parse_instruments(files: &[PathBuf]) -> Vec<CachedPatch> {
-    let mut patches = Vec::new();
-    for file in files {
-        let Ok(data) = std::fs::read(file) else {
-            continue;
-        };
-        // The file stem is the fallback patch name for formats that carry none.
-        let stem = file
-            .file_stem()
-            .map(|stem| stem.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let extension = file
-            .extension()
-            .map(|extension| extension.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let Ok(parsed) = ym2612_format::parse(&data, &stem, Some(&extension)) else {
-            continue;
-        };
-        let path = file.to_string_lossy().into_owned();
-        for patch in parsed.patches {
-            let Some(mml) = patch.mml else {
-                continue;
-            };
-            let body = patch_mml_body(&mml);
-            if body.trim().is_empty() {
-                continue;
-            }
-            patches.push(CachedPatch {
-                file: path.clone(),
+fn parse_instrument_file(file: &Path) -> Vec<CachedPatch> {
+    let Ok(data) = std::fs::read(file) else {
+        return Vec::new();
+    };
+    // The file stem is the fallback patch name for formats that carry none.
+    let stem = file
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let extension = file
+        .extension()
+        .map(|extension| extension.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let Ok(parsed) = ym2612_format::parse(&data, &stem, Some(&extension)) else {
+        return Vec::new();
+    };
+    parsed
+        .patches
+        .into_iter()
+        .filter_map(|patch| {
+            let body = patch_mml_body(&patch.mml?);
+            (!body.trim().is_empty()).then(|| CachedPatch {
                 name: patch.name,
                 has_macros: patch.has_macros,
                 mml: body.into(),
-            });
-        }
-    }
-    patches
+            })
+        })
+        .collect()
 }
 
 /// Drop the `@N fm` header: everything after the first `fm`, minus one
@@ -105,65 +100,58 @@ fn patch_mml_body(mml: &str) -> String {
 }
 
 impl Backend {
-    pub(crate) async fn fetch_fm_patches(&self, uri: &str, roots: &[PathBuf]) -> Vec<FmPatchData> {
+    pub(crate) async fn fetch_fm_patches(&self, uri: &str) -> Vec<FmPatchData> {
+        let roots = &self.session().roots;
         if completion_base_dir(uri, roots).is_none() {
             return Vec::new();
         }
-        let library_version = ym2612_format::version();
-        let scan_roots = completion_search_roots(uri, roots);
-
-        {
-            let cache = self.fm_instrument_cache.lock().await;
-            if let Some(cached) = cache.as_ref() {
-                if cached.is_valid(&scan_roots, library_version) {
-                    return patches_for_core(&cached.entries, uri, roots);
-                }
-            }
+        let mut files = Vec::new();
+        let mut seen = HashSet::new();
+        for root in completion_search_roots(uri, roots) {
+            let listing = self.workspace_files.under(&root).await;
+            files.extend(
+                listing
+                    .instruments
+                    .iter()
+                    .filter(|file| seen.insert(file.path.clone()))
+                    .cloned(),
+            );
         }
-
-        let scan_uri = uri.to_string();
-        let scan_root_paths = roots.to_vec();
-        let patches = tokio::task::spawn_blocking(move || {
-            let files = scan_instrument_files(&scan_uri, &scan_root_paths);
-            parse_instruments(&files)
-        })
-        .await
-        .unwrap_or_default();
-        let result = patches_for_core(&patches, uri, roots);
-
-        let mut cache = self.fm_instrument_cache.lock().await;
-        *cache = Some(FmInstrumentCache {
-            entries: patches,
-            last_scan: SystemTime::now(),
-            roots: scan_roots,
-            library_version: library_version.to_string(),
-        });
-        result
+        let cache = Arc::clone(&self.fm_patches);
+        let parsed = tokio::task::spawn_blocking(move || cache.patches(&files))
+            .await
+            .unwrap_or_default();
+        patches_for_core(&parsed, uri, roots)
     }
 }
 
-fn patches_for_core(patches: &[CachedPatch], uri: &str, roots: &[PathBuf]) -> Vec<FmPatchData> {
-    patches
-        .iter()
-        .filter(|patch| !patch.mml.trim().is_empty())
-        .filter_map(|patch| {
-            let rel_path = relative_completion_path(std::path::Path::new(&patch.file), uri, roots)?;
-            if rel_path.is_empty() {
-                return None;
-            }
-            Some(FmPatchData {
-                rel_path,
-                name: (!patch.name.trim().is_empty()).then(|| patch.name.clone()),
-                mml: patch.mml.clone(),
-                has_macros: patch.has_macros,
-            })
-        })
-        .collect()
+fn patches_for_core(
+    files: &[(PathBuf, Arc<[CachedPatch]>)],
+    uri: &str,
+    roots: &[PathBuf],
+) -> Vec<FmPatchData> {
+    let mut out = Vec::new();
+    for (path, patches) in files {
+        let Some(rel_path) = relative_completion_path(path, uri, roots) else {
+            continue;
+        };
+        if rel_path.is_empty() {
+            continue;
+        }
+        out.extend(patches.iter().map(|patch| FmPatchData {
+            rel_path: rel_path.clone(),
+            name: (!patch.name.trim().is_empty()).then(|| patch.name.clone()),
+            mml: Arc::clone(&patch.mml),
+            has_macros: patch.has_macros,
+        }));
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::workspace_files::scan;
 
     const SAMPLE_MML: &str = "@1 fm ; sample\n\
 ; ALG  FB\n\
@@ -182,54 +170,17 @@ mod tests {
         std::env::temp_dir().join(format!("ctrmml-c5-{label}-{}-{unique}", std::process::id()))
     }
 
-    fn patch(file: &str, name: &str, has_macros: bool, mml: &str) -> CachedPatch {
+    fn patch(name: &str, has_macros: bool, mml: &str) -> CachedPatch {
         CachedPatch {
-            file: file.to_string(),
             name: name.to_string(),
             has_macros,
             mml: mml.into(),
         }
     }
 
-    fn cache(
-        roots: Vec<PathBuf>,
-        library_version: &str,
-        last_scan: SystemTime,
-    ) -> FmInstrumentCache {
-        FmInstrumentCache {
-            entries: Vec::new(),
-            last_scan,
-            roots,
-            library_version: library_version.to_string(),
-        }
-    }
-
-    #[test]
-    fn cache_valid_with_matching_roots_library_and_fresh_scan() {
-        let cache = cache(vec![PathBuf::from("/project")], "0.3.0", SystemTime::now());
-        assert!(cache.is_valid(&[PathBuf::from("/project")], "0.3.0"));
-    }
-
-    #[test]
-    fn cache_invalid_when_library_version_differs() {
-        let cache = cache(vec![PathBuf::from("/project")], "0.3.0", SystemTime::now());
-        assert!(!cache.is_valid(&[PathBuf::from("/project")], "0.4.0"));
-    }
-
-    #[test]
-    fn cache_invalid_when_scan_roots_differ() {
-        let cache = cache(vec![PathBuf::from("/project")], "0.3.0", SystemTime::now());
-        assert!(!cache.is_valid(&[PathBuf::from("/other")], "0.3.0"));
-    }
-
-    #[test]
-    fn cache_invalid_when_scan_is_stale() {
-        let cache = cache(
-            vec![PathBuf::from("/project")],
-            "0.3.0",
-            SystemTime::UNIX_EPOCH,
-        );
-        assert!(!cache.is_valid(&[PathBuf::from("/project")], "0.3.0"));
+    fn sample_dmp() -> Vec<u8> {
+        ym2612_format::convert(SAMPLE_MML.as_bytes(), "input.mml", Some("mml"), 0, "dmp")
+            .expect("convert mml to dmp")
     }
 
     #[test]
@@ -246,45 +197,14 @@ mod tests {
     }
 
     #[test]
-    fn scan_instrument_files_keeps_supported_extensions() {
-        let root = temp_test_dir("fm-scan");
-        std::fs::create_dir_all(root.join("nested")).expect("create test directory");
-        std::fs::write(root.join("nested/lead.dmp"), b"patch").expect("write dmp");
-        std::fs::write(root.join("nested/ignore.txt"), b"nope").expect("write txt");
-
-        let files = scan_instrument_files("not-a-uri", std::slice::from_ref(&root));
-        assert_eq!(files, vec![root.join("nested/lead.dmp")]);
-
-        std::fs::remove_dir_all(root).expect("remove test directory");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn scan_instrument_files_follows_supported_file_symlinks() {
-        use std::os::unix::fs::symlink;
-
-        let root = temp_test_dir("fm-symlink");
-        std::fs::create_dir_all(root.join("nested")).expect("create test directory");
-        std::fs::write(root.join("patch-data"), b"patch").expect("write target");
-        symlink(root.join("patch-data"), root.join("nested/lead.dmp")).expect("create symlink");
-
-        let files = scan_instrument_files("not-a-uri", std::slice::from_ref(&root));
-        assert_eq!(files, vec![root.join("nested/lead.dmp")]);
-
-        std::fs::remove_dir_all(root).expect("remove test directory");
-    }
-
-    #[test]
     fn scanned_instrument_files_parse_into_core_patches() {
         let root = temp_test_dir("fm-parse");
         std::fs::create_dir_all(&root).expect("create test directory");
-        let dmp = ym2612_format::convert(SAMPLE_MML.as_bytes(), "input.mml", Some("mml"), 0, "dmp")
-            .expect("convert mml to dmp");
-        std::fs::write(root.join("piano.dmp"), &dmp).expect("write dmp");
+        std::fs::write(root.join("piano.dmp"), sample_dmp()).expect("write dmp");
 
-        let files = scan_instrument_files("not-a-uri", std::slice::from_ref(&root));
-        let patches = parse_instruments(&files);
-        let core = patches_for_core(&patches, "not-a-uri", std::slice::from_ref(&root));
+        let files = scan(&root).instruments;
+        let parsed = FmPatchCache::default().patches(&files);
+        let core = patches_for_core(&parsed, "not-a-uri", std::slice::from_ref(&root));
 
         assert_eq!(core.len(), 1);
         assert_eq!(core[0].rel_path, "piano.dmp");
@@ -297,10 +217,28 @@ mod tests {
     }
 
     #[test]
+    fn unchanged_files_reuse_their_parsed_patches() {
+        let root = temp_test_dir("fm-reuse");
+        std::fs::create_dir_all(&root).expect("create test directory");
+        std::fs::write(root.join("piano.dmp"), sample_dmp()).expect("write dmp");
+        let cache = FmPatchCache::default();
+
+        let files = scan(&root).instruments;
+        let first = cache.patches(&files);
+        let second = cache.patches(&files);
+        assert!(Arc::ptr_eq(&first[0].1, &second[0].1));
+
+        let mut changed = files.clone();
+        changed[0].len += 1;
+        let third = cache.patches(&changed);
+        assert!(!Arc::ptr_eq(&first[0].1, &third[0].1));
+
+        std::fs::remove_dir_all(root).expect("remove test directory");
+    }
+
+    #[test]
     fn lfo_comment_carries_no_rate_when_the_patch_has_none() {
-        let mut dmp =
-            ym2612_format::convert(SAMPLE_MML.as_bytes(), "input.mml", Some("mml"), 0, "dmp")
-                .expect("convert mml to dmp");
+        let mut dmp = sample_dmp();
         dmp[3] = 2; // FMS
         dmp[6] = 1; // AMS
         let parsed = ym2612_format::parse(&dmp, "lfo", Some("dmp")).expect("parse dmp");
@@ -316,28 +254,18 @@ mod tests {
         let uri = url::Url::from_file_path(document_dir.join("demo.mml"))
             .expect("file URL")
             .to_string();
-        let patches = vec![
-            patch(
-                &document_dir.join("patches/lead.dmp").to_string_lossy(),
-                "Lead",
-                true,
-                " 1,2,3 ",
+        let files: Vec<(PathBuf, Arc<[CachedPatch]>)> = vec![
+            (
+                document_dir.join("patches/lead.dmp"),
+                vec![patch("Lead", true, " 1,2,3 ")].into(),
             ),
-            patch(
-                &root.join("shared/bass.fui").to_string_lossy(),
-                "",
-                false,
-                " 4,5,6 ",
-            ),
-            patch(
-                &root.join("shared/empty.dmp").to_string_lossy(),
-                "Empty",
-                false,
-                "   ",
+            (
+                root.join("shared/bass.fui"),
+                vec![patch("", false, " 4,5,6 ")].into(),
             ),
         ];
 
-        let core = patches_for_core(&patches, &uri, std::slice::from_ref(&root));
+        let core = patches_for_core(&files, &uri, std::slice::from_ref(&root));
         assert_eq!(core.len(), 2);
         assert_eq!(core[0].rel_path, "patches/lead.dmp");
         assert_eq!(core[0].name.as_deref(), Some("Lead"));

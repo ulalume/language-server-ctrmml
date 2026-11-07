@@ -21,7 +21,6 @@ use std::time::Duration;
 
 use crate::backend::{Backend, Session};
 use crate::check::CHECK_DEBOUNCE;
-use crate::completion::scan_pcm_paths;
 use crate::config::{
     apply_completion_client_defaults, completion_settings_from_value, config_from_value,
     ClientKind, Config,
@@ -276,7 +275,6 @@ impl LanguageServer for Backend {
             .get(&uri)
             .cloned()
             .unwrap_or_default();
-        let roots = self.session().roots.clone();
         let settings = self.session().completion_settings.clone();
         let pos = Pos {
             line: position.line,
@@ -291,10 +289,10 @@ impl LanguageServer for Backend {
             CompletionPlan::Done(list) => list,
             CompletionPlan::NeedsData(request) => {
                 let payload = match request {
-                    DataRequest::PcmPaths => DataPayload::PcmPaths(scan_pcm_paths(&uri, &roots)),
-                    DataRequest::PcmFiles => DataPayload::PcmFiles(scan_pcm_paths(&uri, &roots)),
+                    DataRequest::PcmPaths => DataPayload::PcmPaths(self.pcm_paths(&uri).await),
+                    DataRequest::PcmFiles => DataPayload::PcmFiles(self.pcm_paths(&uri).await),
                     DataRequest::FmPatches { .. } => {
-                        DataPayload::FmPatches(self.fetch_fm_patches(&uri, &roots).await)
+                        DataPayload::FmPatches(self.fetch_fm_patches(&uri).await)
                     }
                     DataRequest::CursorTick => {
                         let timing = match self.command_path().await {

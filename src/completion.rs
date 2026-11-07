@@ -2,9 +2,9 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use pathdiff::diff_paths;
-use walkdir::WalkDir;
 
-use crate::utils::{is_wav, uri_to_dir};
+use crate::backend::Backend;
+use crate::utils::uri_to_dir;
 
 pub(crate) fn completion_search_roots(uri: &str, roots: &[PathBuf]) -> Vec<PathBuf> {
     let mut search_roots = Vec::new();
@@ -31,41 +31,32 @@ pub(crate) fn relative_completion_path(
     diff_paths(path, base_dir).map(|relative| relative.to_string_lossy().replace('\\', "/"))
 }
 
-/// List WAV files reachable from the document, keyed relative to its directory.
-/// If the URI cannot be resolved, the first workspace root is the relative base.
-pub(crate) fn scan_pcm_paths(uri: &str, roots: &[PathBuf]) -> Vec<String> {
-    let mut paths = Vec::new();
-    let mut seen = HashSet::new();
-    for root in completion_search_roots(uri, roots) {
-        for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
-            let path = entry.path();
-            if !path.is_file() || !is_wav(path) {
-                continue;
-            }
-            let Some(relative) = relative_completion_path(path, uri, roots) else {
-                continue;
-            };
-            if seen.insert(relative.clone()) {
-                paths.push(relative);
+impl Backend {
+    /// WAV files reachable from the document, keyed relative to its
+    /// directory. If the URI cannot be resolved, the first workspace root
+    /// is the relative base.
+    pub(crate) async fn pcm_paths(&self, uri: &str) -> Vec<String> {
+        let roots = &self.session().roots;
+        let mut paths = Vec::new();
+        let mut seen = HashSet::new();
+        for root in completion_search_roots(uri, roots) {
+            let files = self.workspace_files.under(&root).await;
+            for path in &files.wav {
+                let Some(relative) = relative_completion_path(path, uri, roots) else {
+                    continue;
+                };
+                if seen.insert(relative.clone()) {
+                    paths.push(relative);
+                }
             }
         }
+        paths
     }
-    paths
 }
 
 #[cfg(test)]
 mod tests {
-    use std::time::SystemTime;
-
     use super::*;
-
-    fn temp_test_dir(label: &str) -> PathBuf {
-        let unique = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .expect("clock after epoch")
-            .as_nanos();
-        std::env::temp_dir().join(format!("ctrmml-c5-{label}-{}-{unique}", std::process::id()))
-    }
 
     #[test]
     fn relative_path_prefers_document_directory() {
@@ -86,34 +77,5 @@ mod tests {
             relative_completion_path(&path, "not-a-uri", &[root]).as_deref(),
             Some("assets/kick.wav")
         );
-    }
-
-    #[test]
-    fn scan_pcm_paths_lists_only_wav_files() {
-        let root = temp_test_dir("pcm-scan");
-        std::fs::create_dir_all(root.join("samples")).expect("create test directory");
-        std::fs::write(root.join("samples/kick.wav"), b"wave").expect("write wav");
-        std::fs::write(root.join("samples/ignore.txt"), b"nope").expect("write txt");
-
-        let paths = scan_pcm_paths("not-a-uri", std::slice::from_ref(&root));
-        assert_eq!(paths, vec!["samples/kick.wav"]);
-
-        std::fs::remove_dir_all(root).expect("remove test directory");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn scan_pcm_paths_follows_wav_file_symlinks() {
-        use std::os::unix::fs::symlink;
-
-        let root = temp_test_dir("pcm-symlink");
-        std::fs::create_dir_all(root.join("samples")).expect("create test directory");
-        std::fs::write(root.join("sample-data"), b"wave").expect("write target");
-        symlink(root.join("sample-data"), root.join("samples/kick.wav")).expect("create symlink");
-
-        let paths = scan_pcm_paths("not-a-uri", std::slice::from_ref(&root));
-        assert_eq!(paths, vec!["samples/kick.wav"]);
-
-        std::fs::remove_dir_all(root).expect("remove test directory");
     }
 }

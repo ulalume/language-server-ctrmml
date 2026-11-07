@@ -14,6 +14,7 @@ mod note_hover;
 mod playback;
 mod quickrom;
 mod utils;
+mod workspace_files;
 
 use serde_json::Value;
 use tower::Service;
