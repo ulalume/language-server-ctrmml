@@ -209,11 +209,14 @@ fn hover_hit_line(line: &str, col: usize) -> Option<Hit> {
         }
     }
 
-    // Single-symbol commands. Skip when the cursor is inside `_{...}` or
-    // directly on its opening `{` — those characters belong to the
-    // key-signature construct and are handled by `command_at` below.
+    let meta = meta_keyword_bounds(line);
+
+    // Single-symbol commands, except in meta values such as `4/4`. Skip when
+    // the cursor is inside `_{...}` or directly on its opening `{` — those
+    // characters belong to the key-signature construct and are handled by
+    // `command_at` below.
     let symbol_opt = line.as_bytes().get(col).copied().map(|b| b as char);
-    if let Some(symbol) = symbol_opt {
+    if let Some(symbol) = symbol_opt.filter(|_| meta.is_none()) {
         let in_key_sig = is_in_key_sig(line, col);
         let on_key_sig_open =
             symbol == '{' && col > 0 && line.as_bytes().get(col - 1) == Some(&b'_');
@@ -231,7 +234,7 @@ fn hover_hit_line(line: &str, col: usize) -> Option<Hit> {
     }
 
     // `#platform <value>` etc. — value-context hover.
-    if let Some((_, meta_end, meta_keyword)) = meta_keyword_bounds(line) {
+    if let Some((_, meta_end, meta_keyword)) = meta {
         if col >= meta_end && start >= meta_end {
             let (name, table) = match meta_keyword {
                 "#platform" => ("platform_values", docs::PLATFORM_VALUES),
@@ -973,6 +976,17 @@ mod tests {
         assert!(hover_at(text, 3, 9).is_some());
         assert_eq!(doc_ref(text, 4, 7), None);
         assert!(hover_at(text, 4, 7).is_some());
+    }
+
+    #[test]
+    fn meta_values_are_not_commands() {
+        assert_eq!(
+            doc_ref("#timesig 4/4", 0, 10),
+            Some(("timesig_values", "4/4"))
+        );
+        assert!(hover_at("#timesig 7/8", 0, 10).is_none());
+        assert!(hover_at("#title a/b [c]", 0, 8).is_none());
+        assert!(hover_at("#title a/b [c]", 0, 11).is_none());
     }
 
     #[test]
