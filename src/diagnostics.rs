@@ -10,16 +10,12 @@ use tower_lsp::Client;
 #[serde(tag = "type")]
 pub(crate) enum PlaybackMessage {
     #[serde(rename = "highlight")]
-    Highlight {
-        #[allow(dead_code)]
-        ticks: u32,
-        positions: Vec<HighlightPosition>,
-    },
+    Highlight { positions: Vec<HighlightPosition> },
     #[serde(rename = "playback_error")]
     PlaybackError { message: String },
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct HighlightPosition {
     pub(crate) line: u32,
     pub(crate) col: u32,
